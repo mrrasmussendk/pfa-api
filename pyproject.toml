@@ -1,0 +1,117 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pfa-api"
+version = "0.1.0"
+description = "PFA API — a FastAPI service built as vertical slices, with the architecture enforced by Eitri and watched by Heimdall."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Marc Rasmussen" }]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    # The embedding model (intfloat/multilingual-e5-large) is served through sentence-transformers.
+    # This pulls a CPU build of torch by default; for the GPU build install torch FIRST from the
+    # CUDA index (see README "The model"), then the rest.
+    "sentence-transformers>=3.0",
+    "huggingface_hub>=0.23",
+]
+
+[project.optional-dependencies]
+# Development only. The architecture tooling (Eitri / Heimdall / Brokkr) is a separate,
+# never-deployed package under tools/:  pip install -e . -e ./tools
+# httpx2 is what Starlette's TestClient now expects; plain httpx only raises a deprecation warning.
+dev = ["pytest>=8", "httpx2>=2.0", "ruff>=0.16", "mypy>=2.0"]
+
+[project.scripts]
+pfa-api = "pfa_api.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "tools"]
+testpaths = ["tests"]
+# Warnings are errors: a deprecation anywhere in the suite fails the run instead of scrolling by.
+filterwarnings = ["error"]
+
+# ---------------------------------------------------------------------------
+# Eitri: the walls this repo's slices live behind.   eitri check --root .
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Linters. Ruff lints and formats; mypy checks types. Both run in CI's enforce job
+# before the walls:   ruff check . && ruff format --check . && mypy
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 140
+target-version = "py310"
+src = ["src", "tools", "tests"]
+extend-exclude = [".heimdall", "*.egg-info"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",    # pycodestyle
+    "F",         # pyflakes
+    "I",         # isort
+    "B",         # bugbear
+    "UP",        # pyupgrade (we are >= 3.10: X | Y, list[str], …)
+    "SIM",       # simplify
+    "C4",        # comprehensions
+    "PIE",       # misc. lints
+    "PERF",      # performance anti-patterns
+    "RUF",       # ruff's own
+    "PLE", "PLW",  # pylint errors + warnings
+    "ISC",       # implicit string concatenation
+    "T20",       # no stray print() in the service (tooling CLIs are exempt below)
+]
+ignore = [
+    "E501",    # line length is the formatter's job; long message strings are allowed to stay on one line
+    "ISC001",  # conflicts with the formatter
+    "RUF001", "RUF002", "RUF003",  # this repo writes prose with real dashes (— –); they are not typos
+    "SIM105",  # try/except/pass reads fine and avoids an import in the hot-start hook path
+    "SIM108",  # a ternary is not clearer than an if/else when both branches are long
+    "PERF203", "PERF401", "PERF402",  # micro-optimisation nags; the loops here are the readable form
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tools/**" = ["T20"]      # the CLIs print; that is their job
+"tests/**" = ["T20", "PLW1510", "PLW0108"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pfa_api", "shared_kernel", "slices", "http_common", "eitri", "heimdall", "brokkr"]
+
+[tool.ruff.format]
+docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = ["src", "tools"]
+files = ["src", "tools/eitri", "tools/heimdall", "tools/brokkr"]
+explicit_package_bases = true
+namespace_packages = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_incomplete_defs = true
+ignore_missing_imports = true   # sentence-transformers / torch ship no stubs
+
+[[tool.mypy.overrides]]
+module = ["slices.*", "shared_kernel.*", "http_common.*", "pfa_api.*"]
+disallow_untyped_defs = true     # the service is fully typed; the tooling may stay looser
+
+# Heimdall: packages every slice may read besides the kernel (HTTP-edge helpers). Reads of
+# them are in-bounds for `heimdall drift`; `heimdall map` records them in .heimdall/map.json.
+[tool.heimdall]
+shared = ["http_common"]
+
+[tool.eitri]
+slice_prefix = "slices."       # the package Eitri polices (src/slices)
+kernel = "shared_kernel"       # the one package every slice may import freely (src/shared_kernel)
+token_budget = 15000           # the promise, as a number
+problem_helper = "http_common.Problem"   # what EIT005 tells a slice to raise instead of HTTPException
+enabled = true

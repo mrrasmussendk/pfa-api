@@ -1,0 +1,369 @@
+"""The rule tests — port of RuleTests.cs onto the import-graph walls."""
+
+from __future__ import annotations
+
+from conftest import TempProject
+
+from eitri import EitriConfig, analyze
+from eitri.analyzer import EitriError
+
+
+def _only(ids: list[str], rule: str) -> list[str]:
+    return [i for i in ids if i == rule]
+
+
+# ---------------------------------------------------------------- EIT001
+
+
+class TestEit001:
+    def test_import_of_foreign_internal_is_reported(self, project: TempProject) -> None:
+        project.slice("rune", **{"internal/__init__.py": "", "internal/rune_engine.py": "class RuneEngine: ..."})
+        project.slice(
+            "kvad",
+            ["rune"],
+            **{"internal/__init__.py": "", "internal/leak.py": "from slices.rune.internal.rune_engine import RuneEngine\n"},
+        )
+        diags = project.analyze()
+        hits = [d for d in diags if d.id == "EIT001"]
+        assert len(hits) == 1
+        assert hits[0].line == 1
+        assert hits[0].path is not None and hits[0].path.name == "leak.py"
+        assert "slices.rune.internal.rune_engine.RuneEngine" in hits[0].message
+        assert "internal to slice 'rune'" in hits[0].message
+
+    def test_import_of_foreign_contract_is_fine(self, project: TempProject) -> None:
+        project.slice("rune", **{"contract/__init__.py": "class RuneService: ..."})
+        project.slice("kvad", ["rune"], **{"internal/__init__.py": "", "internal/svc.py": "from slices.rune.contract import RuneService\n"})
+        assert "EIT001" not in project.ids()
+
+    def test_module_wiring_is_exempt(self, project: TempProject) -> None:
+        project.slice("rune", **{"internal/__init__.py": "", "internal/module.py": "def register(r): ..."})
+        project.slice(
+            "kvad", ["rune"], **{"internal/__init__.py": "", "internal/x.py": "from slices.rune.internal.module import register\n"}
+        )
+        assert "EIT001" not in project.ids()
+
+    def test_non_slice_packages_are_not_policed(self, project: TempProject) -> None:
+        project.slice("rune", **{"internal/__init__.py": "", "internal/rune_engine.py": "class RuneEngine: ..."})
+        project.write("other/thing.py", "from slices.rune.internal.rune_engine import RuneEngine\n")
+        assert "EIT001" not in project.ids()
+
+    def test_own_slice_internal_import_is_fine(self, project: TempProject) -> None:
+        project.slice(
+            "kvad",
+            **{
+                "internal/__init__.py": "",
+                "internal/engine.py": "class Engine: ...",
+                "internal/svc.py": "from slices.kvad.internal.engine import Engine\nfrom .engine import Engine as E2\n",
+            },
+        )
+        assert "EIT001" not in project.ids()
+
+    def test_lazy_import_inside_function_is_still_caught(self, project: TempProject) -> None:
+        project.slice("rune", **{"internal/__init__.py": "", "internal/rune_engine.py": "class RuneEngine: ..."})
+        project.slice(
+            "kvad",
+            ["rune"],
+            **{
+                "internal/__init__.py": "",
+                "internal/leak.py": "def sneaky():\n    from slices.rune.internal import rune_engine\n    return rune_engine\n",
+            },
+        )
+        hits = [d for d in project.analyze() if d.id == "EIT001"]
+        assert len(hits) == 1 and hits[0].line == 2
+
+
+# ---------------------------------------------------------------- EIT002
+
+
+class TestEit002:
+    def test_importlib_is_reported(self, project: TempProject) -> None:
+        project.slice(
+            "rune",
+            **{
+                "internal/__init__.py": "",
+                "internal/hatch.py": "import importlib\nx = importlib.import_module('slices.kvad.internal.engine')\n",
+            },
+        )
+        hits = [d for d in project.analyze() if d.id == "EIT002"]
+        assert len(hits) == 1 and hits[0].line == 2
+        assert "importlib.import_module" in hits[0].message
+
+    def test_dunder_import_is_reported(self, project: TempProject) -> None:
+        project.slice("rune", **{"internal/__init__.py": "", "internal/hatch.py": "m = __import__('slices.kvad')\n"})
+        assert _only(project.ids(), "EIT002") == ["EIT002"]
+
+    def test_sys_path_surgery_is_reported(self, project: TempProject) -> None:
+        project.slice(
+            "rune",
+            **{
+                "internal/__init__.py": "",
+                "internal/hatch.py": "import sys\nsys.path.insert(0, '..')\nsys.path = []\nsys.modules['x'] = None\n",
+            },
+        )
+        assert _only(project.ids(), "EIT002") == ["EIT002"] * 3
+
+    def test_wildcard_import_is_reported(self, project: TempProject) -> None:
+        project.slice("rune", **{"contract/__init__.py": "class RuneService: ..."})
+        project.slice("kvad", ["rune"], **{"internal/__init__.py": "", "internal/x.py": "from slices.rune.contract import *\n"})
+        hits = [d for d in project.analyze() if d.id == "EIT002"]
+        assert len(hits) == 1 and "import *" in hits[0].message
+
+    def test_plain_imports_are_fine(self, project: TempProject) -> None:
+        project.slice("rune", **{"internal/__init__.py": "", "internal/ok.py": "import sys\nimport json\nprint(sys.path)\n"})
+        assert "EIT002" not in project.ids()
+
+
+# ---------------------------------------------------------------- EIT003
+
+
+class TestEit003:
+    def test_contract_exposing_foreign_contract_type_is_reported(self, project: TempProject) -> None:
+        project.slice("rune", **{"contract/__init__.py": "class RuneReading: ..."})
+        project.slice("kvad", ["rune"], **{"contract/__init__.py": "from slices.rune.contract import RuneReading\n"})
+        hits = [d for d in project.analyze() if d.id == "EIT003"]
+        assert len(hits) == 1
+        assert "slices.kvad.contract" in hits[0].message and "slices.rune.contract.RuneReading" in hits[0].message
+
+    def test_contract_using_stdlib_kernel_and_same_contract_is_fine(self, project: TempProject) -> None:
+        project.slice(
+            "kvad",
+            **{
+                "contract/__init__.py": "from .types import Verse\nfrom .service import KvadService\n",
+                "contract/types.py": "from __future__ import annotations\nfrom dataclasses import dataclass\nfrom shared_kernel import StaveId\n@dataclass\nclass Verse:\n    stave_id: StaveId\n",
+                "contract/service.py": "from typing import Protocol\nfrom slices.kvad.contract.types import Verse\nclass KvadService(Protocol):\n    def compose(self) -> Verse: ...\n",
+            },
+        )
+        assert "EIT003" not in project.ids()
+
+    def test_contract_importing_third_party_is_reported(self, project: TempProject) -> None:
+        project.slice("kvad", **{"contract/__init__.py": "import pydantic\n"})
+        assert "EIT003" in project.ids()
+
+    def test_contract_allowed_modules_whitelists_third_party(self, project: TempProject) -> None:
+        project.slice("kvad", **{"contract/__init__.py": "import pydantic\n"})
+        assert "EIT003" not in project.ids(contract_allowed_modules=("pydantic",))
+
+    def test_contract_importing_own_internal_is_reported(self, project: TempProject) -> None:
+        project.slice(
+            "kvad",
+            **{"contract/__init__.py": "from slices.kvad.internal.engine import Engine\n", "internal/engine.py": "class Engine: ..."},
+        )
+        assert "EIT003" in project.ids()
+
+
+# ---------------------------------------------------------------- EIT004
+
+
+class TestEit004:
+    def test_undeclared_contract_dependency_is_reported(self, project: TempProject) -> None:
+        project.slice("rune", **{"contract/__init__.py": "class RuneService: ..."})
+        project.slice("kvad", [], **{"internal/__init__.py": "", "internal/svc.py": "from slices.rune.contract import RuneService\n"})
+        hits = [d for d in project.analyze() if d.id == "EIT004"]
+        assert len(hits) == 1
+        assert "'kvad' imports the Contract of 'rune'" in hits[0].message
+        assert "slice.json" in hits[0].message
+
+    def test_declared_contract_dependency_is_fine(self, project: TempProject) -> None:
+        project.slice("rune", **{"contract/__init__.py": "class RuneService: ..."})
+        project.slice("kvad", ["rune"], **{"internal/__init__.py": "", "internal/svc.py": "from slices.rune.contract import RuneService\n"})
+        assert "EIT004" not in project.ids()
+
+    def test_missing_manifest_means_leaf_slice(self, project: TempProject) -> None:
+        project.slice("rune", **{"contract/__init__.py": "class RuneService: ..."})
+        project.write("slices/kvad/__init__.py", "")
+        project.write("slices/kvad/internal/__init__.py", "")
+        project.write("slices/kvad/internal/svc.py", "from slices.rune.contract import RuneService\n")
+        assert "EIT004" in project.ids()
+
+    def test_broken_manifest_is_a_hard_error(self, project: TempProject) -> None:
+        project.write("slices/kvad/slice.json", "{not json")
+        try:
+            project.analyze()
+        except EitriError as e:
+            assert "slice.json" in str(e)
+        else:  # pragma: no cover
+            raise AssertionError("expected EitriError")
+
+
+# ---------------------------------------------------------------- EIT005
+
+
+class TestEit005:
+    def test_importing_fastapi_http_exception_is_reported(self, project: TempProject) -> None:
+        project.slice(
+            "rune",
+            **{
+                "internal/__init__.py": "",
+                "internal/routes.py": """
+                from fastapi import APIRouter, HTTPException, Request
+
+                def split():
+                    raise HTTPException(status_code=422, detail="empty text")
+                """,
+            },
+        )
+        hits = [d for d in project.analyze() if d.id == "EIT005"]
+        assert len(hits) == 1 and hits[0].line == 1
+        assert "fastapi.HTTPException" in hits[0].message and "'http_common.Problem'" in hits[0].message
+
+    def test_the_remedy_comes_from_config(self, project: TempProject) -> None:
+        project.slice("rune", **{"internal/__init__.py": "", "internal/r.py": "from fastapi import HTTPException\n"})
+        hits = [d for d in project.analyze(problem_helper="api_errors.Fault") if d.id == "EIT005"]
+        assert len(hits) == 1 and "'api_errors.Fault'" in hits[0].message and "http_common" not in hits[0].message
+
+    def test_starlette_and_submodule_spellings_are_reported(self, project: TempProject) -> None:
+        project.slice(
+            "rune",
+            **{
+                "internal/__init__.py": "",
+                "internal/a.py": "from starlette.exceptions import HTTPException\n",
+                "internal/b.py": "from fastapi.exceptions import HTTPException as HttpError\n",
+            },
+        )
+        assert project.ids().count("EIT005") == 2
+
+    def test_attribute_access_on_the_package_is_reported(self, project: TempProject) -> None:
+        project.slice(
+            "rune",
+            **{
+                "internal/__init__.py": "",
+                "internal/routes.py": "import fastapi\n\ndef f():\n    raise fastapi.HTTPException(404)\n",
+            },
+        )
+        hits = [d for d in project.analyze() if d.id == "EIT005"]
+        assert len(hits) == 1 and hits[0].line == 4
+
+    def test_aliased_spellings_cannot_dodge_the_wall(self, project: TempProject) -> None:
+        project.slice(
+            "rune",
+            **{
+                "internal/__init__.py": "",
+                "internal/a.py": "import fastapi as fa\n\ndef f():\n    raise fa.HTTPException(422)\n",
+                "internal/b.py": "from fastapi import exceptions\n\ndef f():\n    raise exceptions.HTTPException(422)\n",
+                "internal/c.py": "import starlette.exceptions as se\n\ndef f():\n    raise se.HTTPException(422)\n",
+                "internal/d.py": "import fastapi.exceptions\n\ndef f():\n    raise fastapi.exceptions.HTTPException(422)\n",
+            },
+        )
+        hits = sorted((d.path.name, d.line, d.message.split("'")[3]) for d in project.analyze() if d.id == "EIT005")
+        assert hits == [
+            ("a.py", 4, "fastapi.HTTPException"),
+            ("b.py", 4, "fastapi.exceptions.HTTPException"),
+            ("c.py", 4, "starlette.exceptions.HTTPException"),
+            ("d.py", 4, "fastapi.exceptions.HTTPException"),
+        ]
+
+    def test_in_a_contract_only_eit003_speaks(self, project: TempProject) -> None:
+        project.slice("rune", **{"contract/__init__.py": "", "contract/c.py": "from fastapi import HTTPException\n"})
+        ids = project.ids()
+        assert "EIT003" in ids and "EIT005" not in ids
+
+    def test_raising_the_shared_problem_is_fine(self, project: TempProject) -> None:
+        project.slice(
+            "rune",
+            **{
+                "internal/__init__.py": "",
+                "internal/routes.py": """
+                from fastapi import APIRouter, Request
+                from http_common import Problem
+
+                def split(result):
+                    if not result.ok:
+                        raise Problem.domain_rejection(result.error)
+                """,
+            },
+        )
+        assert "EIT005" not in project.ids()
+
+    def test_outside_slices_is_not_policed(self, project: TempProject) -> None:
+        project.slice("rune", **{"internal/__init__.py": ""})
+        project.write("http_common/problems.py", "from starlette.exceptions import HTTPException\n")
+        project.write("pfa_api/app.py", "from fastapi import FastAPI, HTTPException\n")
+        assert "EIT005" not in project.ids()
+
+
+# ---------------------------------------------------------------- EIT100 / EIT101
+
+
+class TestEit100:
+    def test_over_budget_slice_fails(self, project: TempProject) -> None:
+        project.slice(
+            "kvad",
+            **{
+                "internal/__init__.py": "",
+                "internal/engine.py": "class Engine:\n    def compute_weighted_reading_score(self, rune_count, utterance_length):\n        return rune_count * 31 + utterance_length * 7\n",
+            },
+        )
+        diags = project.analyze(budget=10)
+        assert [d.id for d in diags if d.descriptor.category == "Eitri.ContextBudget"] == ["EIT100"]
+        d = next(d for d in diags if d.id == "EIT100")
+        assert d.severity.value == "error"
+        assert "Slice 'kvad' worst-case agent working set" in d.message
+        assert "over the budget of 10" in d.message
+
+    def test_under_budget_slice_reports_info(self, project: TempProject) -> None:
+        project.slice("kvad", **{"internal/__init__.py": "", "internal/engine.py": "class Engine: ...\n"})
+        diags = project.analyze(budget=100_000)
+        assert [d.id for d in diags] == ["EIT101"]
+        assert diags[0].severity.value == "info"
+        assert "of 100,000 budget" in diags[0].message
+
+    def test_non_slice_directory_is_not_metered(self, project: TempProject) -> None:
+        project.write("just_a_library/thing.py", "class Thing: ...\n" * 50)
+        assert project.ids(budget=10) == []
+
+    def test_dependency_internals_cost_zero(self, project: TempProject) -> None:
+        """Only Rune's *contract surface* lands in Kvad's working set — its internals are free."""
+        project.slice("rune", **{"contract/__init__.py": "class RuneService:\n    def read(self) -> int: ...\n"})
+        project.slice("kvad", ["rune"], **{"internal/__init__.py": "", "internal/x.py": "from slices.rune.contract import RuneService\n"})
+        before = next(d for d in project.analyze() if "'kvad'" in d.message)
+        project.write("slices/rune/internal/huge.py", "def f(): return 1\n" * 4000)
+        after = next(d for d in project.analyze() if "'kvad'" in d.message)
+        assert before.message == after.message
+        rune = next(d for d in project.analyze() if "'rune'" in d.message)
+        assert rune.id == "EIT100"  # Rune itself, of course, blew its own budget
+
+    def test_contract_surface_counts_only_public_signatures(self, project: TempProject) -> None:
+        project.slice(
+            "rune",
+            **{
+                "contract/__init__.py": "class RuneService:\n    def read(self, x: int) -> int:\n        "
+                + "y = 1\n        " * 200
+                + "return y\n    def _hidden(self): ...\n",
+            },
+        )
+        project.slice("kvad", ["rune"], **{"internal/__init__.py": ""})
+        kvad = next(d for d in project.analyze() if "'kvad'" in d.message)
+        # the 200-line body and the private method are not part of what an agent loads to consume Rune
+        contracts = int(kvad.message.split("contracts ")[1].split(" ")[0].replace(",", ""))
+        assert contracts < 40
+
+    def test_disabled_config_reports_nothing(self, project: TempProject) -> None:
+        project.slice("kvad", **{"internal/__init__.py": "", "internal/leak.py": "import importlib\nimportlib.import_module('x')\n"})
+        assert analyze(project.root, EitriConfig(enabled=False)) == []
+
+
+# ---------------------------------------------------------------- EIT000 / layout
+
+
+class TestLayout:
+    def test_unparsable_source_is_reported_as_eit000(self, project: TempProject) -> None:
+        project.slice("kvad", **{"internal/__init__.py": "", "internal/broken.py": "def (:\n"})
+        ids = project.ids()
+        assert "EIT000" in ids
+
+    def test_missing_slices_dir_is_a_hard_error(self, tmp_path) -> None:
+        try:
+            analyze(tmp_path, EitriConfig())
+        except EitriError as e:
+            assert "no slices/ under" in str(e)
+        else:  # pragma: no cover
+            raise AssertionError("expected EitriError")
+
+    def test_src_layout_is_found(self, tmp_path) -> None:
+        (tmp_path / "src" / "slices" / "kvad" / "internal").mkdir(parents=True)
+        (tmp_path / "src" / "slices" / "kvad" / "slice.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "src" / "slices" / "kvad" / "internal" / "x.py").write_text(
+            "import importlib\nimportlib.import_module('y')\n", encoding="utf-8"
+        )
+        assert "EIT002" in [d.id for d in analyze(tmp_path, EitriConfig())]

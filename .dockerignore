@@ -1,0 +1,9 @@
+# Only the service goes into the image. Everything else stays out, by name, so a new
+# top-level folder is excluded until someone deliberately adds it to the Dockerfile.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!src/
+src/**/__pycache__/
+src/**/*.egg-info/

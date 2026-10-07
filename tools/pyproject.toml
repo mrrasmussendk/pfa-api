@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# The development-only architecture tooling. It is NOT part of the API deployment:
+# install it into a dev environment with   pip install -e ./tools   (from the repo root).
+[project]
+name = "pfa-devtools"
+version = "0.1.0"
+description = "Eitri (slice walls + context budget), Heimdall (agent hook harness) and Brokkr (token estimator) for the PFA API."
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+eitri = "eitri.cli:main"
+heimdall = "heimdall.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["brokkr*", "eitri*", "heimdall*"]

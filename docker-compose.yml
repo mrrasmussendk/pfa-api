@@ -1,0 +1,31 @@
+# Local run:   docker compose up --build
+# The Hugging Face cache is a named volume, so the 2.2 GB weights download once and survive rebuilds.
+# For the GPU: uncomment the `deploy` block and build with TORCH_INDEX set to the CUDA index.
+services:
+  api:
+    build:
+      context: .
+      args:
+        TORCH_INDEX: https://download.pytorch.org/whl/cpu
+        # TORCH_INDEX: https://download.pytorch.org/whl/cu124
+        PRELOAD_MODEL: "0"
+    image: pfa-api:local
+    ports:
+      - "8000:8000"
+    volumes:
+      - models:/models
+    environment:
+      PFA_EMBED_DEVICE: cpu
+      PFA_WARMUP: "1"           # load at start; GET /ready turns 200 when done
+      PFA_EMBED_CONCURRENCY: "1"  # encodes at a time; raise only with GPU headroom
+      # PFA_EMBED_DEVICE: cuda
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  models:

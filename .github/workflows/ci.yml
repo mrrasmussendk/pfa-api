@@ -1,0 +1,141 @@
+name: ci
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/pfa-api
+
+jobs:
+  # ------------------------------------------------------------------ 1. the walls, the tests, the canaries
+  enforce:
+    name: enforce (${{ matrix.os }}, py${{ matrix.python }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}", cache: pip }
+      - name: Install the API (CPU torch) and the dev-only tooling
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]" -e ./tools
+      - name: Ruff — lint and formatting (config in [tool.ruff])
+        run: |
+          ruff check . --output-format github
+          ruff format --check .
+      - name: mypy — types (config in [tool.mypy]; the service is fully typed)
+        run: mypy
+      - name: Eitri — the service must pass its own walls and budget
+        run: eitri check --root .
+      - name: Brokkr — the walls must bite
+        run: python tools/brokkr_canary.py
+      - name: Tests — API (fake model) + tooling (16 harness scenarios, format parity)
+        run: pytest -q
+      - name: Heimdall harness smoke test (prints hook latency)
+        run: python tools/smoke_test.py
+      - name: Heimdall map must be current (regenerate and diff)
+        shell: bash
+        run: |
+          heimdall map --root . >/dev/null
+          git diff --exit-code -- AGENTS.md src/slices/*/AGENTS.md \
+            || { echo "::error::AGENTS.md is stale — run 'heimdall map --root .' and commit"; exit 1; }
+
+  # ------------------------------------------------------------------ 2. the distribution must not carry the tooling
+  wheel:
+    name: wheel ships no tooling
+    needs: enforce
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install build && python -m build
+      - name: Verify the wheel contains only the service
+        run: |
+          python -m zipfile -l dist/*.whl > wheel.txt
+          ! grep -E "^(eitri|heimdall|brokkr)/" wheel.txt
+          grep -E "^(pfa_api|shared_kernel|slices)/" wheel.txt >/dev/null
+      - uses: actions/upload-artifact@v4
+        with: { name: dist, path: dist/* }
+
+  # ------------------------------------------------------------------ 3. the image: built on every PR, pushed on main and tags
+  image:
+    name: docker image
+    needs: [enforce, wheel]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (local, for verification)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: pfa-api:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image must not contain the tooling
+        run: |
+          if docker run --rm pfa-api:ci python -c "import eitri" 2>/dev/null; then
+            echo "::error::the image contains the dev tooling (eitri importable)"; exit 1; fi
+          if docker run --rm pfa-api:ci python -c "import heimdall" 2>/dev/null; then
+            echo "::error::the image contains the dev tooling (heimdall importable)"; exit 1; fi
+          docker run --rm pfa-api:ci python -c "import pfa_api, slices.embeddings.contract, slices.chunking.contract; print('service importable')"
+
+      - name: Image must serve /health
+        run: |
+          docker run -d --name pfa -p 8000:8000 pfa-api:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health | grep -q '"ok"'; then echo "healthy after ${i}s"; break; fi
+            sleep 1
+            if [ "$i" = 30 ]; then docker logs pfa; echo "::error::/health never answered"; exit 1; fi
+          done
+          curl -fsS http://127.0.0.1:8000/openapi.json | grep -q '/embeddings/similarity'
+          docker rm -f pfa
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image tags
+        id: meta
+        if: github.event_name != 'pull_request'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+          labels: |
+            org.opencontainers.image.title=PFA API
+            org.opencontainers.image.description=Embedding service (multilingual-e5-large) built as vertical slices
+
+      - name: Push
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,9 @@
+# Generated files are written with LF by the tooling; keep them LF on every OS so the
+# CI "map must be current" diff never fails on line endings alone.
+* text=auto
+*.md text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+Dockerfile text eol=lf

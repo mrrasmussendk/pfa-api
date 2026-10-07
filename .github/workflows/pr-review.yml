@@ -1,0 +1,116 @@
+# Jev reviews every pull request: typed judgments over the diff, policy in code, one sticky comment.
+#
+# `heimdall review` turns the PR diff plus the slice map into bounded state, asks TypeSafe's Jev
+# a fixed set of yes/no, choice and score questions (correctness, clean code, tests, security,
+# scope, architecture fit), and maps the probabilities to one outcome:
+#   approve / comment  -> check passes
+#   request_changes    -> check fails
+#   escalate           -> check passes with a warning; a human is asked for
+# Forks do not receive secrets: without TYPESAFE_API_KEY the review is skipped, not failed.
+# `ci.yml` stays the hard gate (walls, canaries, tests); this is the judgment on top of it.
+name: pr-review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  jev:
+    name: Jev review (heimdall review)
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the diff is base...HEAD, so the base ref must be present
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+
+      - name: Install the dev-only tooling (stdlib runtime; nothing of the service is needed)
+        run: pip install -e ./tools
+
+      - name: Heimdall map must be current (the judge is told the architecture from it)
+        shell: bash
+        run: |
+          heimdall map --root . >/dev/null
+          git diff --exit-code -- AGENTS.md src/slices/*/AGENTS.md \
+            || { echo "::error::AGENTS.md is stale — run 'heimdall map --root .' and commit"; exit 1; }
+
+      - name: Review the diff with Jev
+        id: review
+        shell: bash
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          # PR text reaches the command through the environment, never through shell interpolation.
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set +e
+          heimdall review \
+            --base "origin/${BASE_REF}" \
+            --task "${PR_TITLE}"$'\n\n'"${PR_BODY}" \
+            --json review/review.json \
+            --markdown review/review.md \
+            --session "pr-${{ github.event.pull_request.number }}" \
+            --allow-missing-key
+          code=$?
+          set -e
+          echo "exit=${code}" >> "$GITHUB_OUTPUT"
+          case "${code}" in
+            0) echo "::notice::Jev review: approve or comment" ;;
+            1) echo "::error::Jev review: request changes — see the PR comment" ;;
+            2) echo "::warning::Jev review: escalate — a human reviewer is asked for" ;;
+            *) echo "::error::Jev review could not run (exit ${code})" ;;
+          esac
+
+      - name: Upload the review (JSON + Markdown)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jev-review
+          path: review/
+          if-no-files-found: ignore
+
+      - name: Post or update the sticky PR comment
+        if: always() && hashFiles('review/review.md') != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('review/review.md', 'utf8');
+            const marker = '<!-- heimdall-review -->';
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+            const mine = comments.find(c => c.user?.type === 'Bot' && c.body?.includes(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Ask for a human when Jev escalates
+        if: steps.review.outputs.exit == '2'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            try {
+              await github.rest.issues.addLabels({ owner, repo, issue_number, labels: ['needs-human-review'] });
+            } catch (e) {
+              core.warning(`could not add label needs-human-review: ${e.message}`);
+            }
+
+      - name: Fail the check on request_changes or on a broken review
+        if: steps.review.outputs.exit != '0' && steps.review.outputs.exit != '2'
+        run: exit 1
