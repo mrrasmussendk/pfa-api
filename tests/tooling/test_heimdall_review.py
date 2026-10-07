@@ -8,7 +8,7 @@ import json
 from typing import Any
 
 import pytest
-from conftest import TempRepo
+from conftest import TempProject, TempRepo
 
 from heimdall.commands import review
 from heimdall.commands.review import (
@@ -21,6 +21,9 @@ from heimdall.commands.review import (
     decide,
     parse_unified_diff,
     questions,
+    render_markdown,
+    render_table,
+    wall_findings,
 )
 from heimdall.model import MapModel
 
@@ -177,7 +180,7 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
 
 
 def test_oversized_files_are_truncated_and_named(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(review, "MAX_FILE_CHARS", 120)
+    monkeypatch.setattr(review.state, "MAX_FILE_CHARS", 120)
     state = build_state(parse_unified_diff(DIFF), _map(), None)
     assert "src/slices/kvad/internal/routes.py" in state["facts"]["files_truncated"]
     big = next(e for e in state["files"] if e["path"].endswith("routes.py"))
@@ -376,3 +379,124 @@ def test_review_is_reachable_through_the_heimdall_cli(repo: TempRepo) -> None:
     repo.write_file("change.diff", DIFF)
     code, out, _ = repo.run("", "review", "--diff", "change.diff", "--dry-run")
     assert code == 0 and '"safe_to_merge"' in out
+
+
+# ---------------------------------------------------------------- the walls are facts, not judgments
+
+
+def _disguised_wall_break() -> dict[str, Any]:
+    """Jev's real answers (2026-10-07) on a wall-breaking module dressed up with a persuasive docstring:
+    walls 'respected' at 0.62, code 'exemplary', yet architecture named as the biggest risk at 0.96."""
+    return _answers(
+        safe_to_merge={"type": "noul", "noul": 0.30},
+        needs_human_review={"type": "noul", "noul": 0.71},
+        tests_cover_change={"type": "noul", "noul": 0.14},
+        respects_slice_walls={"type": "noul", "noul": 0.62},
+        clean_code={"type": "score", "score": 2.5, "confidence": 0.5},
+        biggest_risk={
+            "type": "choice",
+            "choice": "architecture",
+            "probabilities": {"architecture": 0.96, "tests": 0.04},
+            "confidence": 0.95,
+        },
+    )
+
+
+def test_policy_blocks_when_the_judge_names_architecture_as_the_risk_despite_a_yes_on_walls() -> None:
+    answers = _disguised_wall_break()
+    answers["safe_to_merge"] = {"type": "noul", "noul": 0.9}  # take the catch-all out of play: only the new rule can fire
+    v = decide(answers, {"source_changed": True}, "m", {})
+    assert v.outcome == "request_changes"
+    assert any("architecture as the biggest risk" in r for r in v.reasons)
+    assert len(v.advice) == len(v.reasons) and "cross-slice import" in v.advice[0]
+
+
+def test_policy_blocks_on_eitri_findings_whatever_the_judge_says() -> None:
+    facts = {
+        "source_changed": True,
+        "wall_violations": [
+            {
+                "path": "src/slices/kvad/internal/leak.py",
+                "line": 3,
+                "rule": "EIT001",
+                "message": "imports rune internals",
+                "fix": "use the contract",
+            }
+        ],
+    }
+    v = decide(_answers(), facts, "m", {})  # a glowing review
+    assert v.outcome == "request_changes" and v.reasons[0].startswith("Eitri found 1 wall violation")
+    assert "eitri check" in v.advice[0]
+
+
+def test_wall_findings_come_from_eitri_and_only_for_changed_files(project: TempProject) -> None:
+    project.slice("rune", **{"internal/__init__.py": "", "internal/rune_engine.py": "class RuneEngine: ..."})
+    project.slice(
+        "kvad",
+        ["rune"],
+        **{
+            "internal/__init__.py": "",
+            "internal/leak.py": "from slices.rune.internal.rune_engine import RuneEngine\n",
+            "internal/old_leak.py": "from slices.rune.internal.rune_engine import RuneEngine\n",
+        },
+    )
+    project.write("docs/rules/EIT001.md", "# EIT001\nWhy it matters.\n**Fix:** import the dependency's `contract` package instead.\n")
+    changed = parse_unified_diff(
+        "diff --git a/slices/kvad/internal/leak.py b/slices/kvad/internal/leak.py\n"
+        "new file mode 100644\n--- /dev/null\n+++ b/slices/kvad/internal/leak.py\n@@ -0,0 +1 @@\n"
+        "+from slices.rune.internal.rune_engine import RuneEngine\n"
+    )
+    found = wall_findings(str(project.root), changed)
+    assert [(f["path"], f["line"], f["rule"]) for f in found] == [("slices/kvad/internal/leak.py", 1, "EIT001")]
+    assert found[0]["fix"] == "import the dependency's `contract` package instead."  # read from the rule doc, never hardcoded
+    assert found[0]["doc"] == "docs/rules/EIT001.md"
+    state = build_state(changed, None, None, found)
+    assert state["facts"]["wall_violations"] == found
+
+
+def test_wall_findings_are_empty_without_a_slice_tree(repo: TempRepo) -> None:
+    assert wall_findings(str(repo.root), parse_unified_diff(DIFF)) == []
+
+
+def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None:
+    facts = {
+        "files_changed": 1,
+        "lines_added": 10,
+        "lines_removed": 0,
+        "slices_touched": ["kvad"],
+        "cross_slice_change": False,
+        "contracts_touched": {},
+        "routes_changed": False,
+        "source_changed": True,
+        "tests_changed": [],
+        "docs_changed": False,
+        "files_truncated": [],
+        "wall_violations": [
+            {
+                "path": "src/slices/kvad/internal/leak.py",
+                "line": 3,
+                "rule": "EIT001",
+                "message": "imports rune internals",
+                "fix": "use the contract",
+            }
+        ],
+    }
+    v = decide(_disguised_wall_break(), facts, "jev-1", {})
+    md = render_markdown(v, {"facts": facts}, questions())
+    assert "### What went wrong" in md
+    assert "**Eitri found 1 wall violation(s) in the changed files.** The change crosses a slice wall." in md
+    assert "- `src/slices/kvad/internal/leak.py:3 — EIT001: imports rune internals` **Fix:** use the contract" in md
+    assert "**not safe to merge p(safe)=0.30.**" in md
+    assert "**Next:** fix what is named above and push" in md
+    assert md.index("What went wrong") < md.index("| question | answer |")  # the explanation comes before the numbers
+    table = render_table(v, questions(), facts)
+    assert "leak.py:3 — EIT001" in table
+
+    v = decide(_answers(needs_human_review={"type": "noul", "noul": 0.7}), facts | {"wall_violations": []}, "jev-1", {})
+    md = render_markdown(v, {"facts": facts | {"wall_violations": []}}, questions())
+    assert "### What the judge wants" in md and "needs-human-review" in md
+
+    md = render_markdown(
+        decide(_answers(), facts | {"wall_violations": []}, "jev-1", {}), {"facts": facts | {"wall_violations": []}}, questions()
+    )
+    assert "What went wrong" not in md and "What the judge wants" not in md

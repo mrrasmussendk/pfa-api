@@ -119,8 +119,8 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
           if [ "${EXIT}" = "1" ]; then
-            echo "::error::Jev asked for changes. The verdict table (which thresholds tripped and why) is in the sticky 'Heimdall review' comment: ${PR_URL}"
-            echo "Fix what the comment names, push, and the check reruns. Policy thresholds live in tools/heimdall/commands/review.py (T)."
+            echo "::error::Jev asked for changes. The sticky 'Heimdall review' comment opens with what went wrong and what to do, then the verdict table: ${PR_URL}"
+            echo "Fix what the comment names, push, and the check reruns. Policy thresholds live in tools/heimdall/commands/review/policy.py (T)."
           else
             echo "::error::The Jev review could not run (heimdall review exited ${EXIT}). Open the 'Review the diff with Jev' step above for the error."
           fi
