@@ -56,14 +56,19 @@ Fixed, typed, greppable: `questions()` in `tools/heimdall/commands/review.py`.
 
 ## The policy
 
-Thresholds live in `T` in `review.py`, not in the model. In order:
+Thresholds live in `T` in `tools/heimdall/commands/review/policy.py`, not in the model. In order:
 
-1. **Block** (`request_changes`): `has_security_concern ≥ 0.50`, `leaks_internals ≥ 0.5`, `safe_to_merge ≤ 0.35`, `respects_slice_walls ≤ 0.40`, `correctness ≤ 1.25`, or routes changed and `errors_use_problem_details ≤ 0.4`.
+0. **Facts first.** Eitri runs on the changed files before the judge is consulted; any error (`EIT001`–`EIT100`) lands in `facts.wall_violations` and is a `request_changes` on its own. The walls are decided by the import graph, never by a probability — a persuasive docstring cannot argue an import away.
+1. **Block** (`request_changes`): `has_security_concern ≥ 0.50`, `leaks_internals ≥ 0.5`, `safe_to_merge ≤ 0.35`, `respects_slice_walls ≤ 0.40`, `biggest_risk = architecture` with `p ≥ 0.80` (the judge's own top-risk label overrides a Yes on the walls), `correctness ≤ 1.25`, or routes changed and `errors_use_problem_details ≤ 0.4`.
 2. **Escalate**: `needs_human_review ≥ 0.60`, or `safe_to_merge` within 0.15 of 0.5.
 3. **Approve**: `safe_to_merge ≥ 0.75`, `needs_human_review ≤ 0.35`, `has_security_concern ≤ 0.20`, `clean_code ≥ 1.5`, and (no source change or `tests_cover_change ≥ 0.50`).
 4. Otherwise **comment**.
 
+Every reason the policy records carries one sentence of advice. The PR comment opens with those sentences under **What went wrong** (or **What the judge wants** on escalate), lists Eitri's findings with the file, the line and the `**Fix:**` line from the rule's page under `docs/rules/`, and only then shows the probability table.
+
 A probability is a policy input, not proof. Before letting `approve` bypass human review, measure these thresholds against your own merge history: `heimdall review --json` on past PRs, compare outcomes to what reviewers actually did, and move the numbers. Missing answers fall back to neutral values, which lands on `escalate`, never on `approve`.
+
+Two calibration points so far (2026-10-07), both the same `EIT001` import of another slice's `internal/`: written bluntly it scored `p(safe)=0.06`, `p(respects_slice_walls)=0.25`; dressed in a docstring selling it as a performance fast path it scored `p(safe)=0.30`, `p(respects_slice_walls)=0.62`, `clean_code` "Exemplary" — and still `biggest_risk = architecture` at `0.96`. The walls rule alone would have let the second one through. That is why Eitri's facts and the top-risk label now sit above it.
 
 ## Running it locally
 
@@ -79,6 +84,6 @@ Exit codes: `0` approve/comment · `1` request_changes · `2` escalate · `3` co
 
 ## Where it sits with the other tools
 
-- **Eitri** decides facts about imports; Jev is never asked to re-derive them. The walls are *told* to Jev so it can judge intent and placement, which an import graph cannot see.
+- **Eitri** decides facts about imports; Jev is never asked to re-derive them. Its findings on the changed files go into the state (`facts.wall_violations`) and into the comment, so Jev judges intent and placement, which an import graph cannot see, and the policy blocks on the import graph, which a docstring cannot talk around.
 - **Heimdall's hook** stays stdlib-only and local; it never calls the network on a tool call. The review is a separate command, run by CI or by you.
 - **Brokkr** proves the walls still bite. Nothing proves Jev's thresholds are right except your own calibration — treat the numbers in `T` the way `docs/calibration.md` treats the token estimator.
