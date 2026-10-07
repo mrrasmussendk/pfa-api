@@ -113,4 +113,15 @@ jobs:
 
       - name: Fail the check on request_changes or on a broken review
         if: steps.review.outputs.exit != '0' && steps.review.outputs.exit != '2'
-        run: exit 1
+        shell: bash
+        env:
+          EXIT: ${{ steps.review.outputs.exit }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          if [ "${EXIT}" = "1" ]; then
+            echo "::error::Jev asked for changes. The verdict table (which thresholds tripped and why) is in the sticky 'Heimdall review' comment: ${PR_URL}"
+            echo "Fix what the comment names, push, and the check reruns. Policy thresholds live in tools/heimdall/commands/review.py (T)."
+          else
+            echo "::error::The Jev review could not run (heimdall review exited ${EXIT}). Open the 'Review the diff with Jev' step above for the error."
+          fi
+          exit 1
