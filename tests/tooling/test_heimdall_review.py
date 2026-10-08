@@ -187,7 +187,7 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
     assert facts["slices_touched"] == ["kvad", "rune"] and facts["cross_slice_change"] is True
     assert facts["contracts_touched"] == {"rune": {"fan_in": 12, "frozen": True}}
     assert facts["routes_changed"] is True and facts["source_changed"] is True and facts["docs_changed"] is True
-    assert facts["code_changed"] is True  # Python outside tests changed: the craft targets apply
+    assert facts["code_changed"] is True  # the application's Python changed: the craft targets apply
     assert facts["state_tokens"] == facts["diff_tokens"] > 0 and facts["files_truncated"] == []  # small enough to be seen whole
     assert facts["state_budget_tokens"] == 28_000 and facts["judge_window_tokens"] == 32_000
     assert facts["tests_changed"] == ["tests/api/test_kvad.py"]
@@ -210,6 +210,20 @@ def test_oversized_files_are_truncated_and_named(monkeypatch: pytest.MonkeyPatch
     md = render_markdown(decide(_answers(), state["facts"], "m", {}), state, questions())
     assert "tokens sent of a 28,000 budget (Jev reads 32,000 with the questions); the whole diff is ~" in md
     assert "file(s) were cut and the craft scores rate what the judge saw" in md
+
+
+def test_the_craft_floor_is_about_the_application_not_the_tooling() -> None:
+    tooling = parse_unified_diff(
+        "diff --git a/tools/heimdall/x.py b/tools/heimdall/x.py\n--- a/tools/heimdall/x.py\n+++ b/tools/heimdall/x.py\n"
+        "@@ -1 +1 @@\n-a = 1\n+a = 2\n"
+    )
+    facts = build_state(tooling, _map(), None)["facts"]
+    assert facts["code_changed"] is False and facts["source_changed"] is False
+    readable = {"type": "score", "score": 2.0, "confidence": 0.7}
+    assert decide(_answers(readability=readable, clean_code=readable), facts, "m", {}).outcome == "approve"
+    # a low safety score over a tooling diff with only craft doubts behind it needs a person, not a prose edit
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, readability=readable), facts, "m", {})
+    assert v.outcome == "escalate" and "rates readability" not in v.advice[0]
 
 
 def test_the_features_package_init_is_the_application_not_a_slice() -> None:
