@@ -58,7 +58,9 @@ def fields_of(record: logging.LogRecord) -> dict[str, Any]:
 
 
 def _timestamp(record: logging.LogRecord) -> str:
-    return datetime.fromtimestamp(record.created, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + f"{record.msecs:03.0f}Z"
+    """RFC 3339, UTC, milliseconds — truncated, never rounded, so 59.9996 s stays within its second."""
+    dt = datetime.fromtimestamp(record.created, tz=timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
 
 
 def _message(record: logging.LogRecord) -> str:

@@ -36,7 +36,7 @@ def start_span(traceparent: str | None) -> Trace:
     """The trace this request belongs to: the client's when its ``traceparent`` parses, a new one
     otherwise. Either way the span id is fresh — this request is its own span."""
     span_id = secrets.token_hex(8)
-    m = _TRACEPARENT.match(traceparent.strip()) if traceparent else None
+    m = _TRACEPARENT.fullmatch(traceparent.strip()) if traceparent else None
     if m and m.group(1) != _ZERO_TRACE and m.group(2) != _ZERO_SPAN:
         return Trace(m.group(1), span_id, m.group(3))
     return Trace(secrets.token_hex(16), span_id)
