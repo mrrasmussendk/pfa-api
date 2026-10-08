@@ -111,9 +111,11 @@ def test_a_valid_client_traceparent_keeps_its_trace_id_and_gets_a_new_span(app: 
     assert r.headers["tracestate"] == "vendor=1"  # passed through, never read
     for bad in (
         "00-" + "0" * 32 + "-00f067aa0ba902b7-01",
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-" + "0" * 16 + "-01",
         "garbage",
         "00-abc-def-01",
-        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01\nX: y",
+        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" + chr(10) + "X: y",
+        "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",  # the spec is lowercase hex
     ):
         assert start_span(bad).trace_id != "4bf92f3577b34da6a3ce929d0e0e4736"
     (line,) = [rec for rec in stream.records("syslog") if rec["msgid"] == "request"]
@@ -233,6 +235,14 @@ def test_the_syslog_line_is_rfc_5424_with_escaped_params() -> None:
     assert RFC3339.match(rec["timestamp"]) and rec["app"] == "pfa-api"
     bare = parse_syslog(SyslogFormatter(16, 32473).format(_record()))
     assert bare["sd_id" if "sd_id" in bare else "msgid"] in ("-",) and bare["msg"] == "x"  # no fields: nil structured data
+
+
+def test_timestamps_truncate_to_the_millisecond_and_never_roll_the_second() -> None:
+    rec = _record()
+    rec.created = 1_791_471_599.9996  # 2026-10-08T14:59:59.9996Z: rounding would print ".1000Z" inside second 59
+    rec.msecs = 999.6
+    assert parse_syslog(SyslogFormatter(16, 32473).format(rec))["timestamp"] == "2026-10-08T14:59:59.999Z"
+    assert json.loads(JsonFormatter(16, 32473).format(rec))["timestamp"] == "2026-10-08T14:59:59.999Z"
 
 
 def test_the_json_line_is_the_same_record_under_the_rfc_names(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> None:
