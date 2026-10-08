@@ -26,13 +26,13 @@ merges before trusting them with the merge button.
 from __future__ import annotations
 
 from . import state
-from .base import EXIT_ERROR, EXIT_ESCALATE, EXIT_OK, EXIT_REQUEST_CHANGES, OUTCOMES, ReviewError
+from .base import EXIT_ERROR, EXIT_ESCALATE, EXIT_OK, EXIT_REQUEST_CHANGES, OUTCOMES, ReviewError, Streams
 from .command import USAGE, run
 from .diff import FileChange, git_diff, parse_unified_diff
 from .policy import T, Verdict, decide
 from .questions import questions
 from .report import render_markdown, render_table
-from .state import build_state, wall_findings
+from .state import build_state, function_shape, wall_findings
 from .transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL, Transport, http_transport
 
 __all__ = [
@@ -48,11 +48,13 @@ __all__ = [
     "USAGE",
     "FileChange",
     "ReviewError",
+    "Streams",
     "T",
     "Transport",
     "Verdict",
     "build_state",
     "decide",
+    "function_shape",
     "git_diff",
     "http_transport",
     "parse_unified_diff",
