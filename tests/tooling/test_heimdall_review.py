@@ -433,6 +433,44 @@ def test_policy_blocks_when_the_judge_names_architecture_as_the_risk_despite_a_y
     assert v.outcome == "request_changes"
     assert any("architecture as the biggest risk" in r for r in v.reasons)
     assert len(v.advice) == len(v.reasons) and "cross-slice import" in v.advice[0]
+    assert "Eitri found no wall violation" in v.advice[0] and "feature.json" in v.advice[0]  # names what to look for instead
+
+
+def _wide_refactor(**over: Any) -> dict[str, Any]:
+    """Jev's real answers (2026-10-08) on a 101-file move of the whole package layout: walls respected at
+    0.93, no Eitri finding, and architecture named as the biggest risk at 0.98 — the restructure itself."""
+    return _answers(
+        needs_human_review={"type": "noul", "noul": 0.79},
+        respects_slice_walls={"type": "noul", "noul": 0.93},
+        blast_radius={"type": "score", "score": 1.99, "legend": {"0": "Contained", "1": "Moderate", "2": "Wide"}, "confidence": 0.98},
+        change_kind={"type": "choice", "choice": "refactor", "probabilities": {"refactor": 1.0}, "confidence": 1.0},
+        biggest_risk={"type": "choice", "choice": "architecture", "probabilities": {"architecture": 0.98}, "confidence": 0.98},
+        **over,
+    )
+
+
+def test_policy_escalates_an_architecture_wide_refactor_instead_of_asking_for_an_import_fix() -> None:
+    v = decide(_wide_refactor(safe_to_merge={"type": "noul", "noul": 0.5}), {"source_changed": True, "files_changed": 101}, "m", {})
+    assert v.outcome == "escalate" and v.exit_code == EXIT_ESCALATE
+    assert v.reasons[0].startswith("architecture-wide refactor")
+    assert "101 changed files" in v.advice[0] and "nothing for the check to fix" in v.advice[0]
+    # the same label on a fix with a moderate blast radius is still the disguised-import case: block
+    bug = _wide_refactor(safe_to_merge={"type": "noul", "noul": 0.5})
+    bug["change_kind"] = _answers()["change_kind"]  # a fix, not a refactor
+    assert decide(bug, {"source_changed": True}, "m", {}).outcome == "request_changes"
+
+
+def test_not_safe_names_what_drives_the_doubt() -> None:
+    v = decide(_wide_refactor(safe_to_merge={"type": "noul", "noul": 0.33}), {"source_changed": True, "files_changed": 101}, "m", {})
+    assert v.outcome == "request_changes" and v.reasons == ["not safe to merge p(safe)=0.33"]
+    (why,) = v.advice
+    assert "What drives it:" in why
+    assert "wants a person to look (needs_human_review 0.79)" in why
+    assert "blast radius is wide" in why and "names architecture as the one thing to check (0.98)" in why
+    assert "Eitri found no wall violation, so the restructure itself" in why
+    assert "other rows" not in why
+    lonely = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.2}), {"source_changed": True}, "m", {})
+    assert "No other answer explains the doubt" in lonely.advice[0]
 
 
 def test_policy_blocks_on_eitri_findings_whatever_the_judge_says() -> None:
