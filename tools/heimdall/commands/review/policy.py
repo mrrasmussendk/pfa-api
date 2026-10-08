@@ -38,6 +38,34 @@ T = {
     "signatures_approve": 0.50,  # lean_signatures >=
 }
 
+# What answers each "what limits it most" label in code. An unanswered label falls back to the whole
+# list, so the advice still names a code change.
+_READABILITY_FIXES = {
+    "names": "rename what the judge could not follow until each name says what the thing is",
+    "nesting": "flatten the nesting with early returns so the happy path reads straight down",
+    "length": "split the long function into functions whose names say what they do",
+    "mixed_levels": "keep one level of abstraction per function: pull the low-level steps out under their own names",
+    "magic_values": "name every literal and replace each behaviour flag with two functions",
+    "cleverness": "unfold the clever one-liners into plain statements",
+}
+_CLEAN_FIXES = {
+    "duplication": "extract the logic written twice into one function",
+    "dead_code": "delete the unused code, parameters and branches",
+    "comments": "replace what-comments with why-comments, and add a why where the reader would ask",
+    "style": "match the surrounding code's conventions",
+    "error_handling": "handle each error where it arises and never swallow one",
+}
+
+# What answers each top-risk label in code. A label the judge chooses is always about the diff,
+# so it always has a code path; only "architecture" needs Eitri's facts to say which one.
+_RISK_FIXES = {
+    "correctness": "walk the new branches with empty input, None, boundaries and the error path; add a failing test for each",
+    "security": "find the trust boundary the judge means (input reaching a shell, a path, a log, a client) and close it with a test",
+    "tests": "add a test per changed behaviour that fails without the change",
+    "readability": "rename what the judge could not follow and split the function it hides in",
+    "docs": "update the guide, AGENTS.md note or reference the behaviour change left stale",
+}
+
 
 @dataclass
 class Verdict:
@@ -59,14 +87,11 @@ def _noul(answers: dict[str, Any], key: str, default: float = 0.5) -> float:
     return float(v) if isinstance(v, (int, float)) else default
 
 
-def _score(answers: dict[str, Any], key: str, levels: int) -> tuple[float, float]:
-    """(expected level 0..levels-1, confidence); falls back to the middle at zero confidence."""
+def _score(answers: dict[str, Any], key: str, levels: int) -> float:
+    """The expected level on 0..levels-1; the middle when unanswered."""
     a = answers.get(key) or {}
     v = a.get("score")
-    if not isinstance(v, (int, float)):
-        return (levels - 1) / 2.0, 0.0
-    conf = a.get("confidence")
-    return float(v), float(conf) if isinstance(conf, (int, float)) else 0.0
+    return float(v) if isinstance(v, (int, float)) else (levels - 1) / 2.0
 
 
 def _choice(answers: dict[str, Any], key: str) -> tuple[str, float]:
@@ -77,36 +102,20 @@ def _choice(answers: dict[str, Any], key: str) -> tuple[str, float]:
     return c, float(p) if isinstance(p, (int, float)) else 0.0
 
 
-# What answers each "what limits it most" label in code. An unanswered label falls back to the whole
-# list, so the advice still names a code change.
-_READABILITY_FIXES = {
-    "names": "rename what the judge could not follow until each name says what the thing is",
-    "nesting": "flatten the nesting with early returns so the happy path reads straight down",
-    "length": "split the long function into functions whose names say what they do",
-    "mixed_levels": "keep one level of abstraction per function: pull the low-level steps out under their own names",
-    "magic_values": "name every literal and replace each behaviour flag with two functions",
-    "cleverness": "unfold the clever one-liners into plain statements",
-}
-_CLEAN_FIXES = {
-    "duplication": "extract the logic written twice into one function",
-    "dead_code": "delete the unused code, parameters and branches",
-    "comments": "replace what-comments with why-comments, and add a why where the reader would ask",
-    "style": "match the surrounding code's conventions",
-    "error_handling": "handle each error where it arises and never swallow one",
-}
-
-
-def _limit(answers: dict[str, Any], key: str, fixes: dict[str, str]) -> tuple[str, float]:
-    """The judge's most probable *actionable* limit label. ``none`` wins the choice easily under a short score
-    (PR #9: none at 0.40 beside a 2.08 readability), and none is not a fix; the runner-up in the judge's own
-    probabilities is. ``("?", 0.0)`` when it gave no actionable label at all."""
+def _limit_fix(answers: dict[str, Any], key: str, fixes: dict[str, str]) -> str:
+    """The fix for the judge's most probable *actionable* limit label. ``none`` wins the choice easily under a
+    short score (PR #9: none at 0.40 beside a 2.08 readability), and none is not a fix; the runner-up in the
+    judge's own probabilities is. Every fix is listed when it gave no actionable label at all."""
     a = answers.get(key) or {}
     probs = a.get("probabilities") or {}
-    ranked = sorted(((float(p), k) for k, p in probs.items() if k in fixes and isinstance(p, (int, float))), reverse=True)
-    if ranked:
-        return ranked[0][1], ranked[0][0]
-    label, p = _choice(answers, key)
-    return (label, p) if label in fixes else ("?", 0.0)
+    actionable = {k: float(p) for k, p in probs.items() if k in fixes and isinstance(p, (int, float))}
+    chosen = str(a.get("choice") or "")
+    if not actionable and chosen in fixes:
+        actionable = {chosen: 0.0}
+    if not actionable:
+        return "the judge named no single limit, so: " + "; ".join(fixes.values())
+    label = max(actionable, key=lambda k: actionable[k])
+    return f"its most probable limit: {label} ({actionable[label]:.2f}): {fixes[label]}"
 
 
 @dataclass(frozen=True)
@@ -124,11 +133,9 @@ class _Judgment:
     scope: float
     correctness: float
     clean: float
+    clean_fix: str
     readability: float
-    readability_limit: str
-    readability_limit_p: float
-    clean_limit: str
-    clean_limit_p: float
+    readability_fix: str
     purpose: float
     signatures: float
     blast: float
@@ -139,8 +146,6 @@ class _Judgment:
     @classmethod
     def read(cls, answers: dict[str, Any]) -> _Judgment:
         risk, risk_p = _choice(answers, "biggest_risk")
-        readability_limit, readability_limit_p = _limit(answers, "readability_limit", _READABILITY_FIXES)
-        clean_limit, clean_limit_p = _limit(answers, "clean_code_limit", _CLEAN_FIXES)
         return cls(
             safe=_noul(answers, "safe_to_merge"),
             human=_noul(answers, "needs_human_review"),
@@ -150,77 +155,55 @@ class _Judgment:
             tests=_noul(answers, "tests_cover_change", 1.0),
             errors_ok=_noul(answers, "errors_use_problem_details", 1.0),
             scope=_noul(answers, "stays_in_scope", 1.0),
-            correctness=_score(answers, "correctness", 4)[0],
-            clean=_score(answers, "clean_code", 4)[0],
-            readability=_score(answers, "readability", 4)[0],
-            readability_limit=readability_limit,
-            readability_limit_p=readability_limit_p,
-            clean_limit=clean_limit,
-            clean_limit_p=clean_limit_p,
+            correctness=_score(answers, "correctness", 4),
+            clean=_score(answers, "clean_code", 4),
+            clean_fix=_limit_fix(answers, "clean_code_limit", _CLEAN_FIXES),
+            readability=_score(answers, "readability", 4),
+            readability_fix=_limit_fix(answers, "readability_limit", _READABILITY_FIXES),
             purpose=_noul(answers, "single_purpose", 1.0),
             signatures=_noul(answers, "lean_signatures", 1.0),
-            blast=_score(answers, "blast_radius", 3)[0],
+            blast=_score(answers, "blast_radius", 3),
             risk=risk,
             risk_p=risk_p,
             kind=_choice(answers, "change_kind")[0],
         )
 
 
-def _long_functions(facts: dict[str, Any]) -> str:
-    """The changed functions over the line limit, named the way the table names them; ``""`` when none."""
-    return "; ".join(shape_line(v) for v in facts.get("function_shape") or [] if "lines" in v["over"])
+def _over(facts: dict[str, Any], limit: str) -> str:
+    """The changed functions the AST found over one limit (``lines`` or ``params``), named the way the
+    table names them; ``""`` when none."""
+    return "; ".join(shape_line(v) for v in facts.get("function_shape") or [] if limit in v["over"])
 
 
-def _wide_signatures(facts: dict[str, Any]) -> str:
-    return "; ".join(shape_line(v) for v in facts.get("function_shape") or [] if "params" in v["over"])
+def _start_with(facts: dict[str, Any], limit: str = "lines") -> str:
+    """`` — start with path:line name (…)`` when the AST named a function, so advice says where to begin."""
+    over = _over(facts, limit)
+    return f" — start with {over}" if over else ""
 
 
-# What answers each top-risk label in code. A label the judge chooses is always about the diff,
-# so it always has a code path; only "architecture" needs Eitri's facts to say which one.
-_RISK_FIXES = {
-    "correctness": "walk the new branches with empty input, None, boundaries and the error path; add a failing test for each",
-    "security": "find the trust boundary the judge means (input reaching a shell, a path, a log, a client) and close it with a test",
-    "tests": "add a test per changed behaviour that fails without the change",
-    "readability": "rename what the judge could not follow and split the function it hides in",
-    "docs": "update the guide, AGENTS.md note or reference the behaviour change left stale",
-}
-
-
-def _limit_fix(label: str, p: float, fixes: dict[str, str]) -> str:
-    """``its most probable limit: nesting (0.62): flatten …``, or every fix when the judge named nothing."""
-    if label in fixes:
-        return f"its most probable limit: {label} ({p:.2f}): {fixes[label]}"
-    return "the judge named no single limit, so: " + "; ".join(fixes.values())
-
-
-def _readability_fix(j: _Judgment) -> str:
-    return _limit_fix(j.readability_limit, j.readability_limit_p, _READABILITY_FIXES)
-
-
-def _clean_fix(j: _Judgment) -> str:
-    return _limit_fix(j.clean_limit, j.clean_limit_p, _CLEAN_FIXES)
+def _craft_shortfalls(j: _Judgment) -> list[tuple[str, float, float, str, str]]:
+    """The two craft scores below their target, as ``(name, score, target, what 3 means, fix)``."""
+    rubrics = [
+        ("readability", j.readability, T["readability_target"], "3 reads like prose", j.readability_fix),
+        ("clean code", j.clean, T["clean_target"], "3 is exemplary", j.clean_fix),
+    ]
+    return [r for r in rubrics if r[1] < r[2]]
 
 
 def _craft_doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
     """The clean-code answers below their bar, each with the code change that answers it. The AST facts
     name the function when there is one over the limits; otherwise the advice names the kind of fix."""
-    out: list[tuple[str, bool]] = []
-    long_fns, wide = _long_functions(facts), _wide_signatures(facts)
-    where = f" — start with {long_fns}" if long_fns else ""
-    if j.readability < T["readability_target"]:
-        out.append(
-            (f"it rates readability {j.readability:.2f}/3 against the target {T['readability_target']}: {_readability_fix(j)}{where}", True)
-        )
-    if j.clean < T["clean_target"]:
-        out.append((f"it rates clean code {j.clean:.2f}/3 against the target {T['clean_target']}: {_clean_fix(j)}", True))
+    where = _start_with(facts)
+    out = [
+        (f"it rates {name} {score:.2f}/3 against the target {target}: {fix}{where}", True)
+        for name, score, target, _, fix in _craft_shortfalls(j)
+    ]
     if j.purpose < T["purpose_approve"]:
         fix = "split each into functions whose names say what they do"
         out.append((f"it doubts every changed function does one thing ({j.purpose:.2f}): {fix}{where}", True))
     if j.signatures < T["signatures_approve"]:
         fix = "group the values that travel together, replace a behaviour flag with two functions, drop what is only passed through"
-        out.append(
-            (f"it doubts the changed signatures are lean ({j.signatures:.2f}): {fix}{' — start with ' + wide if wide else ''}", True)
-        )
+        out.append((f"it doubts the changed signatures are lean ({j.signatures:.2f}): {fix}{_start_with(facts, 'params')}", True))
     return out
 
 
@@ -253,20 +236,19 @@ def _risk_doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
     """The top-risk label, a human wanted and a wide blast radius. The architecture label is a code change
     unless Eitri found nothing and the change is a refactor: then it points at the restructure itself."""
     out: list[tuple[str, bool]] = []
+    lead = f"it names {j.risk} as the one thing to check ({j.risk_p:.2f}): "
     if j.risk == "architecture" and not facts.get("wall_violations"):
-        lead = f"it names architecture as the one thing to check ({j.risk_p:.2f}): Eitri found no wall violation, so "
         if j.kind == "refactor":
-            out.append((lead + "the restructure itself", False))
+            out.append((lead + "Eitri found no wall violation, so the restructure itself", False))
         else:
             placement = (
-                "check placement (no framework code in a feature, no feature logic in pfa/api) and that every feature used is "
-                "declared in feature.json"
+                "Eitri found no wall violation, so check placement (no framework code in a feature, no feature logic in pfa/api) "
+                "and that every feature used is declared in feature.json"
             )
             out.append((lead + placement, True))
     elif j.risk in _RISK_FIXES:
-        long_fns = _long_functions(facts) if j.risk == "readability" else ""
-        where = f" — start with {long_fns}" if long_fns else ""
-        out.append((f"it names {j.risk} as the one thing to check ({j.risk_p:.2f}): {_RISK_FIXES[j.risk]}{where}", True))
+        where = _start_with(facts) if j.risk == "readability" else ""
+        out.append((lead + _RISK_FIXES[j.risk] + where, True))
     if j.human >= T["human_escalate"]:
         out.append((f"it wants a person to look (needs_human_review {j.human:.2f})", False))
     if j.blast >= T["wide_refactor_escalate"]:
@@ -293,6 +275,14 @@ def _architecture_label(j: _Judgment, facts: dict[str, Any]) -> bool:
 
 def _wide_refactor(j: _Judgment) -> bool:
     return j.kind == "refactor" and j.blast >= T["wide_refactor_escalate"]
+
+
+def _walls_clean(j: _Judgment, facts: dict[str, Any]) -> str:
+    """What Eitri and the walls answer established, for the two reasons that explain an architecture label."""
+    return (
+        f"Eitri found no wall violation in the {facts.get('files_changed', 0)} changed files and the judge rates the walls "
+        f"respected ({j.walls:.2f})"
+    )
 
 
 def _not_safe(j: _Judgment, answers: dict[str, Any], facts: dict[str, Any], flag: Flag) -> str | None:
@@ -359,8 +349,7 @@ def _architecture_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> Non
         # once talked the walls answer up to 0.62 while the label still said architecture — see the guide)
         flag(
             f"judge names architecture as the biggest risk p={j.risk_p:.2f}",
-            f"Eitri found no wall violation in the {facts.get('files_changed', 0)} changed files and the judge rates the walls respected "
-            f"({j.walls:.2f}), yet it names a slice-wall or dependency-direction problem as the one thing to check. "
+            f"{_walls_clean(j, facts)}, yet it names a slice-wall or dependency-direction problem as the one thing to check. "
             "The import graph shows no cross-slice import past a contract, so look for what Eitri cannot see: "
             "code in the wrong package (framework code inside a feature, feature logic in pfa/api), a feature used "
             "without being declared in feature.json, or a contract member changed rather than added. "
@@ -388,7 +377,7 @@ def _shape_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
     """Shape facts never block alone: a line count is a smell, not a wall. They block when the judge agrees
     and they say which function, so the advice names the code change."""
     limits = facts.get("function_limits") or {}
-    long_fns, wide = _long_functions(facts), _wide_signatures(facts)
+    long_fns, wide = _over(facts, "lines"), _over(facts, "params")
     if long_fns and j.purpose <= T["purpose_block"]:
         flag(
             f"functions do more than one thing p(single)={j.purpose:.2f}",
@@ -411,22 +400,14 @@ def _craft_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
     functions the AST found over the limits, so the agent knows where to start."""
     if not facts.get("code_changed"):
         return
-    long_fns = _long_functions(facts)
-    where = f" Start with {long_fns}." if long_fns else ""
+    where = _start_with(facts)
     cut = facts.get("files_truncated") or []
     if cut:
-        where += f" The judge saw a cut diff ({len(cut)} file(s) over the token budget), so the score rates what it saw."
-    if j.readability < T["readability_target"]:
+        where += f". The judge saw a cut diff ({len(cut)} file(s) over the token budget), so the score rates what it saw"
+    for name, score, target, top, fix in _craft_shortfalls(j):
         flag(
-            f"readability {j.readability:.2f}/3 below the target {T['readability_target']}",
-            f"The judge rates the changed code's readability {j.readability:.2f} on 0–3 (3 reads like prose); the target is "
-            f"{T['readability_target']}. In its answer, {_readability_fix(j)}.{where}",
-        )
-    if j.clean < T["clean_target"]:
-        flag(
-            f"clean code {j.clean:.2f}/3 below the target {T['clean_target']}",
-            f"The judge rates the craft of the changed code {j.clean:.2f} on 0–3 (3 is exemplary); the target is "
-            f"{T['clean_target']}. In its answer, {_clean_fix(j)}.",
+            f"{name} {score:.2f}/3 below the target {target}",
+            f"The judge rates the changed code's {name} {score:.2f} on 0–3 ({top}); the target is {target}. In its answer, {fix}{where}.",
         )
 
 
@@ -448,8 +429,7 @@ def _escalations(j: _Judgment, facts: dict[str, Any], not_safe_needs_human: str 
     if _architecture_label(j, facts) and _wide_refactor(j):
         flag(
             f"architecture-wide refactor; judge names architecture as the biggest risk p={j.risk_p:.2f}",
-            f"Eitri found no wall violation in the {facts.get('files_changed', 0)} changed files and the judge rates the walls respected "
-            f"({j.walls:.2f}). It names architecture because this refactor moves the kernel, the composition root or a "
+            f"{_walls_clean(j, facts)}. It names architecture because this refactor moves the kernel, the composition root or a "
             "contract (blast radius wide), not because of an import. There is nothing for the check to fix: a person "
             "reviews the new layout against the dependency direction in AGENTS.md and decides.",
         )
