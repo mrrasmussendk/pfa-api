@@ -8,28 +8,13 @@ Anything unparseable on stdin exits 0: a broken hook must never block the agent'
 from __future__ import annotations
 
 import json
-import os
 import time
 from typing import TextIO
 
-from ..model import Finding, HeimdallContext, HookEvent, MapModel
+from ..model import Finding, HeimdallContext, HookEvent
 from ..sensors import ALL
 from ..session_store import FileSessionStore
-
-
-class _UnreadableMap(Exception):
-    pass
-
-
-def _load_map(heimdall_dir: str) -> MapModel | None:
-    """The map when there is one; ``None`` when the harness is not set up."""
-    map_path = os.path.join(heimdall_dir, "map.json")
-    if not os.path.isfile(map_path):
-        return None
-    try:
-        return MapModel.load(map_path)
-    except (OSError, ValueError, TypeError) as e:
-        raise _UnreadableMap(str(e)) from e
+from ..store import UnreadableMap, append_findings, heimdall_dir, load_map
 
 
 def _observe(ev: HookEvent, ctx: HeimdallContext) -> tuple[list[Finding], list[str]]:
@@ -61,19 +46,16 @@ def run(stdin: TextIO, stderr: TextIO, root: str) -> int:
         return 0
     ev = HookEvent.from_dict(raw)
 
-    heimdall_dir = os.path.join(root, ".heimdall")
+    folder = heimdall_dir(root)
     try:
-        m = _load_map(heimdall_dir)
-    except _UnreadableMap as e:
+        m = load_map(folder)
+    except UnreadableMap as e:
         stderr.write(f"heimdall: unreadable .heimdall/map.json: {e}\n")
         return 1
-    findings, feedback = _observe(ev, HeimdallContext(map=m, sessions=FileSessionStore(heimdall_dir), root=root))
+    findings, feedback = _observe(ev, HeimdallContext(map=m, sessions=FileSessionStore(folder), root=root))
 
     if findings:
-        os.makedirs(heimdall_dir, exist_ok=True)
-        with open(os.path.join(heimdall_dir, "telemetry.jsonl"), "a", encoding="utf-8", newline="\n") as out:
-            for f in findings:
-                out.write(f.to_line() + "\n")
+        append_findings(folder, findings)
 
     if feedback:
         stderr.write("Heimdall: " + " | ".join(feedback) + "\n")

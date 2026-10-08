@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from typing import Any, TextIO
 
 from ...model import Finding, MapModel
+from ...store import UnreadableMap, append_findings, heimdall_dir, load_map
 from .base import EXIT_ERROR, EXIT_OK, ReviewError, Streams
 from .diff import git_diff, parse_unified_diff
 from .policy import Verdict, decide
@@ -70,8 +71,6 @@ def _write(path: str, cwd: str, text: str) -> None:
 
 
 def _telemetry(cwd: str, v: Verdict, facts: dict[str, Any], session: str) -> None:
-    heimdall_dir = os.path.join(cwd, ".heimdall")
-    os.makedirs(heimdall_dir, exist_ok=True)
     f = Finding(
         event="review",
         kind=v.outcome,
@@ -81,8 +80,7 @@ def _telemetry(cwd: str, v: Verdict, facts: dict[str, Any], session: str) -> Non
         ts=time.time(),
         session=session,
     )
-    with open(os.path.join(heimdall_dir, "telemetry.jsonl"), "a", encoding="utf-8", newline="\n") as out:
-        out.write(f.to_line() + "\n")
+    append_findings(heimdall_dir(cwd), [f])
 
 
 def _read_diff(opts: dict[str, Any], stdin: TextIO, cwd: str) -> str:
@@ -95,12 +93,10 @@ def _read_diff(opts: dict[str, Any], stdin: TextIO, cwd: str) -> str:
 
 
 def _load_map(cwd: str, stderr: TextIO) -> MapModel | None:
-    map_path = os.path.join(cwd, ".heimdall", "map.json")
-    if not os.path.isfile(map_path):
-        return None
+    """The slice map, or ``None`` after saying why: a review without the map is still a review."""
     try:
-        return MapModel.load(map_path)
-    except (OSError, ValueError, TypeError) as e:
+        return load_map(heimdall_dir(cwd))
+    except UnreadableMap as e:
         stderr.write(f"heimdall review: unreadable .heimdall/map.json ({e}); reviewing without the slice map\n")
         return None
 

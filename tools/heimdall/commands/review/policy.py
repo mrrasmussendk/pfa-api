@@ -39,12 +39,21 @@ T = {
     "signatures_approve": 0.50,  # lean_signatures >=
 }
 
+# The fixes the advice names, each spelled once: a doubt behind a low safety score, a block and a
+# risk label that point at the same code change say it in the same words.
+_SPLIT_FIX = "split each into functions whose names say what they do"
+_LEAN_FIX = (
+    "group the values that travel together into one object, replace a behaviour flag with two functions, drop what is only passed through"
+)
+_TESTS_FIX = "add a test per changed behaviour that fails without the change"
+_CORRECTNESS_FIX = "walk the new branches with empty input, None, boundaries and the error path; add a failing test for each"
+
 # What answers each "what limits it most" label in code. An unanswered label falls back to the whole
 # list, so the advice still names a code change.
 _READABILITY_FIXES = {
     "names": "rename what the judge could not follow until each name says what the thing is",
     "nesting": "flatten the nesting with early returns so the happy path reads straight down",
-    "length": "split the long function into functions whose names say what they do",
+    "length": _SPLIT_FIX,
     "mixed_levels": "keep one level of abstraction per function: pull the low-level steps out under their own names",
     "magic_values": "name every literal and replace each behaviour flag with two functions",
     "cleverness": "unfold the clever one-liners into plain statements",
@@ -60,9 +69,9 @@ _CLEAN_FIXES = {
 # What answers each top-risk label in code. A label the judge chooses is always about the diff,
 # so it always has a code path; only "architecture" needs Eitri's facts to say which one.
 _RISK_FIXES = {
-    "correctness": "walk the new branches with empty input, None, boundaries and the error path; add a failing test for each",
+    "correctness": _CORRECTNESS_FIX,
     "security": "find the trust boundary the judge means (input reaching a shell, a path, a log, a client) and close it with a test",
-    "tests": "add a test per changed behaviour that fails without the change",
+    "tests": _TESTS_FIX,
     "readability": "rename what the judge could not follow and split the function it hides in",
     "docs": "update the guide, AGENTS.md note or reference the behaviour change left stale",
 }
@@ -200,11 +209,9 @@ def _craft_doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]
         for name, score, target, _, fix in _craft_shortfalls(j)
     ]
     if j.purpose < T["purpose_approve"]:
-        fix = "split each into functions whose names say what they do"
-        out.append((f"it doubts every changed function does one thing ({j.purpose:.2f}): {fix}{where}", True))
+        out.append((f"it doubts every changed function does one thing ({j.purpose:.2f}): {_SPLIT_FIX}{where}", True))
     if j.signatures < T["signatures_approve"]:
-        fix = "group the values that travel together, replace a behaviour flag with two functions, drop what is only passed through"
-        out.append((f"it doubts the changed signatures are lean ({j.signatures:.2f}): {fix}{_start_with(facts, 'params')}", True))
+        out.append((f"it doubts the changed signatures are lean ({j.signatures:.2f}): {_LEAN_FIX}{_start_with(facts, 'params')}", True))
     return out
 
 
@@ -213,9 +220,7 @@ def _fit_doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
     undecided error-path answer, which a reviewer confirms."""
     out: list[tuple[str, bool]] = []
     if facts.get("source_changed") and j.tests < T["tests_approve"]:
-        out.append(
-            (f"it doubts the tests cover the change ({j.tests:.2f}): add a test per changed behaviour that fails without the change", True)
-        )
+        out.append((f"it doubts the tests cover the change ({j.tests:.2f}): {_TESTS_FIX}", True))
     if facts.get("routes_changed") and j.errors_ok <= 0.4:
         fix = (
             "in each changed route raise `Problem` on every error path and assert the `application/problem+json` shape in "
@@ -228,8 +233,7 @@ def _fit_doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
     if j.scope < 0.6:
         out.append((f"it doubts the change stays in scope ({j.scope:.2f}): move the unrelated part to its own PR", True))
     if j.correctness < 2.0:
-        fix = "walk the new branches with empty input, None and boundaries; add a failing test for each"
-        out.append((f"it rates correctness only {j.correctness:.2f}/3: {fix}", True))
+        out.append((f"it rates correctness only {j.correctness:.2f}/3: {_CORRECTNESS_FIX}", True))
     return out
 
 
@@ -363,8 +367,7 @@ def _behaviour_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
     if j.correctness <= T["correctness_block"]:
         flag(
             f"correctness expected level {j.correctness:.2f}/3",
-            "The judge expects the changed code not to behave as intended, usually an edge case visible in the diff "
-            "(empty input, None, boundaries, error paths). Walk the new branches with those inputs and add a test for each.",
+            f"The judge expects the changed code not to behave as intended, usually an edge case visible in the diff: {_CORRECTNESS_FIX}.",
         )
     if facts.get("routes_changed") and j.errors_ok <= 0.4:
         flag(
@@ -383,15 +386,14 @@ def _shape_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
         flag(
             f"functions do more than one thing p(single)={j.purpose:.2f}",
             f"The judge does not consider the changed functions single-purpose, and the AST names where: {long_fns}. "
-            f"Split each into functions whose names say what they do, each within {limits.get('lines', '?')} lines; a flat "
-            "table or literal may stay whole if the PR body says so.",
+            f"{_SPLIT_FIX.capitalize()}, each within {limits.get('lines', '?')} lines; a flat table or literal may stay whole "
+            "if the PR body says so.",
         )
     if wide and j.signatures <= T["signatures_block"]:
         flag(
             f"signatures too wide p(lean)={j.signatures:.2f}",
-            f"The judge does not consider the changed signatures lean, and the AST names where: {wide}. Group the values "
-            "that travel together into one object, replace a behaviour flag with two functions, and drop what is only "
-            f"passed through, so each takes at most {limits.get('params', '?')} parameters.",
+            f"The judge does not consider the changed signatures lean, and the AST names where: {wide}. "
+            f"{_LEAN_FIX.capitalize()}, so each takes at most {limits.get('params', '?')} parameters.",
         )
 
 
