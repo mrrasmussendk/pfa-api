@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, model_validator
@@ -49,6 +49,9 @@ _SIMILARITY_OUT: JsonDict = {
     ],
 }
 _VECTOR = "Unit-normalised vector of `dimensions` floats (1024 for the default model); the example shows the first four"
+_MODEL_FIELD = Field(description="The model that embedded")
+_DIMENSIONS_FIELD = Field(description="Length of each `embedding`")
+Question = Annotated[text(MAX_QUESTION_CHARS), Field(description="Natural-language question, any of the model's 100+ languages")]  # type: ignore[valid-type]
 _CHUNK_INDEX = "Position of this chunk within its source text, from 0"
 _CHUNK_COUNT = "How many chunks the source text became; 1 when it fit the model's window"
 
@@ -83,14 +86,14 @@ def _dispatch(request: Request, message: Message) -> Result[Any]:
 class QuestionRequest(StrictRequest):
     model_config = with_example({"question": _QUESTION})
 
-    question: text(MAX_QUESTION_CHARS) = Field(description="Natural-language question, any of the model's 100+ languages")  # type: ignore[valid-type]
+    question: Question  # type: ignore[valid-type]
 
 
 class EmbeddingOut(BaseModel):
     model_config = with_example(_QUERY_OUT)
 
-    model: str = Field(description="The model that embedded")
-    dimensions: int = Field(description="Length of `embedding`")
+    model: str = _MODEL_FIELD
+    dimensions: int = _DIMENSIONS_FIELD
     embedding: list[float] = Field(description=_VECTOR)
 
 
@@ -118,15 +121,15 @@ class PassageEmbeddingOut(BaseModel):
 class PassagesOut(BaseModel):
     model_config = with_example(_PASSAGES_OUT)
 
-    model: str = Field(description="The model that embedded")
-    dimensions: int = Field(description="Length of every `embedding`")
+    model: str = _MODEL_FIELD
+    dimensions: int = _DIMENSIONS_FIELD
     chunks: list[PassageEmbeddingOut] = Field(description="One entry per chunk: documents in order, each document's chunks in order")
 
 
 class SimilarityRequest(StrictRequest):
     model_config = with_example({"question": _QUESTION, "candidates": _PASSAGES})
 
-    question: text(MAX_QUESTION_CHARS) = Field(description="Natural-language question, any of the model's 100+ languages")  # type: ignore[valid-type]
+    question: Question  # type: ignore[valid-type]
     candidates: list[text(MAX_TEXT_CHARS)] = Field(  # type: ignore[valid-type]
         min_length=1, max_length=MAX_TEXTS, description="Texts to rank against the question, any language"
     )
