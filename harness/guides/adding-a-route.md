@@ -53,7 +53,7 @@ class <Noun>Out(BaseModel):
     summary="<what the operation does, one line>",
     response_model=<Noun>Out,
     response_description="<what a 200 carries>",
-    responses={422: domain_rejections("<each reason the handler may give>")},
+    responses={422: domain_rejections("/<feature>/<verb>", "<each reason the handler may give>")},
 )
 def <verb>(body: <Verb><Noun>Request, request: Request) -> <Noun>Out:
     result = request.app.state.bus.dispatch(<Message>(...))   # pydantic in -> contract message
@@ -91,7 +91,10 @@ class CountOut(BaseModel):
 
 
 @router.post(
-    "/count", summary="Count the model tokens in a text", response_model=CountOut, responses={422: domain_rejections("empty text")}
+    "/count",
+    summary="Count the model tokens in a text",
+    response_model=CountOut,
+    responses={422: domain_rejections("/chunking/count", "empty text")},
 )
 def count(body: CountRequest, request: Request) -> CountOut:
     """How many model tokens the text costs, counted with the model's own tokenizer."""

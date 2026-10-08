@@ -53,7 +53,7 @@ from pfa.api.problems import Problem, domain_rejections   # the edge's error typ
 from pfa.features.<feature>.contract import <Message>
 
 
-@router.post("/<verb>", summary="...", response_model=<Noun>Out, responses={422: domain_rejections("<the handler's reason>")})
+@router.post("/<verb>", summary="...", response_model=<Noun>Out, responses={422: domain_rejections("/<feature>/<verb>", "<the handler's reason>")})
 def <verb>(body: <Verb>Request, request: Request) -> <Noun>Out:
     result = request.app.state.bus.dispatch(<Message>(...))
     if not result.ok or result.value is None:
@@ -69,7 +69,7 @@ The rules this encodes:
 - ❌ **Never `HTTPException`.** Eitri rule **EIT005** fails `eitri check` on any `HTTPException` imported from `fastapi` or `starlette` under `src/pfa/` outside the features (except in `api/problems.py`, where the conversion lives). The conversion handler for the framework's own exceptions exists so 404/405 come out right — not as an escape hatch for routes.
 - ✅ **New problem types are URNs** of the form `urn:pfa-api:problem:<kebab-kind>`, declared as constants in `pfa/api/problems.py` alongside the existing problem types, with a fixed `title`. One `type` ⇒ one `title`; `detail` varies per occurrence.
 - ❌ **`detail` is text and must not leak.** Do not echo request bodies, file paths or stack traces. Structured information goes in an extension member.
-- ✅ **OpenAPI follows, with examples.** `install_problem_details` rewrites the document: the `422` of every operation with a body is `ProblemDetails` as `application/problem+json`, showing a validation example (built from the body's required fields) next to the route's domain rejections, and every operation gets a `default` problem response. A route declares its rejections with `responses={422: domain_rejections("empty question")}`, one reason per `Result.failure` its handler may return, and any other problem it raises with `problem_response(description, {name: Problem(...)}, headers=...)`, as embeddings does for its 503 busy response. Examples are rendered by `Problem.to_body`, the code that answers requests, and `tests/api/test_openapi.py` compares them with the wire.
+- ✅ **OpenAPI follows, with examples.** `install_problem_details` rewrites the document: the `422` of every operation with a body is `ProblemDetails` as `application/problem+json`, showing a validation example (built from the body's required fields) next to the route's domain rejections, and every operation gets a `default` problem response. A route declares its rejections with `responses={422: domain_rejections("/embeddings/query", "empty question")}`, one reason per `Result.failure` its handler may return, and any other problem it raises with `problem_response(description, {name: Problem(...)}, instance=path, headers=...)`, as embeddings does for its 503 busy response. Examples are rendered by `Problem.to_body`, the code that answers requests, and `tests/api/test_openapi.py` compares them with the wire.
 
 ## Testing an error
 

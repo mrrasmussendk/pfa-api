@@ -58,11 +58,16 @@ def _busy(e: EngineBusy) -> Problem:
     )
 
 
-BUSY = problem_response(
-    "The inference gate did not open in time; the request was fine, retry after `Retry-After` seconds",
-    {"model_busy": _busy(EngineBusy(waited=30, retry_after=5))},
-    headers={"Retry-After": "Seconds to wait before retrying"},
-)
+def _errors(path: str, *rejections: str) -> dict[int | str, dict[str, Any]]:
+    """What the route at ``path`` documents beyond its 200: each reason its handler rejects with,
+    and the busy 503 every embedding route can answer."""
+    busy = problem_response(
+        "The inference gate did not open in time; the request was fine, retry after `Retry-After` seconds",
+        {"model_busy": _busy(EngineBusy(waited=30, retry_after=5))},
+        instance=path,
+        headers={"Retry-After": "Seconds to wait before retrying"},
+    )
+    return {422: domain_rejections(path, *rejections), 503: busy}
 
 
 def _dispatch(request: Request, message: Message) -> Result[Any]:
@@ -155,7 +160,7 @@ class SimilarityOut(BaseModel):
     summary="Embed a question as a query vector",
     response_model=EmbeddingOut,
     response_description="The query vector, ready to rank passage vectors against",
-    responses={422: domain_rejections("empty question"), 503: BUSY},
+    responses=_errors("/embeddings/query", "empty question"),
 )
 def embed_question(body: QuestionRequest, request: Request) -> EmbeddingOut:
     """Embed a question as a *query* vector (unit-normalised), ready to be ranked against
@@ -172,7 +177,7 @@ def embed_question(body: QuestionRequest, request: Request) -> EmbeddingOut:
     summary="Embed documents as passage vectors",
     response_model=PassagesOut,
     response_description="One vector per chunk, tagged with its document and position",
-    responses={422: domain_rejections("every passage must be non-empty"), 503: BUSY},
+    responses=_errors("/embeddings/passages", "every passage must be non-empty"),
 )
 def embed_passages(body: PassagesRequest, request: Request) -> PassagesOut:
     """Embed documents as *passage* vectors. A document over the model's window comes back
@@ -202,7 +207,7 @@ def embed_passages(body: PassagesRequest, request: Request) -> PassagesOut:
     summary="Rank candidate texts against a question",
     response_model=SimilarityOut,
     response_description="Every candidate scored, best first",
-    responses={422: domain_rejections("empty question", "every candidate must be non-empty"), 503: BUSY},
+    responses=_errors("/embeddings/similarity", "empty question", "every candidate must be non-empty"),
 )
 def similarity(body: SimilarityRequest, request: Request) -> SimilarityOut:
     """Rank candidate texts by how well they answer the question, best first. Cross-lingual:
