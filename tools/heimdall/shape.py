@@ -28,21 +28,22 @@ def parameters(fn: Function) -> int:
     return count
 
 
-def functions(tree: ast.AST) -> list[tuple[str, Function]]:
-    """Every function with its dotted name (``Class.method``, ``outer.inner``), nested ones included."""
-    out: list[tuple[str, Function]] = []
+def functions(tree: ast.AST) -> list[tuple[str, Function, bool]]:
+    """Every function with its dotted name (``Class.method``, ``outer.inner``), nested ones included, and
+    whether it may be an override: a method of a class with bases inherits its signature."""
+    out: list[tuple[str, Function, bool]] = []
 
-    def walk(node: ast.AST, prefix: str) -> None:
+    def walk(node: ast.AST, prefix: str, inherits: bool) -> None:
         for child in ast.iter_child_nodes(node):
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                out.append((prefix + child.name, child))
-                walk(child, prefix + child.name + ".")
+                out.append((prefix + child.name, child, inherits))
+                walk(child, prefix + child.name + ".", False)
             elif isinstance(child, ast.ClassDef):
-                walk(child, prefix + child.name + ".")
+                walk(child, prefix + child.name + ".", bool(child.bases))
             else:
-                walk(child, prefix)
+                walk(child, prefix, inherits)
 
-    walk(tree, "")
+    walk(tree, "", False)
     return out
 
 
@@ -56,12 +57,13 @@ def oversized(path: str, source: str, touched: Iterable[int] | None = None) -> l
         return []
     marks = None if touched is None else set(touched)
     out: list[dict[str, Any]] = []
-    for name, fn in functions(tree):
+    for name, fn, inherits in functions(tree):
         end = fn.end_lineno or fn.lineno
         if marks is not None and not any(fn.lineno <= n <= end for n in marks):
             continue
         lines, params = end - fn.lineno + 1, parameters(fn)
-        over = [k for k, hit in (("lines", lines > FUNCTION_LINES), ("params", params > FUNCTION_PARAMETERS)) if hit]
+        wide = params > FUNCTION_PARAMETERS and not inherits  # an override's signature is the base class's choice
+        over = [k for k, hit in (("lines", lines > FUNCTION_LINES), ("params", wide)) if hit]
         if over:
             out.append({"path": path, "line": fn.lineno, "name": name, "lines": lines, "params": params, "over": over})
     return sorted(out, key=lambda v: v["line"])

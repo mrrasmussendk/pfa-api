@@ -23,6 +23,15 @@ def is_test_path(path: str) -> bool:
     return "tests" in parts[:-1] or parts[-1].startswith("test_")
 
 
+def project_path(path: str, root: str) -> str | None:
+    """``path`` relative to the repo root, or ``None`` when it lies outside it (a scratch file, a temp dir)."""
+    full = os.path.abspath(os.path.join(root, path))
+    try:
+        return norm(os.path.relpath(full, os.path.abspath(root)))
+    except ValueError:  # another drive on Windows
+        return None
+
+
 def inserted_texts(e: HookEvent) -> list[str] | None:
     """What the edit put into the file; ``None`` means the whole file (a ``Write``, or an unknown shape)."""
     if e.tool_name == "Edit":
@@ -54,8 +63,8 @@ class FunctionShapeSensor:
     name = "function_shape"
 
     def observe(self, e: HookEvent, ctx: HeimdallContext) -> Iterable[Finding]:
-        path = e.edit_path
-        if e.tool_name not in EDIT_TOOLS or not path.endswith(".py") or is_test_path(path):
+        path = project_path(e.edit_path, ctx.root)
+        if e.tool_name not in EDIT_TOOLS or path is None or path.startswith("..") or not path.endswith(".py") or is_test_path(path):
             return []
         try:
             with open(os.path.join(ctx.root, path), encoding="utf-8") as f:
@@ -64,10 +73,10 @@ class FunctionShapeSensor:
             return []
         texts = inserted_texts(e)
         touched = touched_lines(content, texts) if texts is not None else None
-        over = oversized(norm(path), content, touched)
+        over = oversized(path, content, touched)
         if not over:
             return []
-        return [Finding(event="edit", path=norm(path), kind="function_shape", feedback=_feedback(over))]
+        return [Finding(event="edit", path=path, kind="function_shape", feedback=_feedback(over))]
 
 
 def _feedback(over: list[dict[str, Any]]) -> str:

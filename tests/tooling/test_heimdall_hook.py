@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
 from conftest import TempRepo
 
 
@@ -128,6 +129,21 @@ def test_hook_write_judges_the_whole_file_and_counts_parameters(repo: TempRepo) 
     repo.write_file(path, "class K:\n    def m(self, a, b, c, d, e):\n        return a\n" + WIDE)
     code, stderr = repo.hook(_edit("s1", "MultiEdit", path, edits=[{"old_string": "x", "new_string": "        return a\n"}]))
     assert code == 2 and "K.m" not in stderr and "wide (2 lines, 6 params)" in stderr
+
+
+def test_hook_shape_skips_overrides_and_files_outside_the_repo(repo: TempRepo, tmp_path_factory: pytest.TempPathFactory) -> None:
+    repo.write_sample_map()
+    path = "src/pfa/kernel/handler.py"
+    override = "class H(Base):\n    def redirect_request(self, req, fp, code, msg, headers, newurl):\n        return None\n"
+    repo.write_file(path, override)
+    assert repo.hook(_edit("s1", "Write", path, content=override)) == (0, "")  # the base class chose that signature
+    plain = override.replace("class H(Base):", "class H:")
+    repo.write_file(path, plain)
+    code, stderr = repo.hook(_edit("s1", "Write", path, content=plain))
+    assert code == 2 and "H.redirect_request (2 lines, 6 params)" in stderr  # no base: the author chose it
+    outside = tmp_path_factory.mktemp("scratch") / "scratch.py"
+    outside.write_text(WIDE, encoding="utf-8")
+    assert repo.hook(_edit("s1", "Write", str(outside), content=WIDE)) == (0, "")  # not the project's code
 
 
 def test_hook_shape_leaves_tests_other_languages_and_missing_files_alone(repo: TempRepo) -> None:
