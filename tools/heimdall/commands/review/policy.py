@@ -3,7 +3,9 @@ overrides them; then the judge's answers, in the order block → escalate → ap
 
 Every reason carries advice for the human reading the PR comment: the evidence it rests on (which
 answers, which facts) and the one concrete next action. A reason never says "see the other rows";
-it names them. The reason itself is short, for the table, telemetry and JSON."""
+it names them. Every ``request_changes`` reason names a code change that answers it; a doubt no code change
+can answer is never a block — it requires a human (``escalate``). The reason itself is short, for the
+table, telemetry and JSON."""
 
 from __future__ import annotations
 
@@ -68,10 +70,11 @@ def _choice(answers: dict[str, Any], key: str) -> tuple[str, float]:
     return c, float(p) if isinstance(p, (int, float)) else 0.0
 
 
-def _doubts(answers: dict[str, Any], facts: dict[str, Any]) -> list[str]:
-    """What drives a low ``safe_to_merge``: every other answer that is below its own bar, in words,
-    so the comment never says "the other rows say what it doubts most"."""
-    out: list[str] = []
+def _doubts(answers: dict[str, Any], facts: dict[str, Any]) -> list[tuple[str, bool]]:
+    """What drives a low ``safe_to_merge``: every other answer below its own bar, as ``(sentence, fixable)``.
+    A fixable doubt names the code change that answers it; the rest is for a reviewer to weigh. The
+    comment never says "the other rows say what it doubts most"."""
+    out: list[tuple[str, bool]] = []
     human = _noul(answers, "needs_human_review")
     tests = _noul(answers, "tests_cover_change", 1.0)
     errors_ok = _noul(answers, "errors_use_problem_details", 1.0)
@@ -79,24 +82,61 @@ def _doubts(answers: dict[str, Any], facts: dict[str, Any]) -> list[str]:
     correctness, _ = _score(answers, "correctness", 4)
     blast, _ = _score(answers, "blast_radius", 3)
     risk, risk_p = _choice(answers, "biggest_risk")
-    if human >= T["human_escalate"]:
-        out.append(f"it wants a person to look (needs_human_review {human:.2f})")
+    kind, _ = _choice(answers, "change_kind")
     if facts.get("source_changed") and tests < T["tests_approve"]:
-        out.append(f"it doubts the tests cover the change ({tests:.2f})")
-    if facts.get("routes_changed") and errors_ok < 0.7:
-        out.append(f"it is unsure every error leaves as a problem document ({errors_ok:.2f})")
+        out.append(
+            (f"it doubts the tests cover the change ({tests:.2f}): add a test per changed behaviour that fails without the change", True)
+        )
+    if facts.get("routes_changed") and errors_ok <= 0.4:
+        out.append(
+            (
+                (
+                    f"it doubts every error leaves as a problem document ({errors_ok:.2f}): in each changed route raise `Problem` on every "
+                    "error path and assert the `application/problem+json` shape in tests/api/test_problems.py"
+                ),
+                True,
+            )
+        )
+    elif facts.get("routes_changed") and errors_ok < 0.7:
+        out.append(
+            (
+                f"it is undecided whether every error leaves as a problem document ({errors_ok:.2f}): a reviewer confirms the changed routes raise `Problem`",
+                False,
+            )
+        )
     if scope < 0.6:
-        out.append(f"it doubts the change stays in scope ({scope:.2f})")
+        out.append((f"it doubts the change stays in scope ({scope:.2f}): move the unrelated part to its own PR", True))
     if correctness < 2.0:
-        out.append(f"it rates correctness only {correctness:.2f}/3")
-    if blast >= T["wide_refactor_escalate"]:
-        out.append("the blast radius is wide (the kernel, the composition root or a frozen contract)")
+        out.append(
+            (
+                f"it rates correctness only {correctness:.2f}/3: walk the new branches with empty input, None and boundaries; add a failing test for each",
+                True,
+            )
+        )
     if risk == "architecture" and not facts.get("wall_violations"):
-        kind, _ = _choice(answers, "change_kind")
-        what = "the restructure itself" if kind == "refactor" else "placement or an undeclared dependency"
-        out.append(f"it names architecture as the one thing to check ({risk_p:.2f}) — Eitri found no wall violation, so {what}")
-    elif risk not in ("none", "?"):
-        out.append(f"it names {risk} as the one thing to check ({risk_p:.2f})")
+        if kind == "refactor":
+            out.append(
+                (
+                    f"it names architecture as the one thing to check ({risk_p:.2f}): Eitri found no wall violation, so the restructure itself",
+                    False,
+                )
+            )
+        else:
+            out.append(
+                (
+                    (
+                        f"it names architecture as the one thing to check ({risk_p:.2f}): Eitri found no wall violation, so check placement "
+                        "(no framework code in a feature, no feature logic in pfa/api) and that every feature used is declared in feature.json"
+                    ),
+                    True,
+                )
+            )
+    elif risk not in ("none", "?", "architecture"):
+        out.append((f"it names {risk} as the one thing to check ({risk_p:.2f})", False))
+    if human >= T["human_escalate"]:
+        out.append((f"it wants a person to look (needs_human_review {human:.2f})", False))
+    if blast >= T["wide_refactor_escalate"]:
+        out.append(("the blast radius is wide (the kernel, the composition root or a frozen contract)", False))
     return out
 
 
@@ -144,17 +184,30 @@ def decide(answers: dict[str, Any], facts: dict[str, Any], model: str, usage: di
             "Something internal (a stack trace, a path, raw exception text) would reach an API client. "
             "Route the error through `Problem` with a client-safe `detail`.",
         )
+    not_safe_needs_human: str | None = None
     if safe <= T["safe_block"]:
         doubts = _doubts(answers, facts)
-        flag(
-            f"not safe to merge p(safe)={safe:.2f}",
-            "The judge does not consider the change mergeable as-is. "
-            + (
-                "What drives it: " + "; ".join(doubts) + ". Address those and the verdict moves."
-                if doubts
-                else "No other answer explains the doubt, so treat it as a request for a human reviewer and ask one."
-            ),
-        )
+        fixable = [text for text, can_fix in doubts if can_fix]
+        weigh = [text for text, can_fix in doubts if not can_fix]
+        if fixable:
+            flag(
+                f"not safe to merge p(safe)={safe:.2f}",
+                "The judge does not consider the change mergeable as-is. To fix in code: "
+                + "; ".join(fixable)
+                + "."
+                + (" For a reviewer to weigh: " + "; ".join(weigh) + "." if weigh else ""),
+            )
+        elif weigh:
+            not_safe_needs_human = (
+                "The judge does not consider the change mergeable as-is, and nothing it doubts is a code change: "
+                + "; ".join(weigh)
+                + ". A person decides; the check cannot clear this on its own."
+            )
+        else:
+            not_safe_needs_human = (
+                "The judge does not consider the change mergeable as-is and no other answer explains the doubt. "
+                "A person decides; ask a reviewer."
+            )
     if walls <= T["walls_block"]:
         flag(
             f"slice walls violated p(respects)={walls:.2f}",
@@ -188,6 +241,8 @@ def decide(answers: dict[str, Any], facts: dict[str, Any], model: str, usage: di
     if reasons:
         return Verdict("request_changes", reasons, answers, model, usage, advice)
 
+    if not_safe_needs_human:
+        flag(f"not safe to merge p(safe)={safe:.2f}; nothing left to change in code", not_safe_needs_human)
     if architecture_label and wide_refactor:
         flag(
             f"architecture-wide refactor; judge names architecture as the biggest risk p={risk_p:.2f}",

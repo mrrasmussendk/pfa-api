@@ -460,17 +460,41 @@ def test_policy_escalates_an_architecture_wide_refactor_instead_of_asking_for_an
     assert decide(bug, {"source_changed": True}, "m", {}).outcome == "request_changes"
 
 
-def test_not_safe_names_what_drives_the_doubt() -> None:
-    v = decide(_wide_refactor(safe_to_merge={"type": "noul", "noul": 0.33}), {"source_changed": True, "files_changed": 101}, "m", {})
-    assert v.outcome == "request_changes" and v.reasons == ["not safe to merge p(safe)=0.33"]
-    (why,) = v.advice
-    assert "What drives it:" in why
-    assert "wants a person to look (needs_human_review 0.79)" in why
-    assert "blast radius is wide" in why and "names architecture as the one thing to check (0.98)" in why
-    assert "Eitri found no wall violation, so the restructure itself" in why
+def test_not_safe_blocks_only_when_a_doubt_has_a_code_fix_and_says_what_it_is() -> None:
+    facts = {"source_changed": True, "routes_changed": True, "files_changed": 101}
+    v = decide(
+        _wide_refactor(safe_to_merge={"type": "noul", "noul": 0.33}, errors_use_problem_details={"type": "noul", "noul": 0.30}),
+        facts,
+        "m",
+        {},
+    )
+    assert v.outcome == "request_changes" and v.reasons[0] == "not safe to merge p(safe)=0.33"
+    assert v.reasons[1] == "errors bypass Problem Details p(ok)=0.30"  # the standalone rule names it too
+    why = v.advice[0]
+    assert "To fix in code: it doubts every error leaves as a problem document (0.30): in each changed route raise `Problem`" in why
+    assert (
+        "For a reviewer to weigh: it names architecture as the one thing to check (0.98): Eitri found no wall violation, so the restructure itself"
+        in why
+    )
+    assert "wants a person to look (needs_human_review 0.79)" in why and "blast radius is wide" in why
     assert "other rows" not in why
+
+
+def test_not_safe_with_nothing_to_change_in_code_requires_a_human() -> None:
+    facts = {"source_changed": True, "routes_changed": True, "files_changed": 101}
+    # Jev's real answers on this PR (2026-10-08): an undecided 0.52 on the error path is not a code change
+    v = decide(
+        _wide_refactor(safe_to_merge={"type": "noul", "noul": 0.31}, errors_use_problem_details={"type": "noul", "noul": 0.52}),
+        facts,
+        "m",
+        {},
+    )
+    assert v.outcome == "escalate" and v.exit_code == EXIT_ESCALATE
+    assert "undecided whether every error leaves as a problem document (0.52)" in v.advice[0]
+    assert v.reasons[0] == "not safe to merge p(safe)=0.31; nothing left to change in code"
+    assert "nothing it doubts is a code change" in v.advice[0] and "the restructure itself" in v.advice[0]
     lonely = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.2}), {"source_changed": True}, "m", {})
-    assert "No other answer explains the doubt" in lonely.advice[0]
+    assert lonely.outcome == "escalate" and "no other answer explains the doubt" in lonely.advice[0]
 
 
 def test_policy_blocks_on_eitri_findings_whatever_the_judge_says() -> None:
