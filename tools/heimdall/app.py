@@ -9,7 +9,7 @@ from typing import TextIO
 USAGE = (
     "usage: heimdall <hook|map|drift|estimate|review> [args]\n"
     "  hook                      read a PostToolUse event on stdin, run sensors, exit 2 on feedback\n"
-    "  map --root <dir> [--budget 15000] [--kernel shared_kernel]\n"
+    "  map --root <dir> [--budget 15000] [--kernel <name>]\n"
     "  drift                     telemetry vs map: per-session table, then per-slice aggregate\n"
     "  estimate <file-or-dir>    token estimate (same estimator Eitri checks with)\n"
     "  review [--base <ref>|--diff <file|->] [--task ..] [--json ..] [--markdown ..] [--dry-run]\n"

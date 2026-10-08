@@ -25,23 +25,24 @@ from heimdall.commands.review import (
     render_table,
     wall_findings,
 )
+from heimdall.commands.review.state import area_of
 from heimdall.model import MapModel
 
 DIFF = """\
-diff --git a/src/slices/kvad/internal/routes.py b/src/slices/kvad/internal/routes.py
+diff --git a/src/pfa/api/routes/kvad.py b/src/pfa/api/routes/kvad.py
 index 1111111..2222222 100644
---- a/src/slices/kvad/internal/routes.py
-+++ b/src/slices/kvad/internal/routes.py
+--- a/src/pfa/api/routes/kvad.py
++++ b/src/pfa/api/routes/kvad.py
 @@ -1,4 +1,5 @@
  from fastapi import APIRouter
-+from http_common import Problem
++from pfa.api.problems import Problem
  router = APIRouter(prefix="/kvad")
 -    raise HTTPException(422)
 +    raise Problem.domain_rejection(result.error)
-diff --git a/src/slices/rune/contract/rune_service.py b/src/slices/rune/contract/rune_service.py
+diff --git a/src/pfa/features/rune/contract/rune_service.py b/src/pfa/features/rune/contract/rune_service.py
 index 1111111..2222222 100644
---- a/src/slices/rune/contract/rune_service.py
-+++ b/src/slices/rune/contract/rune_service.py
+--- a/src/pfa/features/rune/contract/rune_service.py
++++ b/src/pfa/features/rune/contract/rune_service.py
 @@ -1,2 +1,3 @@
  class RuneService:
 +    def new_member(self): ...
@@ -74,12 +75,15 @@ index 1111111..2222222 100644
 def _map() -> MapModel:
     return MapModel.from_dict(
         {
-            "kernel": "shared_kernel",
-            "slices_dir": "src/slices",
+            "kernel": "kernel",
+            "kernel_dir": "src/pfa/kernel",
+            "slices_dir": "src/pfa/features",
+            "app_dir": "src/pfa",
+            "routes_dir": "src/pfa/api/routes",
             "shared": ["http_common"],
             "slices": {
-                "kvad": {"path": "src/slices/kvad", "depends_on": ["rune"], "budget": 15000, "fan_in": 0},
-                "rune": {"path": "src/slices/rune", "depends_on": [], "budget": 15000, "fan_in": 12},
+                "kvad": {"path": "src/pfa/features/kvad", "depends_on": ["rune"], "budget": 15000, "fan_in": 0},
+                "rune": {"path": "src/pfa/features/rune", "depends_on": [], "budget": 15000, "fan_in": 12},
             },
         }
     )
@@ -152,8 +156,8 @@ def _run(repo: TempRepo, *args: str, transport=None, env: dict[str, str] | None 
 def test_diff_is_parsed_per_file_and_generated_files_are_ignored() -> None:
     files = parse_unified_diff(DIFF)
     assert [f.path for f in files] == [
-        "src/slices/kvad/internal/routes.py",
-        "src/slices/rune/contract/rune_service.py",
+        "src/pfa/api/routes/kvad.py",
+        "src/pfa/features/rune/contract/rune_service.py",
         "tests/api/test_kvad.py",
         "harness/guides/x.md",
     ]
@@ -171,8 +175,8 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
     assert facts["routes_changed"] is True and facts["source_changed"] is True and facts["docs_changed"] is True
     assert facts["tests_changed"] == ["tests/api/test_kvad.py"]
     areas = {e["path"]: e["area"] for e in state["files"]}
-    assert areas["src/slices/kvad/internal/routes.py"] == "slice:kvad"
-    assert areas["src/slices/rune/contract/rune_service.py"] == "contract:rune"
+    assert areas["src/pfa/api/routes/kvad.py"] == "slice:kvad"
+    assert areas["src/pfa/features/rune/contract/rune_service.py"] == "contract:rune"
     assert areas["tests/api/test_kvad.py"] == "tests" and areas["harness/guides/x.md"] == "docs"
     assert state["architecture"]["slices"]["kvad"]["depends_on"] == ["rune"]
     assert any("RFC 9457" in r for r in state["architecture"]["rules"])
@@ -182,9 +186,29 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
 def test_oversized_files_are_truncated_and_named(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(review.state, "MAX_FILE_CHARS", 120)
     state = build_state(parse_unified_diff(DIFF), _map(), None)
-    assert "src/slices/kvad/internal/routes.py" in state["facts"]["files_truncated"]
-    big = next(e for e in state["files"] if e["path"].endswith("routes.py"))
+    assert "src/pfa/api/routes/kvad.py" in state["facts"]["files_truncated"]
+    big = next(e for e in state["files"] if e["path"].endswith("routes/kvad.py"))
     assert "more diff lines not shown" in big["diff"]
+
+
+def test_the_features_package_init_is_the_application_not_a_slice() -> None:
+    assert area_of("src/pfa/features/__init__.py", _map()) == "app"
+    assert area_of("src/pfa/features/kvad/internal/x.py", _map()) == "slice:kvad"
+
+
+def test_exported_diagrams_are_dropped_from_the_diff() -> None:
+    svg = "diff --git a/docs/diagrams/x.svg b/docs/diagrams/x.svg\n--- a/docs/diagrams/x.svg\n+++ b/docs/diagrams/x.svg\n@@ -1 +1 @@\n-<svg/>\n+<svg></svg>\n"
+    assert [f.path for f in parse_unified_diff(svg + DIFF)] == [f.path for f in parse_unified_diff(DIFF)]
+
+
+def test_the_budget_is_spent_on_the_source_before_tests_and_docs(monkeypatch: pytest.MonkeyPatch) -> None:
+    files = parse_unified_diff(DIFF)
+    files.reverse()  # git lists the docs first; the judge must still see the code
+    source = [f for f in files if f.path.startswith("src/")]
+    monkeypatch.setattr(review.state, "MAX_STATE_CHARS", sum(len(f.text) for f in source))
+    state = build_state(files, _map(), None)
+    assert [e["area"] for e in state["files"]] == ["slice:kvad", "contract:rune", "tests", "docs"]
+    assert not any(p.startswith("src/") for p in state["facts"]["files_truncated"])
 
 
 def test_questions_are_valid_system_one_requests() -> None:
@@ -409,6 +433,82 @@ def test_policy_blocks_when_the_judge_names_architecture_as_the_risk_despite_a_y
     assert v.outcome == "request_changes"
     assert any("architecture as the biggest risk" in r for r in v.reasons)
     assert len(v.advice) == len(v.reasons) and "cross-slice import" in v.advice[0]
+    assert "Eitri found no wall violation" in v.advice[0] and "feature.json" in v.advice[0]  # names what to look for instead
+
+
+def _wide_refactor(**over: Any) -> dict[str, Any]:
+    """Jev's real answers (2026-10-08) on a 101-file move of the whole package layout: walls respected at
+    0.93, no Eitri finding, and architecture named as the biggest risk at 0.98 — the restructure itself."""
+    return _answers(
+        needs_human_review={"type": "noul", "noul": 0.79},
+        respects_slice_walls={"type": "noul", "noul": 0.93},
+        blast_radius={"type": "score", "score": 1.99, "legend": {"0": "Contained", "1": "Moderate", "2": "Wide"}, "confidence": 0.98},
+        change_kind={"type": "choice", "choice": "refactor", "probabilities": {"refactor": 1.0}, "confidence": 1.0},
+        biggest_risk={"type": "choice", "choice": "architecture", "probabilities": {"architecture": 0.98}, "confidence": 0.98},
+        **over,
+    )
+
+
+def test_policy_escalates_an_architecture_wide_refactor_instead_of_asking_for_an_import_fix() -> None:
+    v = decide(_wide_refactor(safe_to_merge={"type": "noul", "noul": 0.5}), {"source_changed": True, "files_changed": 101}, "m", {})
+    assert v.outcome == "escalate" and v.exit_code == EXIT_ESCALATE
+    assert v.reasons[0].startswith("architecture-wide refactor")
+    assert "101 changed files" in v.advice[0] and "nothing for the check to fix" in v.advice[0]
+    # the same label on a fix with a moderate blast radius is still the disguised-import case: block
+    bug = _wide_refactor(safe_to_merge={"type": "noul", "noul": 0.5})
+    bug["change_kind"] = _answers()["change_kind"]  # a fix, not a refactor
+    assert decide(bug, {"source_changed": True}, "m", {}).outcome == "request_changes"
+
+
+def test_not_safe_blocks_only_when_a_doubt_has_a_code_fix_and_says_what_it_is() -> None:
+    facts = {"source_changed": True, "routes_changed": True, "files_changed": 101}
+    v = decide(
+        _wide_refactor(safe_to_merge={"type": "noul", "noul": 0.33}, errors_use_problem_details={"type": "noul", "noul": 0.30}),
+        facts,
+        "m",
+        {},
+    )
+    assert v.outcome == "request_changes" and v.reasons[0] == "not safe to merge p(safe)=0.33"
+    assert v.reasons[1] == "errors bypass Problem Details p(ok)=0.30"  # the standalone rule names it too
+    why = v.advice[0]
+    assert "To fix in code: it doubts every error leaves as a problem document (0.30): in each changed route raise `Problem`" in why
+    assert (
+        "For a reviewer to weigh: it names architecture as the one thing to check (0.98): Eitri found no wall violation, so the restructure itself"
+        in why
+    )
+    assert "wants a person to look (needs_human_review 0.79)" in why and "blast radius is wide" in why
+    assert "other rows" not in why
+
+
+def test_not_safe_with_nothing_to_change_in_code_requires_a_human() -> None:
+    facts = {"source_changed": True, "routes_changed": True, "files_changed": 101}
+    # Jev's real answers on this PR (2026-10-08): an undecided 0.52 on the error path is not a code change
+    v = decide(
+        _wide_refactor(safe_to_merge={"type": "noul", "noul": 0.31}, errors_use_problem_details={"type": "noul", "noul": 0.52}),
+        facts,
+        "m",
+        {},
+    )
+    assert v.outcome == "escalate" and v.exit_code == EXIT_ESCALATE
+    assert "undecided whether every error leaves as a problem document (0.52)" in v.advice[0]
+    assert v.reasons[0] == "not safe to merge p(safe)=0.31; nothing left to change in code"
+    assert "nothing it doubts is a code change" in v.advice[0] and "the restructure itself" in v.advice[0]
+    lonely = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.2}), {"source_changed": True}, "m", {})
+    assert lonely.outcome == "escalate" and "no other answer explains the doubt" in lonely.advice[0]
+
+
+def test_a_named_risk_other_than_architecture_is_always_a_code_fix() -> None:
+    """Jev's real answers on the logging PR (2026-10-08): p(safe)=0.12, correctness named at 0.82 while the
+    correctness score said "probably correct". A label is about the diff, so it blocks with a code path."""
+    answers = _answers(
+        safe_to_merge={"type": "noul", "noul": 0.12},
+        needs_human_review={"type": "noul", "noul": 0.88},
+        biggest_risk={"type": "choice", "choice": "correctness", "probabilities": {"correctness": 0.82}, "confidence": 0.78},
+    )
+    v = decide(answers, {"source_changed": True, "files_changed": 12}, "m", {})
+    assert v.outcome == "request_changes"
+    assert "To fix in code: it names correctness as the one thing to check (0.82): walk the new branches" in v.advice[0]
+    assert "For a reviewer to weigh: it wants a person to look (needs_human_review 0.88)" in v.advice[0]
 
 
 def test_policy_blocks_on_eitri_findings_whatever_the_judge_says() -> None:
@@ -416,7 +516,7 @@ def test_policy_blocks_on_eitri_findings_whatever_the_judge_says() -> None:
         "source_changed": True,
         "wall_violations": [
             {
-                "path": "src/slices/kvad/internal/leak.py",
+                "path": "src/pfa/features/kvad/internal/leak.py",
                 "line": 3,
                 "rule": "EIT001",
                 "message": "imports rune internals",
@@ -436,18 +536,18 @@ def test_wall_findings_come_from_eitri_and_only_for_changed_files(project: TempP
         ["rune"],
         **{
             "internal/__init__.py": "",
-            "internal/leak.py": "from slices.rune.internal.rune_engine import RuneEngine\n",
-            "internal/old_leak.py": "from slices.rune.internal.rune_engine import RuneEngine\n",
+            "internal/leak.py": "from pfa.features.rune.internal.rune_engine import RuneEngine\n",
+            "internal/old_leak.py": "from pfa.features.rune.internal.rune_engine import RuneEngine\n",
         },
     )
     project.write("harness/rules/EIT001.md", "# EIT001\nWhy it matters.\n**Fix:** import the dependency's `contract` package instead.\n")
     changed = parse_unified_diff(
-        "diff --git a/slices/kvad/internal/leak.py b/slices/kvad/internal/leak.py\n"
-        "new file mode 100644\n--- /dev/null\n+++ b/slices/kvad/internal/leak.py\n@@ -0,0 +1 @@\n"
-        "+from slices.rune.internal.rune_engine import RuneEngine\n"
+        "diff --git a/pfa/features/kvad/internal/leak.py b/pfa/features/kvad/internal/leak.py\n"
+        "new file mode 100644\n--- /dev/null\n+++ b/pfa/features/kvad/internal/leak.py\n@@ -0,0 +1 @@\n"
+        "+from pfa.features.rune.internal.rune_engine import RuneEngine\n"
     )
     found = wall_findings(str(project.root), changed)
-    assert [(f["path"], f["line"], f["rule"]) for f in found] == [("slices/kvad/internal/leak.py", 1, "EIT001")]
+    assert [(f["path"], f["line"], f["rule"]) for f in found] == [("pfa/features/kvad/internal/leak.py", 1, "EIT001")]
     assert found[0]["fix"] == "import the dependency's `contract` package instead."  # read from the rule doc, never hardcoded
     assert found[0]["doc"] == "harness/rules/EIT001.md"
     state = build_state(changed, None, None, found)
@@ -473,7 +573,7 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
         "files_truncated": [],
         "wall_violations": [
             {
-                "path": "src/slices/kvad/internal/leak.py",
+                "path": "src/pfa/features/kvad/internal/leak.py",
                 "line": 3,
                 "rule": "EIT001",
                 "message": "imports rune internals",
@@ -485,7 +585,7 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
     md = render_markdown(v, {"facts": facts}, questions())
     assert "### What went wrong" in md
     assert "**Eitri found 1 wall violation(s) in the changed files.** The change crosses a slice wall." in md
-    assert "- `src/slices/kvad/internal/leak.py:3 — EIT001: imports rune internals` **Fix:** use the contract" in md
+    assert "- `src/pfa/features/kvad/internal/leak.py:3 — EIT001: imports rune internals` **Fix:** use the contract" in md
     assert "**not safe to merge p(safe)=0.30.**" in md
     assert "**Next:** fix what is named above and push" in md
     assert md.index("What went wrong") < md.index("| question | answer |")  # the explanation comes before the numbers

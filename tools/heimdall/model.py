@@ -73,11 +73,17 @@ class SliceInfo:
 class MapModel:
     """The feedforward map (.heimdall/map.json): dependency graph + budgets + fan-in."""
 
-    kernel: str = "shared_kernel"
-    slices_dir: str = ""
+    kernel: str = "kernel"  # the kernel's name, as it appears in the AGENTS.md deps line and may appear in depends_on
+    kernel_dir: str = ""  # its path from the repo root (``[tool.heimdall] kernel``)
+    slices_dir: str = ""  # the features folder (``[tool.heimdall] features``)
     slices: dict[str, SliceInfo] = field(default_factory=dict)
-    # Packages every slice may read besides the kernel (``[tool.heimdall] shared`` in pyproject):
-    # HTTP-edge helpers such as http_common. Reads of them are in-bounds, never drift.
+    # The application package (``[tool.heimdall] app``): any read inside it that is not a slice or
+    # the kernel is ``app`` and in-bounds. ``<routes_dir>/<slice>.py`` (``[tool.heimdall] routes``)
+    # is that slice's HTTP edge and classifies as the slice.
+    app_dir: str = ""
+    routes_dir: str = ""
+    # Packages every slice may read besides the kernel (``[tool.heimdall] shared`` in pyproject).
+    # Reads of them are in-bounds, never drift.
     shared: list[str] = field(default_factory=list)
 
     @classmethod
@@ -86,9 +92,12 @@ class MapModel:
         slices = {str(k): SliceInfo.from_dict(v) for k, v in raw.items() if isinstance(v, dict)}
         shared = d.get("shared") or []
         return cls(
-            kernel=str(d.get("kernel", "shared_kernel")),
+            kernel=str(d.get("kernel", "kernel")),
+            kernel_dir=str(d.get("kernel_dir", "") or ""),
             slices_dir=str(d.get("slices_dir", "")),
             slices=slices,
+            app_dir=str(d.get("app_dir", "") or ""),
+            routes_dir=str(d.get("routes_dir", "") or ""),
             shared=[str(x) for x in shared] if isinstance(shared, list) else [],
         )
 
