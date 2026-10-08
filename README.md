@@ -21,6 +21,8 @@ python -m pfa.api
 
 Open **[the interactive API docs](http://127.0.0.1:8000/docs)** to try a request. The OpenAPI schema is at `/openapi.json`.
 
+The service logs one RFC 5424 line per request and per inference to stdout, each carrying the W3C `traceparent` trace id that every response header and every error document also carry, so a reported `trace_id` finds its lines with `grep`. See [the log](docs/service.md#observability-the-log).
+
 The model loads on the first request and may download about **2.2 GB** of weights. To download them ahead of time:
 
 ```bash

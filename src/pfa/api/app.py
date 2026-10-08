@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -10,6 +11,7 @@ from fastapi import FastAPI
 
 from pfa import application
 
+from .logs import TraceContext, configure_logging
 from .problems import install_problem_details
 from .routes import ROUTERS
 
@@ -27,11 +29,13 @@ def _warmup_in_background(app: FastAPI) -> None:
     sees it; a request would hit the same error and surface it as a 500 problem."""
 
     def load() -> None:
+        started = time.perf_counter()
         try:
             application.warmup_all()
-            log.info("warm-up complete: %s", application.readiness())
+            ms = round((time.perf_counter() - started) * 1000.0, 1)
+            log.info("warm-up complete", extra={"msgid": "warmup", "load_ms": ms, **application.readiness()})
         except Exception:
-            log.exception("warm-up failed; /ready stays 503 until a load succeeds")
+            log.exception("warm-up failed; /ready stays 503 until a load succeeds", extra={"msgid": "warmup"})
 
     threading.Thread(target=load, name="pfa-warmup", daemon=True).start()
 
@@ -50,8 +54,10 @@ def create_app(*, warmup: bool | None = None) -> FastAPI:
             _warmup_in_background(app)
         yield
 
+    configure_logging()  # RFC 5424 records on stdout; idempotent
     app = FastAPI(title="PFA API", version="0.1.0", lifespan=lifespan)
     install_problem_details(app)  # every error leaves as RFC 9457 application/problem+json
+    app.add_middleware(TraceContext)  # traceparent in and out, one request line per request
     app.state.bus = application.build_bus()
     app.state.readiness = application.readiness
     for router in ROUTERS:
