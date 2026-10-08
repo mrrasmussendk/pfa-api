@@ -704,7 +704,7 @@ def test_readability_and_clean_code_below_target_send_the_agent_back_naming_the_
     assert (
         "the target is 2.5. In its answer, its most probable limit: nesting (0.62): flatten the nesting with early returns" in v.advice[0]
     )
-    assert "Start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)." in v.advice[0]
+    assert "— start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)." in v.advice[0]
     clean = {"type": "score", "score": 2.28, "confidence": 0.7}
     dup = {"type": "choice", "choice": "duplication", "probabilities": {"duplication": 0.7}, "confidence": 0.7}
     v = decide(_answers(clean_code=clean, clean_code_limit=dup), _shape_facts(), "m", {})
