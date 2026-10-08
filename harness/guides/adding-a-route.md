@@ -28,22 +28,33 @@ A route never does work itself. It converts the HTTP request into a **message** 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
-from pfa.api.problems import Problem                   # RFC 9457 errors
-from pfa.api.validation import StrictRequest, text     # request hygiene: unknown fields, bounds, control characters
-from pfa.features.<feature>.contract import <Message>  # the feature's contract: the message to dispatch — nothing else
+from pfa.api.problems import Problem, domain_rejections  # RFC 9457 errors, and how a route documents its own
+from pfa.api.validation import StrictRequest, text, with_example   # request hygiene, and the one example /docs shows
+from pfa.features.<feature>.contract import <Message>    # the feature's contract: the message to dispatch — nothing else
 
+TAG = {"name": "<feature>", "description": "..."}             # the group's blurb in /docs; listed in routes/__init__.py
 router = APIRouter(prefix="/<feature>", tags=["<feature>"])   # exactly one router per feature
 
 
 class <Verb><Noun>Request(StrictRequest):   # unknown fields are a 422; models never appear in a feature (EIT006)
-    <field>: text(MAX_CHARS)                 # length-bounded, no control characters
+    model_config = with_example({"<field>": "..."})   # what /docs offers under Try it out
+
+    <field>: text(MAX_CHARS) = Field(description="...")   # length-bounded, no control characters
 
 
 class <Noun>Out(BaseModel):
+    model_config = with_example({...})   # a real response, captured once
+
     ...
 
 
-@router.post("/<verb>", response_model=<Noun>Out)
+@router.post(
+    "/<verb>",
+    summary="<what the operation does, one line>",
+    response_model=<Noun>Out,
+    response_description="<what a 200 carries>",
+    responses={422: domain_rejections("/<feature>/<verb>", "<each reason the handler may give>")},
+)
 def <verb>(body: <Verb><Noun>Request, request: Request) -> <Noun>Out:
     result = request.app.state.bus.dispatch(<Message>(...))   # pydantic in -> contract message
     if not result.ok or result.value is None:
@@ -59,6 +70,7 @@ The rules this encodes:
 - ✅ **Convert at the edge.** Pydantic models are the HTTP representation and stay in `pfa/api/routes/`. Messages and result types are frozen dataclasses from `contract/`; tuples in, lists out. The route is the only place that knows both.
 - ✅ **Status codes are decided here, not in the handler.** `Result.ok=False` maps to `Problem.domain_rejection(result.error)`: a `422` RFC 9457 problem document with the handler's reason as `detail`. A missing entity would be `Problem(404, ...)`. Request-body validation failures are FastAPI's own `422`, converted to the same shape. The handler never raises for domain reasons; the route never raises `HTTPException` (EIT005). An **infrastructure** failure the feature cannot express as a `Result` (a saturated model) is a plain exception declared in the feature's `contract/` — `EngineBusy` in embeddings — that the route catches and maps to a `Problem`. See [Returning errors](returning-errors.md).
 - ✅ **`response_model` is always set.** It is the contract of the route for OpenAPI consumers, the same way `contract/` is the contract of the feature for code consumers.
+- ✅ **The document is part of the route.** `summary=` says what the operation does in one line, every field has a `description`, every request and response model carries one real example as `model_config = with_example(...)` (what `/docs` offers under *Try it out*; capture it from a real exchange, do not invent numbers), and `responses={422: domain_rejections(...)}` names each reason the handler may reject with. The module's `TAG` describes the group and is listed in `TAGS` in `routes/__init__.py`. `tests/api/test_openapi.py` validates every example against its model and every error example against the wire. See [Returning errors](returning-errors.md) for documenting any other problem a route raises.
 
 ## Case A — worked example: `POST /chunking/count`
 
@@ -67,14 +79,23 @@ Say the API should tell a caller how many model tokens a text costs. The chunkin
 ```python
 # src/pfa/api/routes/chunking.py  (add to the existing file)
 class CountRequest(StrictRequest):
-    text: text(MAX_TEXT_CHARS)
+    model_config = with_example({"text": "Its contract is the only door."})
+
+    text: Text = Field(description="The text to count")  # ``Text`` is the module's ``text(MAX_TEXT_CHARS)``
 
 
 class CountOut(BaseModel):
-    tokens: int
+    model_config = with_example({"tokens": 8})
+
+    tokens: int = Field(description="Model tokens, counted with the model's own tokenizer")
 
 
-@router.post("/count", response_model=CountOut)
+@router.post(
+    "/count",
+    summary="Count the model tokens in a text",
+    response_model=CountOut,
+    responses={422: domain_rejections("/chunking/count", "empty text")},
+)
 def count(body: CountRequest, request: Request) -> CountOut:
     """How many model tokens the text costs, counted with the model's own tokenizer."""
     result = request.app.state.bus.dispatch(CountTokens(text=body.text))
@@ -162,6 +183,7 @@ Health, readiness, build info and similar cross-cutting endpoints go in `src/pfa
 - [ ] Pydantic models live in that routes module, subclass `StrictRequest`, bound every text with `text(max)` and every list with `max_length` + `check_total_chars`; nothing under `src/pfa/features/` imports fastapi, starlette, pydantic, `pfa.application` or `pfa.api`.
 - [ ] The route dispatches a contract message on `request.app.state.bus`; no handler, engine, `internal/` or `module.py` is imported.
 - [ ] `response_model` set; `Result.ok=False` mapped to `Problem.domain_rejection(result.error)`; no `HTTPException` anywhere (EIT005).
+- [ ] `summary=` written, every field described, request and response models carry a real example, `responses={422: domain_rejections(...)}` names the handler's reasons; `tests/api/test_openapi.py` green.
 - [ ] New messages and result types are additive; frozen contracts untouched except for additions; one `bus.register` line per new message.
 - [ ] Tests in `tests/api/` for the happy path and for the domain rejection, over fakes registered with `replace=True` — never the real model.
 - [ ] `pytest` green, `eitri check --root .` green, `heimdall map --root .` run so the route inventories are current.

@@ -8,18 +8,38 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 
 from pfa import application
 
 from .logs import TraceContext, configure_logging
 from .problems import install_problem_details
-from .routes import ROUTERS
+from .routes import ROUTERS, TAGS
 
 log = logging.getLogger("pfa.api")
+
+DESCRIPTION = """\
+Multilingual text embeddings and similarity over \
+[intfloat/multilingual-e5-large](https://huggingface.co/intfloat/multilingual-e5-large).
+
+**The flow.** Embed your documents once with `POST /embeddings/passages` and store the vectors. For each question,
+`POST /embeddings/query` gives the vector to rank them by: dot product, which is cosine since every vector is
+unit-normalised. `POST /embeddings/similarity` does both in one call when the candidates are at hand. A long document
+is chunked on sentence boundaries with the model's own tokenizer; `POST /chunking/split` shows the cuts.
+
+**Errors** are RFC 9457 problem documents (`application/problem+json`): branch on `type`, read `detail`, and quote
+`trace_id` when reporting. It is the W3C trace id on every response header and every log line.
+"""
 
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _operation_id(route: APIRoute) -> str:
+    """Client generators name methods after the operation id: ``embed_passages``, not FastAPI's
+    ``embed_passages_embeddings_passages_post``. Route function names are unique by construction."""
+    return route.name
 
 
 def _warmup_in_background(app: FastAPI) -> None:
@@ -55,7 +75,17 @@ def create_app(*, warmup: bool | None = None) -> FastAPI:
         yield
 
     configure_logging()  # RFC 5424 records on stdout; idempotent
-    app = FastAPI(title="PFA API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(
+        title="PFA API",
+        summary="Multilingual text embeddings, chunking and similarity",
+        description=DESCRIPTION,
+        version="0.1.0",
+        license_info={"name": "MIT"},
+        openapi_tags=list(TAGS),
+        generate_unique_id_function=_operation_id,
+        swagger_ui_parameters={"tryItOutEnabled": True, "displayRequestDuration": True},
+        lifespan=lifespan,
+    )
     install_problem_details(app)  # every error leaves as RFC 9457 application/problem+json
     app.add_middleware(TraceContext)  # traceparent in and out, one request line per request
     app.state.bus = application.build_bus()

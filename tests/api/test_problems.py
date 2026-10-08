@@ -10,7 +10,15 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pfa.api.app import create_app
-from pfa.api.problems import DOMAIN_REJECTION, PROBLEM_MEDIA_TYPE, VALIDATION_ERROR, Problem
+from pfa.api.problems import (
+    DOMAIN_REJECTION,
+    EXAMPLE_TRACE_ID,
+    PROBLEM_MEDIA_TYPE,
+    VALIDATION_ERROR,
+    Problem,
+    domain_rejections,
+    problem_response,
+)
 
 _TRACE = re.compile(r"[0-9a-f]{32}")
 
@@ -226,3 +234,34 @@ def test_openapi_advertises_the_bounds(client: TestClient) -> None:
     assert schemas["QuestionRequest"]["properties"]["question"]["maxLength"] == 20_000
     texts = schemas["PassagesRequest"]["properties"]["texts"]
     assert texts["maxItems"] == 256 and texts["items"]["maxLength"] == 200_000 and texts["items"]["minLength"] == 1
+
+
+def test_problem_response_renders_each_example_as_the_wire_would() -> None:
+    response = problem_response("busy", {"busy": Problem(503, "later")}, instance="/x", headers={"Retry-After": "seconds"})
+    assert list(response["content"]) == [PROBLEM_MEDIA_TYPE]
+    assert response["headers"] == {"Retry-After": {"description": "seconds", "schema": {"type": "string"}}}
+    example = response["content"][PROBLEM_MEDIA_TYPE]["examples"]["busy"]
+    assert example["summary"] == "Service Unavailable"
+    assert example["value"] == {
+        "type": "about:blank",
+        "title": "Service Unavailable",
+        "status": 503,
+        "detail": "later",
+        "instance": "/x",
+        "trace_id": EXAMPLE_TRACE_ID,
+    }
+
+
+def test_problem_response_without_headers_documents_none() -> None:
+    assert "headers" not in problem_response("plain", {"gone": Problem(410)}, instance="/x")
+
+
+def test_domain_rejection_examples_are_named_after_their_reason() -> None:
+    examples = domain_rejections("/x", "empty question", "every candidate must be non-empty", "")["content"][PROBLEM_MEDIA_TYPE]["examples"]
+    assert list(examples) == ["empty_question", "every_candidate_must_be_non-empty", "rejected"]  # an empty reason still gets a legal key
+    assert examples["empty_question"]["value"]["detail"] == "empty question"
+    assert examples["empty_question"]["value"]["type"] == DOMAIN_REJECTION
+
+
+def test_a_route_with_no_rejections_documents_only_the_validation_example(client: TestClient) -> None:
+    assert domain_rejections("/x")["content"][PROBLEM_MEDIA_TYPE]["examples"] == {}
