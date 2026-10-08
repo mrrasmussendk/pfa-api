@@ -413,6 +413,9 @@ def _craft_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
         return
     long_fns = _long_functions(facts)
     where = f" Start with {long_fns}." if long_fns else ""
+    cut = facts.get("files_truncated") or []
+    if cut:
+        where += f" The judge saw a cut diff ({len(cut)} file(s) over the token budget), so the score rates what it saw."
     if j.readability < T["readability_target"]:
         flag(
             f"readability {j.readability:.2f}/3 below the target {T['readability_target']}",

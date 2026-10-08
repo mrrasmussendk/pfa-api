@@ -101,9 +101,23 @@ def _told_the_judge(facts: dict[str, Any]) -> list[str]:
         limits = facts.get("function_limits") or {}
         lines.append(f"- changed functions over {limits.get('lines', '?')} lines or {limits.get('params', '?')} parameters:")
         lines += [f"  - `{shape_line(v)}`" for v in shape]
+    lines.append(_size_line(facts))
     if facts["files_truncated"]:
         lines.append(f"- truncated for the judge: {', '.join(facts['files_truncated'])}")
     return lines
+
+
+def _size_line(facts: dict[str, Any]) -> str:
+    """How much of the diff the judge saw, in Brokkr tokens against the budget and Jev's window."""
+    seen, whole = facts.get("state_tokens", 0), facts.get("diff_tokens", 0)
+    budget, window = facts.get("state_budget_tokens", 0), facts.get("judge_window_tokens", 0)
+    line = f"- size: ~{seen:,} tokens sent of a {budget:,} budget (Jev reads {window:,} with the questions)"
+    if facts.get("files_truncated"):
+        return (
+            line
+            + f"; the whole diff is ~{whole:,} tokens, so {len(facts['files_truncated'])} file(s) were cut and the craft scores rate what the judge saw"
+        )
+    return line + f"; the whole diff (~{whole:,} tokens) was seen"
 
 
 def render_markdown(v: Verdict, state: dict[str, Any], qs: dict[str, dict[str, Any]]) -> str:

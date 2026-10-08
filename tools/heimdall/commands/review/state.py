@@ -8,14 +8,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from brokkr import estimate
+
 from ...model import MapModel
 from ...pathutil import app_of, is_contract_path, is_kernel_path, is_route_path, norm, shared_of, slice_of
 from ...sensors.boundary_edits import FAN_IN_FREEZE
 from ...shape import FUNCTION_LINES, FUNCTION_PARAMETERS, oversized, shape_line
 from .diff import FileChange
 
-MAX_FILE_CHARS = 12_000  # per file; the rest is summarised as "+N/-M more lines"
-MAX_STATE_CHARS = 60_000  # all files together
+# Jev reads one request of 64k tokens, of which the state plus the longest question must fit 32k
+# (docs.typesafe.ai/models). The budget is measured with Brokkr, the ruler Eitri's budget uses, which
+# is within about 10% of a real tokenizer: the margin below the window pays for that and the questions.
+JUDGE_WINDOW_TOKENS = 32_000
+MAX_STATE_TOKENS = 28_000  # all files together
+MAX_FILE_TOKENS = 6_000  # per file; the rest is summarised as "N more diff lines not shown"
 # The order the budget is spent in: the code the walls are about first, prose last. A wide diff
 # then truncates docs and tooling, never the slice the judge is asked about.
 _AREA_PRIORITY = ("slice:", "contract:", "kernel", "app", "service", "shared:", "tests", "tooling", "ci", "docs", "other")
@@ -58,12 +64,18 @@ def _priority(area: str) -> int:
 
 
 def _truncate(text: str, limit: int) -> tuple[str, bool]:
-    if len(text) <= limit:
+    """``text`` cut at a line boundary to about ``limit`` tokens, and whether it was cut."""
+    if estimate(text) <= limit:
         return text, False
-    cut = text[:limit]
-    cut = cut[: cut.rfind("\n")] if "\n" in cut else cut
-    dropped = text.count("\n") - cut.count("\n")
-    return cut + f"\n… [{dropped} more diff lines not shown]", True
+    kept: list[str] = []
+    used = 0
+    for line in text.splitlines():
+        used += estimate(line)
+        if used > limit:
+            break
+        kept.append(line)
+    dropped = len(text.splitlines()) - len(kept)
+    return "\n".join(kept) + f"\n… [{dropped} more diff lines not shown]", True
 
 
 def fix_from_docs(root: Path, help_link: str) -> str:
@@ -166,6 +178,8 @@ class _Tally:
     docs_changed: bool = False
     tests: set[str] = field(default_factory=set)
     truncated: list[str] = field(default_factory=list)
+    diff_tokens: int = 0  # the whole diff, Brokkr's estimate
+    state_tokens: int = 0  # what the judge gets after the caps
 
     def count(self, area: str, f: FileChange, m: MapModel | None) -> None:
         if f.status != "deleted" and norm(f.path).endswith(".py") and area != "tests":
@@ -189,7 +203,7 @@ class _Tally:
 def _entries(files: list[FileChange], m: MapModel | None, tally: _Tally) -> list[dict[str, Any]]:
     """One entry per file, source first (see ``_AREA_PRIORITY``), git order within an area; the
     character budget is spent in that order and ``tally`` learns what the files add up to."""
-    budget = MAX_STATE_CHARS
+    budget = MAX_STATE_TOKENS
     entries: list[dict[str, Any]] = []
     classified = sorted(((area_of(f.path, m), f) for f in files), key=lambda pair: _priority(pair[0]))
     for area, f in classified:
@@ -197,10 +211,12 @@ def _entries(files: list[FileChange], m: MapModel | None, tally: _Tally) -> list
         if f.binary:
             text = "[binary]"
         else:
-            text, cut = _truncate(f.text, min(MAX_FILE_CHARS, max(budget, 400)))
+            tally.diff_tokens += estimate(f.text)
+            text, cut = _truncate(f.text, min(MAX_FILE_TOKENS, max(budget, 100)))
             if cut:
                 tally.truncated.append(f.path)
-        budget -= len(text)
+        tally.state_tokens += estimate(text)
+        budget -= estimate(text)
         entries.append({"path": norm(f.path), "status": f.status, "area": area, "added": f.added, "removed": f.removed, "diff": text})
     return entries
 
@@ -252,6 +268,10 @@ def build_state(
         "tests_changed": sorted(tally.tests),
         "docs_changed": tally.docs_changed,
         "files_truncated": tally.truncated,
+        "diff_tokens": tally.diff_tokens,
+        "state_tokens": tally.state_tokens,
+        "state_budget_tokens": MAX_STATE_TOKENS,
+        "judge_window_tokens": JUDGE_WINDOW_TOKENS,
         "wall_violations": list(walls or []),
         "function_shape": list(shape or []),
         "function_limits": {"lines": FUNCTION_LINES, "params": FUNCTION_PARAMETERS},
