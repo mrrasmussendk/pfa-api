@@ -162,11 +162,14 @@ class _Tally:
     contracts: dict[str, int] = field(default_factory=dict)
     routes_changed: bool = False
     source_changed: bool = False
+    code_changed: bool = False  # any Python outside tests: the craft questions are about this
     docs_changed: bool = False
     tests: set[str] = field(default_factory=set)
     truncated: list[str] = field(default_factory=list)
 
     def count(self, area: str, f: FileChange, m: MapModel | None) -> None:
+        if f.status != "deleted" and norm(f.path).endswith(".py") and area != "tests":
+            self.code_changed = True
         if area.startswith(("slice:", "contract:")):
             name = area.split(":", 1)[1]
             self.slices.add(name)
@@ -245,6 +248,7 @@ def build_state(
         "contracts_touched": {k: {"fan_in": v, "frozen": v >= FAN_IN_FREEZE} for k, v in sorted(tally.contracts.items())},
         "routes_changed": tally.routes_changed,
         "source_changed": tally.source_changed,
+        "code_changed": tally.code_changed,
         "tests_changed": sorted(tally.tests),
         "docs_changed": tally.docs_changed,
         "files_truncated": tally.truncated,

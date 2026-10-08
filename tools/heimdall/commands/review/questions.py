@@ -110,6 +110,19 @@ _CRAFT: dict[str, dict[str, Any]] = {
         ),
         "criteria": ["Hard to follow", "Readable with effort", "Readable", "Reads like prose"],
     },
+    "readability_limit": {
+        "type": "choice",
+        "instructions": "What limits the readability of the changed code most? Choose `none` only when nothing would make it read better.",
+        "criteria": {
+            "none": "Nothing: it reads top-down in one pass",
+            "names": "Names that do not say what things are",
+            "nesting": "Deep nesting or late returns that hide the happy path",
+            "length": "Functions too long to hold in one pass",
+            "mixed_levels": "Several levels of abstraction in one function",
+            "magic_values": "Unexplained literals or flags",
+            "cleverness": "Clever one-liners or implicit control flow",
+        },
+    },
     "clean_code": {
         "type": "score",
         "instructions": (
@@ -118,6 +131,18 @@ _CRAFT: dict[str, dict[str, Any]] = {
             "are asked separately; do not re-score them here."
         ),
         "criteria": ["Hard to follow", "Acceptable", "Clean", "Exemplary"],
+    },
+    "clean_code_limit": {
+        "type": "choice",
+        "instructions": "What keeps the changed code from exemplary most? Choose `none` only when nothing would make it cleaner.",
+        "criteria": {
+            "none": "Nothing: it is exemplary",
+            "duplication": "The same logic written twice",
+            "dead_code": "Unused code, parameters or branches",
+            "comments": "Comments that say what instead of why, or missing where a why is needed",
+            "style": "Inconsistent with the surrounding code",
+            "error_handling": "Errors handled far from where they arise, or swallowed",
+        },
     },
 }
 

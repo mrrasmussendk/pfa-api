@@ -110,18 +110,20 @@ def _answers(**over: Any) -> dict[str, Any]:
         },
         "clean_code": {
             "type": "score",
-            "score": 2.1,
+            "score": 2.9,
             "legend": {"0": "Hard to follow", "1": "Acceptable", "2": "Clean", "3": "Exemplary"},
-            "probabilities": {"0": 0.0, "1": 0.1, "2": 0.7, "3": 0.2},
-            "confidence": 0.7,
+            "probabilities": {"0": 0.0, "1": 0.0, "2": 0.1, "3": 0.9},
+            "confidence": 0.8,
         },
+        "clean_code_limit": {"type": "choice", "choice": "none", "probabilities": {"none": 0.9, "comments": 0.1}, "confidence": 0.8},
         "readability": {
             "type": "score",
-            "score": 2.2,
+            "score": 2.6,
             "legend": {"0": "Hard to follow", "1": "Readable with effort", "2": "Readable", "3": "Reads like prose"},
-            "probabilities": {"0": 0.0, "1": 0.1, "2": 0.6, "3": 0.3},
+            "probabilities": {"0": 0.0, "1": 0.0, "2": 0.4, "3": 0.6},
             "confidence": 0.7,
         },
+        "readability_limit": {"type": "choice", "choice": "none", "probabilities": {"none": 0.8, "names": 0.2}, "confidence": 0.7},
         "single_purpose": {"type": "noul", "noul": 0.9},
         "lean_signatures": {"type": "noul", "noul": 0.9},
         "blast_radius": {
@@ -184,6 +186,7 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
     assert facts["slices_touched"] == ["kvad", "rune"] and facts["cross_slice_change"] is True
     assert facts["contracts_touched"] == {"rune": {"fan_in": 12, "frozen": True}}
     assert facts["routes_changed"] is True and facts["source_changed"] is True and facts["docs_changed"] is True
+    assert facts["code_changed"] is True  # Python outside tests changed: the craft targets apply
     assert facts["tests_changed"] == ["tests/api/test_kvad.py"]
     areas = {e["path"]: e["area"] for e in state["files"]}
     assert areas["src/pfa/api/routes/kvad.py"] == "slice:kvad"
@@ -235,6 +238,7 @@ def test_questions_are_valid_system_one_requests() -> None:
             assert isinstance(q["criteria"], dict) and 1 < len(q["criteria"]) <= 255, key
     assert {"safe_to_merge", "needs_human_review", "has_security_concern", "clean_code", "correctness"} <= set(qs)
     assert {"readability", "single_purpose", "lean_signatures"} <= set(qs)  # function size, parameters, single purpose, readability
+    assert {"readability_limit", "clean_code_limit"} <= set(qs)  # what limits each score, so the advice names the fix
 
 
 # ---------------------------------------------------------------- the policy
@@ -265,11 +269,10 @@ def test_policy_escalates_when_a_human_is_wanted_or_the_model_is_on_the_fence() 
     assert decide(_answers(safe_to_merge={"type": "noul", "noul": 0.55}), facts, "m", {}).outcome == "escalate"
 
 
-def test_policy_comments_when_tests_are_doubtful_or_code_is_merely_acceptable() -> None:
+def test_policy_comments_when_tests_are_doubtful() -> None:
     facts = {"source_changed": True}
     v = decide(_answers(tests_cover_change={"type": "noul", "noul": 0.3}), facts, "m", {})
     assert v.outcome == "comment" and any("tests" in r for r in v.reasons)
-    assert decide(_answers(clean_code={"type": "score", "score": 0.9, "confidence": 0.7}), facts, "m", {}).outcome == "comment"
     # docs-only change: tests are not required
     assert decide(_answers(tests_cover_change={"type": "noul", "noul": 0.1}), {"source_changed": False}, "m", {}).outcome == "approve"
 
@@ -659,7 +662,13 @@ def _shape_facts(**over: Any) -> dict[str, Any]:
         "params": 7,
         "over": ["params"],
     }
-    return {"source_changed": True, "function_shape": [long_one, wide], "function_limits": {"lines": 40, "params": 5}, **over}
+    return {
+        "source_changed": True,
+        "code_changed": True,
+        "function_shape": [long_one, wide],
+        "function_limits": {"lines": 40, "params": 5},
+        **over,
+    }
 
 
 def test_shape_facts_block_only_when_the_judge_agrees_and_then_name_the_function() -> None:
@@ -678,13 +687,36 @@ def test_shape_facts_block_only_when_the_judge_agrees_and_then_name_the_function
     assert decide(_answers(), _shape_facts(), "m", {}).outcome == "approve"
 
 
-def test_readability_is_its_own_bar_and_names_where_to_start() -> None:
+def test_readability_and_clean_code_below_target_send_the_agent_back_naming_the_limit() -> None:
+    """The user's targets (2026-10-08): readability 2.5, clean code 2.8 on 0–3. Below them the check fails so the
+    agent is retriggered, and the advice says what the judge found limiting and where to start."""
+    readable = {"type": "score", "score": 2.07, "confidence": 0.7}
+    nesting = {"type": "choice", "choice": "nesting", "probabilities": {"nesting": 0.62, "names": 0.3}, "confidence": 0.6}
+    v = decide(_answers(readability=readable, readability_limit=nesting), _shape_facts(), "m", {})
+    assert v.outcome == "request_changes" and v.reasons == ["readability 2.07/3 below the target 2.5"]
+    assert "the target is 2.5. In its answer, what limits it most: nesting (0.62): flatten the nesting with early returns" in v.advice[0]
+    assert "Start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)." in v.advice[0]
+    clean = {"type": "score", "score": 2.28, "confidence": 0.7}
+    dup = {"type": "choice", "choice": "duplication", "probabilities": {"duplication": 0.7}, "confidence": 0.7}
+    v = decide(_answers(clean_code=clean, clean_code_limit=dup), _shape_facts(), "m", {})
+    assert v.outcome == "request_changes" and v.reasons == ["clean code 2.28/3 below the target 2.8"]
+    assert "what limits it most: duplication (0.70): extract the logic written twice into one function" in v.advice[0]
+    # no limit named (or `none` while the score is still short): every fix is listed, so a code change is still named
+    v = decide(_answers(clean_code=clean), _shape_facts(), "m", {})
+    assert "the judge named no single limit, so: extract the logic written twice" in v.advice[0] and "never swallow one" in v.advice[0]
+    # the targets are about code: a change with no Python outside tests is not sent back for prose
+    assert decide(_answers(readability=readable, clean_code=clean), {"source_changed": False}, "m", {}).outcome == "approve"
+    # exactly on target passes
+    on = {"type": "score", "score": 2.5, "confidence": 0.7}
+    assert decide(_answers(readability=on), _shape_facts(), "m", {}).outcome == "approve"
+
+
+def test_readability_doubt_behind_not_safe_names_the_limit_and_where_to_start() -> None:
     hard = {"type": "score", "score": 1.0, "confidence": 0.8}
-    v = decide(_answers(readability=hard), _shape_facts(), "m", {})
-    assert v.outcome == "comment" and "readability 1.00/3" in v.reasons
-    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, readability=hard), _shape_facts(), "m", {})
+    names = {"type": "choice", "choice": "names", "probabilities": {"names": 0.8}, "confidence": 0.8}
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, readability=hard, readability_limit=names), _shape_facts(), "m", {})
     assert v.outcome == "request_changes"
-    assert "it rates readability only 1.00/3: rename what it could not follow" in v.advice[0]
+    assert "it rates readability 1.00/3 against the target 2.5: what limits it most: names (0.80): rename what" in v.advice[0]
     assert "start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)" in v.advice[0]
     label = {"type": "choice", "choice": "readability", "probabilities": {"readability": 0.9}, "confidence": 0.9}
     v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, biggest_risk=label), _shape_facts(), "m", {})

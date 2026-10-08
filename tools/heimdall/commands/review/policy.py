@@ -32,8 +32,8 @@ T = {
     "human_approve": 0.35,
     "security_approve": 0.20,
     "tests_approve": 0.50,
-    "clean_approve": 1.5,  # expected clean_code on 0..3 >=
-    "readability_approve": 1.5,  # expected readability on 0..3 >=
+    "readability_target": 2.5,  # expected readability on 0..3 below → request_changes when code changed; the agent goes back
+    "clean_target": 2.8,  # expected clean_code on 0..3 below → request_changes when code changed
     "purpose_approve": 0.50,  # single_purpose >=
     "signatures_approve": 0.50,  # lean_signatures >=
 }
@@ -93,6 +93,10 @@ class _Judgment:
     correctness: float
     clean: float
     readability: float
+    readability_limit: str
+    readability_limit_p: float
+    clean_limit: str
+    clean_limit_p: float
     purpose: float
     signatures: float
     blast: float
@@ -103,6 +107,8 @@ class _Judgment:
     @classmethod
     def read(cls, answers: dict[str, Any]) -> _Judgment:
         risk, risk_p = _choice(answers, "biggest_risk")
+        readability_limit, readability_limit_p = _choice(answers, "readability_limit")
+        clean_limit, clean_limit_p = _choice(answers, "clean_code_limit")
         return cls(
             safe=_noul(answers, "safe_to_merge"),
             human=_noul(answers, "needs_human_review"),
@@ -115,6 +121,10 @@ class _Judgment:
             correctness=_score(answers, "correctness", 4)[0],
             clean=_score(answers, "clean_code", 4)[0],
             readability=_score(answers, "readability", 4)[0],
+            readability_limit=readability_limit,
+            readability_limit_p=readability_limit_p,
+            clean_limit=clean_limit,
+            clean_limit_p=clean_limit_p,
             purpose=_noul(answers, "single_purpose", 1.0),
             signatures=_noul(answers, "lean_signatures", 1.0),
             blast=_score(answers, "blast_radius", 3)[0],
@@ -144,15 +154,52 @@ _RISK_FIXES = {
 }
 
 
+# What answers each "what limits it most" label in code. ``none`` and an unanswered label fall back to the
+# whole list, so the advice still names a code change.
+_READABILITY_FIXES = {
+    "names": "rename what the judge could not follow until each name says what the thing is",
+    "nesting": "flatten the nesting with early returns so the happy path reads straight down",
+    "length": "split the long function into functions whose names say what they do",
+    "mixed_levels": "keep one level of abstraction per function: pull the low-level steps out under their own names",
+    "magic_values": "name every literal and replace each behaviour flag with two functions",
+    "cleverness": "unfold the clever one-liners into plain statements",
+}
+_CLEAN_FIXES = {
+    "duplication": "extract the logic written twice into one function",
+    "dead_code": "delete the unused code, parameters and branches",
+    "comments": "replace what-comments with why-comments, and add a why where the reader would ask",
+    "style": "match the surrounding code's conventions",
+    "error_handling": "handle each error where it arises and never swallow one",
+}
+
+
+def _limit_fix(label: str, p: float, fixes: dict[str, str]) -> str:
+    """``what limits it most: nesting (0.62): flatten …``, or every fix when the judge named nothing."""
+    if label in fixes:
+        return f"what limits it most: {label} ({p:.2f}): {fixes[label]}"
+    return "the judge named no single limit, so: " + "; ".join(fixes.values())
+
+
+def _readability_fix(j: _Judgment) -> str:
+    return _limit_fix(j.readability_limit, j.readability_limit_p, _READABILITY_FIXES)
+
+
+def _clean_fix(j: _Judgment) -> str:
+    return _limit_fix(j.clean_limit, j.clean_limit_p, _CLEAN_FIXES)
+
+
 def _craft_doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
     """The clean-code answers below their bar, each with the code change that answers it. The AST facts
     name the function when there is one over the limits; otherwise the advice names the kind of fix."""
     out: list[tuple[str, bool]] = []
     long_fns, wide = _long_functions(facts), _wide_signatures(facts)
     where = f" — start with {long_fns}" if long_fns else ""
-    if j.readability < T["readability_approve"]:
-        fix = "rename what it could not follow, flatten nesting with early returns, and split the function that hides the happy path"
-        out.append((f"it rates readability only {j.readability:.2f}/3: {fix}{where}", True))
+    if j.readability < T["readability_target"]:
+        out.append(
+            (f"it rates readability {j.readability:.2f}/3 against the target {T['readability_target']}: {_readability_fix(j)}{where}", True)
+        )
+    if j.clean < T["clean_target"]:
+        out.append((f"it rates clean code {j.clean:.2f}/3 against the target {T['clean_target']}: {_clean_fix(j)}", True))
     if j.purpose < T["purpose_approve"]:
         fix = "split each into functions whose names say what they do"
         out.append((f"it doubts every changed function does one thing ({j.purpose:.2f}): {fix}{where}", True))
@@ -345,6 +392,28 @@ def _shape_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
         )
 
 
+def _craft_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
+    """Readability and clean code below their target send the agent back, when code changed at all. The target
+    is deliberately above "good enough": the advice names what the judge says limits the score, and the
+    functions the AST found over the limits, so the agent knows where to start."""
+    if not facts.get("code_changed"):
+        return
+    long_fns = _long_functions(facts)
+    where = f" Start with {long_fns}." if long_fns else ""
+    if j.readability < T["readability_target"]:
+        flag(
+            f"readability {j.readability:.2f}/3 below the target {T['readability_target']}",
+            f"The judge rates the changed code's readability {j.readability:.2f} on 0–3 (3 reads like prose); the target is "
+            f"{T['readability_target']}. In its answer, {_readability_fix(j)}.{where}",
+        )
+    if j.clean < T["clean_target"]:
+        flag(
+            f"clean code {j.clean:.2f}/3 below the target {T['clean_target']}",
+            f"The judge rates the craft of the changed code {j.clean:.2f} on 0–3 (3 is exemplary); the target is "
+            f"{T['clean_target']}. In its answer, {_clean_fix(j)}.",
+        )
+
+
 def _blocks(j: _Judgment, answers: dict[str, Any], facts: dict[str, Any], flag: Flag) -> str | None:
     """Every ``request_changes`` reason, facts first. Returns the not-safe sentence that needs a human instead."""
     _safety_blocks(j, facts, flag)
@@ -352,6 +421,7 @@ def _blocks(j: _Judgment, answers: dict[str, Any], facts: dict[str, Any], flag: 
     _architecture_blocks(j, facts, flag)
     _behaviour_blocks(j, facts, flag)
     _shape_blocks(j, facts, flag)
+    _craft_blocks(j, facts, flag)
     return not_safe_needs_human
 
 
@@ -381,15 +451,14 @@ def _escalations(j: _Judgment, facts: dict[str, Any], not_safe_needs_human: str 
 
 
 def _approval(j: _Judgment, facts: dict[str, Any]) -> tuple[str, list[str]]:
-    """``approve`` when every bar is met, else ``comment`` with the bars that were not."""
+    """``approve`` when every bar is met, else ``comment`` with the bars that were not. Readability and clean
+    code have no bar here: below their target they already blocked in ``_craft_blocks``."""
     tests_needed = bool(facts.get("source_changed"))
     bars = [
         (j.safe >= T["safe_approve"], ""),
         (j.human <= T["human_approve"], ""),
         (j.security <= T["security_approve"], ""),
         (not tests_needed or j.tests >= T["tests_approve"], f"tests may not cover the change p={j.tests:.2f}"),
-        (j.clean >= T["clean_approve"], f"clean code {j.clean:.2f}/3"),
-        (j.readability >= T["readability_approve"], f"readability {j.readability:.2f}/3"),
         (j.purpose >= T["purpose_approve"], f"functions may not be single-purpose p={j.purpose:.2f}"),
         (j.signatures >= T["signatures_approve"], f"signatures may be wide p={j.signatures:.2f}"),
     ]
