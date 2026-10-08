@@ -119,9 +119,9 @@ def _answers(**over: Any) -> dict[str, Any]:
         "clean_code_limit": {"type": "choice", "choice": "none", "probabilities": {"none": 0.9, "comments": 0.1}, "confidence": 0.8},
         "readability": {
             "type": "score",
-            "score": 2.6,
+            "score": 2.8,
             "legend": {"0": "Hard to follow", "1": "Readable with effort", "2": "Readable", "3": "Reads like prose"},
-            "probabilities": {"0": 0.0, "1": 0.0, "2": 0.4, "3": 0.6},
+            "probabilities": {"0": 0.0, "1": 0.0, "2": 0.2, "3": 0.8},
             "confidence": 0.7,
         },
         "readability_limit": {"type": "choice", "choice": "none", "probabilities": {"none": 0.8, "names": 0.2}, "confidence": 0.7},
@@ -695,20 +695,20 @@ def test_shape_facts_block_only_when_the_judge_agrees_and_then_name_the_function
 
 
 def test_readability_and_clean_code_below_target_send_the_agent_back_naming_the_limit() -> None:
-    """The user's targets (2026-10-08): readability 2.5, clean code 2.8 on 0–3. Below them the check fails so the
+    """The user's floor (2026-10-08): readability and clean code 2.7 on 0–3, 90%, not to be lowered. Below it the check fails so the
     agent is retriggered, and the advice says what the judge found limiting and where to start."""
     readable = {"type": "score", "score": 2.07, "confidence": 0.7}
     nesting = {"type": "choice", "choice": "nesting", "probabilities": {"nesting": 0.62, "names": 0.3}, "confidence": 0.6}
     v = decide(_answers(readability=readable, readability_limit=nesting), _shape_facts(), "m", {})
-    assert v.outcome == "request_changes" and v.reasons == ["readability 2.07/3 below the target 2.5"]
+    assert v.outcome == "request_changes" and v.reasons == ["readability 2.07/3 below the target 2.7"]
     assert (
-        "the target is 2.5. In its answer, its most probable limit: nesting (0.62): flatten the nesting with early returns" in v.advice[0]
+        "the target is 2.7. In its answer, its most probable limit: nesting (0.62): flatten the nesting with early returns" in v.advice[0]
     )
     assert "— start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)." in v.advice[0]
     clean = {"type": "score", "score": 2.28, "confidence": 0.7}
     dup = {"type": "choice", "choice": "duplication", "probabilities": {"duplication": 0.7}, "confidence": 0.7}
     v = decide(_answers(clean_code=clean, clean_code_limit=dup), _shape_facts(), "m", {})
-    assert v.outcome == "request_changes" and v.reasons == ["clean code 2.28/3 below the target 2.8"]
+    assert v.outcome == "request_changes" and v.reasons == ["clean code 2.28/3 below the target 2.7"]
     assert "its most probable limit: duplication (0.70): extract the logic written twice into one function" in v.advice[0]
     # `none` wins the choice under a short score (PR #9: none at 0.40): the runner-up in the judge's probabilities is the fix
     none_first = {"type": "choice", "choice": "none", "probabilities": {"none": 0.40, "names": 0.25, "nesting": 0.2}, "confidence": 0.3}
@@ -720,7 +720,7 @@ def test_readability_and_clean_code_below_target_send_the_agent_back_naming_the_
     # the targets are about code: a change with no Python outside tests is not sent back for prose
     assert decide(_answers(readability=readable, clean_code=clean), {"source_changed": False}, "m", {}).outcome == "approve"
     # exactly on target passes
-    on = {"type": "score", "score": 2.5, "confidence": 0.7}
+    on = {"type": "score", "score": 2.7, "confidence": 0.7}
     assert decide(_answers(readability=on), _shape_facts(), "m", {}).outcome == "approve"
 
 
@@ -729,7 +729,7 @@ def test_readability_doubt_behind_not_safe_names_the_limit_and_where_to_start() 
     names = {"type": "choice", "choice": "names", "probabilities": {"names": 0.8}, "confidence": 0.8}
     v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, readability=hard, readability_limit=names), _shape_facts(), "m", {})
     assert v.outcome == "request_changes"
-    assert "it rates readability 1.00/3 against the target 2.5: its most probable limit: names (0.80): rename what" in v.advice[0]
+    assert "it rates readability 1.00/3 against the target 2.7: its most probable limit: names (0.80): rename what" in v.advice[0]
     assert "start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)" in v.advice[0]
     label = {"type": "choice", "choice": "readability", "probabilities": {"readability": 0.9}, "confidence": 0.9}
     v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, biggest_risk=label), _shape_facts(), "m", {})
