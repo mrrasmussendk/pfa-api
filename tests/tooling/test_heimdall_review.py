@@ -8,7 +8,7 @@ import json
 from typing import Any
 
 import pytest
-from conftest import TempProject, TempRepo
+from conftest import SHAPED_SOURCE, TempProject, TempRepo
 
 from brokkr import estimate
 from heimdall.commands import review
@@ -580,8 +580,9 @@ def test_wall_findings_are_empty_without_a_slice_tree(repo: TempRepo) -> None:
     assert wall_findings(str(repo.root), parse_unified_diff(DIFF)) == []
 
 
-def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None:
-    facts = {
+def _facts(**over: Any) -> dict[str, Any]:
+    """The facts of a one-file change inside kvad, as ``build_state`` would state them."""
+    return {
         "files_changed": 1,
         "lines_added": 10,
         "lines_removed": 0,
@@ -593,16 +594,20 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
         "tests_changed": [],
         "docs_changed": False,
         "files_truncated": [],
-        "wall_violations": [
-            {
-                "path": "src/pfa/features/kvad/internal/leak.py",
-                "line": 3,
-                "rule": "EIT001",
-                "message": "imports rune internals",
-                "fix": "use the contract",
-            }
-        ],
+        "wall_violations": [],
+        **over,
     }
+
+
+def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None:
+    leak = {
+        "path": "src/pfa/features/kvad/internal/leak.py",
+        "line": 3,
+        "rule": "EIT001",
+        "message": "imports rune internals",
+        "fix": "use the contract",
+    }
+    facts = _facts(wall_violations=[leak])
     v = decide(_disguised_wall_break(), facts, "jev-1", {})
     md = render_markdown(v, {"facts": facts}, questions())
     assert "### What went wrong" in md
@@ -629,9 +634,9 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
 
 # ---------------------------------------------------------------- function shape: facts for the judge, named in the advice
 
-_LONG = (
-    "def long_one():\n" + "\n".join(f"    x{i} = {i}" for i in range(44)) + "\n    return x0\n\n\ndef short_one(a, b):\n    return a + b\n"
-)
+_KVAD_ENGINE = "src/pfa/features/kvad/internal/kvad_engine.py"
+_LONG_ONE = {"path": _KVAD_ENGINE, "line": 1, "name": "long_one", "lines": 46, "params": 0, "over": ["lines"]}
+_WIDE = {"path": _KVAD_ENGINE, "line": 60, "name": "wide", "lines": 2, "params": 7, "over": ["params"]}
 
 
 def _shape_diff(path: str, new_line: int, text: str) -> str:
@@ -640,14 +645,13 @@ def _shape_diff(path: str, new_line: int, text: str) -> str:
 
 def test_function_shape_names_only_the_changed_functions_over_the_limits(repo: TempRepo) -> None:
     repo.write_sample_map()
-    path = "src/pfa/features/kvad/internal/kvad_engine.py"
-    repo.write_file(path, _LONG)
+    repo.write_file(_KVAD_ENGINE, SHAPED_SOURCE)
     m = MapModel.load(str(repo.root / ".heimdall" / "map.json"))
-    touched_long = function_shape(str(repo.root), parse_unified_diff(_shape_diff(path, 10, "x8 = 8")), m)
-    assert touched_long == [{"path": path, "line": 1, "name": "long_one", "lines": 46, "params": 0, "over": ["lines"]}]
-    assert function_shape(str(repo.root), parse_unified_diff(_shape_diff(path, 50, "return a + b")), m) == []
+    touched_long = function_shape(str(repo.root), parse_unified_diff(_shape_diff(_KVAD_ENGINE, 10, "x8 = 8")), m)
+    assert touched_long == [_LONG_ONE]
+    assert function_shape(str(repo.root), parse_unified_diff(_shape_diff(_KVAD_ENGINE, 50, "return a + b")), m) == []
     # tests, deleted files and files that are not on disk contribute nothing
-    repo.write_file("tests/api/test_long.py", _LONG)
+    repo.write_file("tests/api/test_long.py", SHAPED_SOURCE)
     assert function_shape(str(repo.root), parse_unified_diff(_shape_diff("tests/api/test_long.py", 10, "x8 = 8")), m) == []
     gone = parse_unified_diff(_shape_diff("src/pfa/kernel/gone.py", 10, "x8 = 8"))
     assert function_shape(str(repo.root), gone, m) == []
@@ -656,26 +660,11 @@ def test_function_shape_names_only_the_changed_functions_over_the_limits(repo: T
 
 
 def _shape_facts(**over: Any) -> dict[str, Any]:
-    long_one = {
-        "path": "src/pfa/features/kvad/internal/kvad_engine.py",
-        "line": 1,
-        "name": "long_one",
-        "lines": 46,
-        "params": 0,
-        "over": ["lines"],
-    }
-    wide = {
-        "path": "src/pfa/features/kvad/internal/kvad_engine.py",
-        "line": 60,
-        "name": "wide",
-        "lines": 2,
-        "params": 7,
-        "over": ["params"],
-    }
+    """The AST's facts about a change that touched one long and one wide function."""
     return {
         "source_changed": True,
         "code_changed": True,
-        "function_shape": [long_one, wide],
+        "function_shape": [_LONG_ONE, _WIDE],
         "function_limits": {"lines": 40, "params": 5},
         **over,
     }
@@ -741,21 +730,7 @@ def test_readability_doubt_behind_not_safe_names_the_limit_and_where_to_start() 
 
 
 def test_the_comment_and_the_table_list_the_functions_over_the_limits() -> None:
-    facts = {
-        "files_changed": 1,
-        "lines_added": 10,
-        "lines_removed": 0,
-        "slices_touched": ["kvad"],
-        "cross_slice_change": False,
-        "contracts_touched": {},
-        "routes_changed": False,
-        "source_changed": True,
-        "tests_changed": [],
-        "docs_changed": False,
-        "files_truncated": [],
-        "wall_violations": [],
-        **_shape_facts(),
-    }
+    facts = _facts(**_shape_facts())
     v = decide(_answers(), facts, "jev-1", {})
     md = render_markdown(v, {"facts": facts}, questions())
     assert "- changed functions over 40 lines or 5 parameters:" in md
