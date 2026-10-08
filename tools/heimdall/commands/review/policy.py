@@ -1,8 +1,9 @@
 """The policy: thresholds in code, not in the model. Facts (Eitri) come first and no probability
 overrides them; then the judge's answers, in the order block → escalate → approve → comment.
 
-Every reason carries one plain sentence of advice: what went wrong and what to do. The reason is
-for the table, telemetry and JSON; the advice is for the human reading the PR comment."""
+Every reason carries advice for the human reading the PR comment: the evidence it rests on (which
+answers, which facts) and the one concrete next action. A reason never says "see the other rows";
+it names them. The reason itself is short, for the table, telemetry and JSON."""
 
 from __future__ import annotations
 
@@ -17,6 +18,7 @@ T = {
     "safe_block": 0.35,  # safe_to_merge <= → request_changes
     "walls_block": 0.40,  # respects_slice_walls <= → request_changes
     "architecture_risk_block": 0.80,  # biggest_risk == architecture with p >= → request_changes (overrides a Yes on walls)
+    "wide_refactor_escalate": 1.5,  # ... unless change_kind == refactor and expected blast_radius (0..2) >= → escalate: nothing to fix, a human reviews the layout
     "correctness_block": 1.25,  # expected score on 0..3 <= → request_changes
     "human_escalate": 0.60,  # needs_human_review >= → escalate
     "uncertain_escalate": 0.15,  # |safe_to_merge - 0.5| < → escalate (the model is on the fence)
@@ -66,6 +68,38 @@ def _choice(answers: dict[str, Any], key: str) -> tuple[str, float]:
     return c, float(p) if isinstance(p, (int, float)) else 0.0
 
 
+def _doubts(answers: dict[str, Any], facts: dict[str, Any]) -> list[str]:
+    """What drives a low ``safe_to_merge``: every other answer that is below its own bar, in words,
+    so the comment never says "the other rows say what it doubts most"."""
+    out: list[str] = []
+    human = _noul(answers, "needs_human_review")
+    tests = _noul(answers, "tests_cover_change", 1.0)
+    errors_ok = _noul(answers, "errors_use_problem_details", 1.0)
+    scope = _noul(answers, "stays_in_scope", 1.0)
+    correctness, _ = _score(answers, "correctness", 4)
+    blast, _ = _score(answers, "blast_radius", 3)
+    risk, risk_p = _choice(answers, "biggest_risk")
+    if human >= T["human_escalate"]:
+        out.append(f"it wants a person to look (needs_human_review {human:.2f})")
+    if facts.get("source_changed") and tests < T["tests_approve"]:
+        out.append(f"it doubts the tests cover the change ({tests:.2f})")
+    if facts.get("routes_changed") and errors_ok < 0.7:
+        out.append(f"it is unsure every error leaves as a problem document ({errors_ok:.2f})")
+    if scope < 0.6:
+        out.append(f"it doubts the change stays in scope ({scope:.2f})")
+    if correctness < 2.0:
+        out.append(f"it rates correctness only {correctness:.2f}/3")
+    if blast >= T["wide_refactor_escalate"]:
+        out.append("the blast radius is wide (the kernel, the composition root or a frozen contract)")
+    if risk == "architecture" and not facts.get("wall_violations"):
+        kind, _ = _choice(answers, "change_kind")
+        what = "the restructure itself" if kind == "refactor" else "placement or an undeclared dependency"
+        out.append(f"it names architecture as the one thing to check ({risk_p:.2f}) — Eitri found no wall violation, so {what}")
+    elif risk not in ("none", "?"):
+        out.append(f"it names {risk} as the one thing to check ({risk_p:.2f})")
+    return out
+
+
 def decide(answers: dict[str, Any], facts: dict[str, Any], model: str, usage: dict[str, Any]) -> Verdict:
     reasons: list[str] = []
     advice: list[str] = []
@@ -79,7 +113,13 @@ def decide(answers: dict[str, Any], facts: dict[str, Any], model: str, usage: di
     correctness, _ = _score(answers, "correctness", 4)
     clean, _ = _score(answers, "clean_code", 4)
     risk, risk_p = _choice(answers, "biggest_risk")
+    blast, _ = _score(answers, "blast_radius", 3)
+    kind, _ = _choice(answers, "change_kind")
     violations = facts.get("wall_violations") or []
+    files_changed = facts.get("files_changed", 0)
+    # the judge's top-risk label says "architecture" while Eitri and its own walls answer say the imports are clean
+    architecture_label = risk == "architecture" and risk_p >= T["architecture_risk_block"] and not violations and walls > T["walls_block"]
+    wide_refactor = kind == "refactor" and blast >= T["wide_refactor_escalate"]
 
     def flag(reason: str, why: str) -> None:
         reasons.append(reason)
@@ -105,10 +145,15 @@ def decide(answers: dict[str, Any], facts: dict[str, Any], model: str, usage: di
             "Route the error through `Problem` with a client-safe `detail`.",
         )
     if safe <= T["safe_block"]:
+        doubts = _doubts(answers, facts)
         flag(
             f"not safe to merge p(safe)={safe:.2f}",
-            "The judge does not consider the change mergeable as-is: something must still change or be checked. "
-            "The other rows of the table say what it doubts most.",
+            "The judge does not consider the change mergeable as-is. "
+            + (
+                "What drives it: " + "; ".join(doubts) + ". Address those and the verdict moves."
+                if doubts
+                else "No other answer explains the doubt, so treat it as a request for a human reviewer and ask one."
+            ),
         )
     if walls <= T["walls_block"]:
         flag(
@@ -116,13 +161,17 @@ def decide(answers: dict[str, Any], facts: dict[str, Any], model: str, usage: di
             "The judge believes a slice wall or the dependency direction is violated: an import of another slice's "
             "`internal/`, code placed in the wrong package, or a frozen contract changed non-additively.",
         )
-    if risk == "architecture" and risk_p >= T["architecture_risk_block"] and not violations and walls > T["walls_block"]:
-        # the judge's own top-risk label contradicts its Yes on the walls; the label wins
+    if architecture_label and not wide_refactor:
+        # the judge's own top-risk label contradicts its Yes on the walls; the label wins (a persuasive docstring
+        # once talked the walls answer up to 0.62 while the label still said architecture — see the guide)
         flag(
             f"judge names architecture as the biggest risk p={risk_p:.2f}",
-            "The judge answered that the walls are respected but also named a slice-wall or dependency-direction "
-            "problem as the one thing a reviewer should check. Both cannot hold. Look at every cross-slice import "
-            "in the diff: a declared dependency licenses the contract/ package only.",
+            f"Eitri found no wall violation in the {files_changed} changed files and the judge rates the walls respected "
+            f"({walls:.2f}), yet it names a slice-wall or dependency-direction problem as the one thing to check. "
+            "The import graph shows no cross-slice import past a contract, so look for what Eitri cannot see: "
+            "code in the wrong package (framework code inside a feature, feature logic in pfa/api), a feature used "
+            "without being declared in feature.json, or a contract member changed rather than added. "
+            "Fix it, or say in the PR body why the placement is right.",
         )
     if correctness <= T["correctness_block"]:
         flag(
@@ -139,6 +188,14 @@ def decide(answers: dict[str, Any], facts: dict[str, Any], model: str, usage: di
     if reasons:
         return Verdict("request_changes", reasons, answers, model, usage, advice)
 
+    if architecture_label and wide_refactor:
+        flag(
+            f"architecture-wide refactor; judge names architecture as the biggest risk p={risk_p:.2f}",
+            f"Eitri found no wall violation in the {files_changed} changed files and the judge rates the walls respected "
+            f"({walls:.2f}). It names architecture because this refactor moves the kernel, the composition root or a "
+            "contract (blast radius wide), not because of an import. There is nothing for the check to fix: a person "
+            "reviews the new layout against the dependency direction in AGENTS.md and decides.",
+        )
     if human >= T["human_escalate"]:
         flag(
             f"needs a human p={human:.2f}",
