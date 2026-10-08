@@ -4,6 +4,7 @@ app over the chunking route, whose blank-text rejection happens before the token
 
 from __future__ import annotations
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pfa.api.app import create_app
@@ -186,25 +187,13 @@ def test_unknown_fields_are_rejected_not_ignored(client: TestClient) -> None:
     assert set(_errors(r)) == {("body", "question"), ("body", "questions")}
 
 
-def test_control_characters_are_rejected_with_their_position(client: TestClient) -> None:
+def test_control_characters_are_rejected_with_their_position(client: TestClient, words_app: FastAPI) -> None:
     r = client.post("/chunking/split", json={"text": "ok\u0000bad", "budget": 4})
     assert r.status_code == 422
     (err,) = r.json()["errors"]
     assert err["loc"] == ["body", "text"] and "U+0000" in err["msg"] and "position 2" in err["msg"]
-    # tabs and newlines are text, not control noise — checked over a fake tokenizer, never the real one
-    from pfa.features.chunking.contract import CountTokens, SplitText
-    from pfa.features.chunking.internal.handlers import CountTokensHandler, SplitTextHandler
-
-    class _Words:
-        tokenizer_id = "fake/whitespace"
-
-        def count(self, text: str) -> int:
-            return len(text.split())
-
-    app = create_app()
-    app.state.bus.register(CountTokens, CountTokensHandler(_Words()), replace=True)
-    app.state.bus.register(SplitText, SplitTextHandler(_Words()), replace=True)
-    assert TestClient(app).post("/chunking/split", json={"text": "line one\n\tline two", "budget": 400}).status_code == 200
+    # tabs and newlines are text, not control noise — checked over the fake chunking, never the real tokenizer
+    assert TestClient(words_app).post("/chunking/split", json={"text": "line one\n\tline two", "budget": 400}).status_code == 200
 
 
 def test_list_items_are_validated_individually(client: TestClient) -> None:
