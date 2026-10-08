@@ -1,1 +1,1 @@
-"""One package per feature. Each slice exposes ``contract`` and hides ``internal``."""
+"""One package per feature. Each feature exposes ``contract`` and hides ``internal``."""
