@@ -33,7 +33,7 @@ def test_hook_event_path_resolution() -> None:
 
 def test_map_model_tolerates_missing_fields() -> None:
     m = MapModel.from_dict({"slices": {"kvad": {"depends_on": None}}})
-    assert m.kernel == "shared_kernel"
+    assert m.kernel == "kernel"
     assert m.slices["kvad"].depends_on == [] and m.slices["kvad"].fan_in == 0
 
 

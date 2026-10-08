@@ -31,8 +31,8 @@ def _common(p: argparse.ArgumentParser) -> None:
     p.add_argument("--root", default=".", help="project root holding pyproject.toml and the slices package (default: .)")
     p.add_argument("--slices-dir", default=None, help="explicit slices directory (default: <root>/<prefix> or <root>/src/<prefix>)")
     p.add_argument("--budget", type=int, default=None, help="token budget per slice (default: [tool.eitri].token_budget or 15000)")
-    p.add_argument("--kernel", default=None, help="kernel package name (default: [tool.eitri].kernel or shared_kernel)")
-    p.add_argument("--prefix", default=None, help="slices package prefix (default: [tool.eitri].slice_prefix or 'slices.')")
+    p.add_argument("--kernel", default=None, help="kernel package, dotted (default: [tool.eitri].kernel or pfa.kernel)")
+    p.add_argument("--prefix", default=None, help="slices package prefix, dotted (default: [tool.eitri].slice_prefix or 'pfa.features.')")
 
 
 def _config(args: argparse.Namespace) -> EitriConfig:
@@ -72,7 +72,7 @@ def run(argv: list[str], stdout: TextIO, stderr: TextIO) -> int:
 def _surface(args: argparse.Namespace, root: Path, config: EitriConfig, stdout: TextIO, stderr: TextIO) -> int:
     sd = Path(args.slices_dir).resolve() if args.slices_dir else find_slices_dir(root, config)
     if sd is None:
-        stderr.write(f"eitri: no {config.slices_package}/ under {root}\n")
+        stderr.write(f"eitri: no {config.slices_package.replace('.', '/')}/ under {root}\n")
         return 1
     if args.slice == config.kernel:
         kernel_dir = find_kernel_dir(root, config, sd)

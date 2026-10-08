@@ -51,21 +51,21 @@ def main() -> int:
         write_fixture_tree(Path(tmp) / "src")
 
         r = run("map", "--root", ".", "--budget", "15000")
-        check(r.returncode == 0 and "2 slices" in r.stdout, "feedforward map emitted")
-        agents = (Path(tmp) / "src/slices/kvad/AGENTS.md").read_text(encoding="utf-8")
-        check("heimdall:deps" in agents, "AGENTS.md deps generated from slice.json")
+        check(r.returncode == 0 and "2 features" in r.stdout, "feedforward map emitted")
+        agents = (Path(tmp) / "src/pfa/features/kvad/AGENTS.md").read_text(encoding="utf-8")
+        check("heimdall:deps" in agents, "AGENTS.md deps generated from feature.json")
 
-        run("hook", stdin=ev("s1", "Read", "src/slices/kvad/internal/kvad_engine.py"))
-        run("hook", stdin=ev("s1", "Edit", "src/slices/kvad/internal/kvad_engine.py"))
-        run("hook", stdin=ev("s1", "Read", "src/slices/rune/contract/rune_service.py"))
-        run("hook", stdin=ev("s1", "Read", "src/slices/rune/internal/rune_engine.py"))  # OOB read
-        r = run("hook", stdin=ev("s1", "Edit", "src/slices/rune/internal/rune_engine.py"))
+        run("hook", stdin=ev("s1", "Read", "src/pfa/features/kvad/internal/kvad_engine.py"))
+        run("hook", stdin=ev("s1", "Edit", "src/pfa/features/kvad/internal/kvad_engine.py"))
+        run("hook", stdin=ev("s1", "Read", "src/pfa/features/rune/contract/rune_service.py"))
+        run("hook", stdin=ev("s1", "Read", "src/pfa/features/rune/internal/rune_engine.py"))  # OOB read
+        r = run("hook", stdin=ev("s1", "Edit", "src/pfa/features/rune/internal/rune_engine.py"))
         check(r.returncode == 2 and "cross-slice" in r.stderr, "feedback fired on second-slice edit (exit 2 -> agent sees it)")
 
         # clean session: edits kvad only, reads a foreign internal -> must count as OOB
-        run("hook", stdin=ev("s2", "Edit", "src/slices/kvad/internal/kvad_service.py"))
-        run("hook", stdin=ev("s2", "Read", "src/slices/kvad/internal/kvad_engine.py"))
-        run("hook", stdin=ev("s2", "Read", "src/slices/rune/internal/rune_engine.py"))
+        run("hook", stdin=ev("s2", "Edit", "src/pfa/features/kvad/internal/kvad_service.py"))
+        run("hook", stdin=ev("s2", "Read", "src/pfa/features/kvad/internal/kvad_engine.py"))
+        run("hook", stdin=ev("s2", "Read", "src/pfa/features/rune/internal/rune_engine.py"))
         drift = run("drift").stdout
         check("kvad                        5              1     20%" in drift, "OOB read detected and attributed")
         lines = (Path(tmp) / ".heimdall/telemetry.jsonl").read_text(encoding="utf-8").count("\n")
@@ -76,7 +76,7 @@ def main() -> int:
 
         # hook latency: this runs as a PostToolUse hook on EVERY tool call — must stay cheap.
         n = 20
-        event = ev("s1", "Read", "src/slices/kvad/internal/kvad_engine.py")
+        event = ev("s1", "Read", "src/pfa/features/kvad/internal/kvad_engine.py")
         start = time.perf_counter()
         for _ in range(n):
             run("hook", stdin=event)

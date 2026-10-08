@@ -24,10 +24,21 @@ class ImportTarget:
 
 @dataclass(frozen=True)
 class Classification:
-    kind: str  # "slice" | "kernel" | "stdlib" | "external"
+    kind: str  # "slice" | "kernel" | "app" | "stdlib" | "external"
     slice: str | None = None
     in_contract: bool = False
     is_wiring: bool = False
+
+
+def under(name: str, package: str) -> bool:
+    """Is dotted ``name`` the package ``package`` or something inside it?"""
+    return name == package or name.startswith(package + ".")
+
+
+def inside(name: str, package: str) -> list[str]:
+    """The dotted parts of ``name`` below ``package`` (``[]`` when it is the package itself)."""
+    rest = name[len(package) :].lstrip(".")
+    return rest.split(".") if rest else []
 
 
 def resolve_relative(module_name: str, is_package: bool, level: int, module: str | None) -> str:
@@ -60,13 +71,20 @@ def collect_imports(tree: ast.AST, module_name: str, is_package: bool) -> list[I
 
 
 def classify(target: str, config: EitriConfig) -> Classification:
-    parts = target.split(".")
-    if parts[0] == config.slices_package and len(parts) >= 2:
-        in_contract = len(parts) >= 3 and parts[2] == "contract"
-        is_wiring = len(parts) >= 4 and parts[2] == "internal" and parts[3] == "module"
-        return Classification("slice", parts[1], in_contract, is_wiring)
-    if parts[0] == config.kernel:
+    """Where an import points. The slices package and the kernel are checked before the app
+    package because, in a nested layout (``pfa.features``, ``pfa.kernel`` under ``pfa``), they
+    live inside it."""
+    if under(target, config.slices_package):
+        parts = inside(target, config.slices_package)
+        if parts:
+            in_contract = len(parts) >= 2 and parts[1] == "contract"
+            is_wiring = len(parts) >= 2 and parts[1] == "module"  # <slice>.module — the plug the composition root imports
+            return Classification("slice", parts[0], in_contract, is_wiring)
+        return Classification("app") if under(target, config.app_package) else Classification("external")
+    if under(target, config.kernel):
         return Classification("kernel")
-    if parts[0] in _STDLIB:
+    if under(target, config.app_package):
+        return Classification("app")
+    if target.split(".", 1)[0] in _STDLIB:
         return Classification("stdlib")
     return Classification("external")

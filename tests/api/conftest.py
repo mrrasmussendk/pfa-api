@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from pfa_api import create_app
+from pfa.api.app import create_app
 
 
 @pytest.fixture(scope="session")

@@ -1,13 +1,13 @@
 %%{init: {"theme": "base", "themeVariables": {"fontFamily": "Arial, sans-serif", "fontSize": "14px", "lineColor": "#64748b", "edgeLabelBackground": "#ffffff", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1"}, "htmlLabels": false, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 30, "rankSpacing": 35, "padding": 12, "wrappingWidth": 260}}}%%
 flowchart TB
-    accTitle: Slice context budget
-    own["Own slice<br/>All source, including bodies"]:::input
+    accTitle: Feature context budget
+    own["Own feature<br/>All source, including bodies"]:::input
     deps["Declared dependencies<br/>Public contract surfaces only"]:::input
-    kernel["Shared kernel<br/>Public surface, counted for every slice"]:::input
+    kernel["Kernel<br/>Public surface, counted for every feature"]:::input
     total["Brokkr estimates the combined tokens"]:::process
     limit{"At most 15,000 tokens?"}:::decision
     passed["EIT100 passes"]:::output
-    revise["EIT100 fails<br/>Split the slice or slim its contracts"]:::decision
+    revise["EIT100 fails<br/>Split the feature or slim its contracts"]:::decision
     own --> total
     deps --> total
     kernel --> total

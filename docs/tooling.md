@@ -33,27 +33,30 @@ ruff check . && ruff format --check . && mypy    # what CI runs; `ruff check --f
 
 | Rule | What it guards | Severity |
 |---|---|---|
-| **EIT001** | A slice's public surface is its `contract/` package. Importing anything else of another slice binds you to its internals. `internal/module.py` is the one exemption. | error |
+| **EIT001** | A feature's public surface is its `contract/` package. Importing anything else of another feature binds you to its internals. Only the composition root (`pfa/application.py`) may import a feature's `module.py` (its plug); nothing outside a feature may import its `internal/`. | error |
 | **EIT002** | No visibility escape hatches: `importlib.import_module`, `__import__`, `sys.path.*`, `sys.modules[...] =`, `from x import *`. | error |
-| **EIT003** | Contract purity: `contract/` modules may import only the stdlib, the kernel, and their own contract. (FastAPI and pydantic therefore stay in `internal/`.) | error |
-| **EIT004** | Undeclared dependency: importing `slices.x.contract` requires `x` in your `slice.json`. | error |
-| **EIT005** | Error shape: no `HTTPException` from `fastapi`/`starlette` inside a slice, however imported or aliased — errors are RFC 9457 problem documents raised as `http_common.Problem`. | error |
+| **EIT003** | Contract purity: `contract/` modules may import only the stdlib, the kernel, and their own contract. | error |
+| **EIT004** | Undeclared dependency: importing `pfa.features.x.contract` requires `x` in your `feature.json`. | error |
+| **EIT005** | Error shape: no `HTTPException` from `fastapi`/`starlette` in the application outside the features, however imported or aliased — errors are RFC 9457 problem documents raised as `pfa.api.problems.Problem`. The module that defines the helper is exempt: it is the conversion point. | error |
+| **EIT006** | Features depend downward: nothing under `src/pfa/features/` outside `contract/` imports `fastapi`, `starlette`, `pfa.application` or `pfa.api`. Routes, request models and status codes live in `src/pfa/api/routes/<feature>.py`. | error |
 | **EIT100** | **Context budget**: own source + dependency contract surfaces + kernel > budget → check fails. | error |
 | **EIT101** | Context budget report (the same number, always visible). | info |
 
 | `[tool.eitri]` key | Default | Meaning |
 |---|---|---|
-| `slice_prefix` | `slices.` | the package Eitri polices |
-| `kernel` | `shared_kernel` | the one package every slice may import freely |
+| `slice_prefix` | `pfa.features.` | the features package, dotted (EIT001–EIT004, EIT006, EIT100) |
+| `kernel` | `pfa.kernel` | the one package every feature may import freely |
+| `app_package` | `pfa` | the application; everything under it that is not a feature or the kernel is policed (EIT001 against feature internals, EIT005); also what EIT006 names |
+| `composition_root` | `pfa.application` | the one module that may import a feature's `module.py` |
 | `token_budget` | `15000` | EIT100's ceiling per slice |
 | `contract_allowed_modules` | `[]` | third-party packages a contract may import (relaxes EIT003) |
-| `problem_helper` | `http_common.Problem` | the remedy EIT005 names — the rule itself knows nothing about this project |
+| `problem_helper` | `pfa.api.problems.Problem` | the remedy EIT005 names — the rule itself knows nothing about this project; its module is EIT005's one exemption |
 | `enabled` | `true` | **`false` disarms every wall.** Brokkr exists to make that visible. |
 
 EIT100 is the novel one: every check, every slice, it computes the worst-case working set an AI coding agent would need to load to work on that slice, and fails if it exceeds the budget. Dependencies are priced by their **contract surface reconstructed from the AST as body-less stubs** (`eitri surface embeddings` prints it), so a dependency's internals cost zero — the architecture's promise, as a number.
 
 ```
-src/slices/search: error EIT100: Slice 'search' worst-case agent working set is ≈16,204 tokens
+src/pfa/features/search: error EIT100: Slice 'search' worst-case agent working set is ≈16,204 tokens
       (own source 12,981 + dependency contracts 2,672 + kernel 551), over the budget
       of 15,000 — split the slice or slim its contracts
 ```
@@ -79,13 +82,13 @@ What the budget does *not* guarantee is that a split is a good one: two slices t
 
 **The formula.** For every slice, on every `eitri check`:
 
-![Slice context budget](diagrams/context-budget.svg)
+![Feature context budget](diagrams/context-budget.svg)
 
 [Mermaid source](diagrams/context-budget.mmd)
 
-`http_common` is not in the sum: it is declared shared in `[tool.heimdall]`, is only imported from `internal/`, and is not something a slice *consumes* as a dependency. Tests live under `tests/`, outside the slice, and are not counted either.
+The feature's HTTP edge (`src/pfa/api/routes/<feature>.py`) is not in the sum: it lives in the entry point, consumes the feature through its contract like any other caller, and is not something the feature itself loads. Tests live under `tests/`, outside the slice, and are not counted either.
 
-**What a "surface" is.** A dependency is priced by what you need to *call* it, not by what it does. Eitri parses each contract module into an AST and re-renders it as a `.pyi`-shaped stub: public classes, functions, annotated attributes and constants, with every function body replaced by `...`, private names (`_x`) dropped, dunders kept (an agent needs `__init__` to construct a type), and `__all__` honoured when a module declares one. `eitri surface <slice>` prints exactly what gets priced; `eitri surface shared_kernel` prints the kernel's. This is chunking's whole contract surface today:
+**What a "surface" is.** A dependency is priced by what you need to *call* it, not by what it does. Eitri parses each contract module into an AST and re-renders it as a `.pyi`-shaped stub: public classes, functions, annotated attributes and constants, with every function body replaced by `...`, private names (`_x`) dropped, dunders kept (an agent needs `__init__` to construct a type), and `__all__` honoured when a module declares one. `eitri surface <feature>` prints exactly what gets priced; `eitri surface pfa.kernel` prints the kernel's. This is chunking's whole contract surface today:
 
 ```
 # queries.py
@@ -123,7 +126,7 @@ That is 82 tokens. Chunking's *implementation* — the tokenizer wrapper, the pa
 
 - A line in your own `internal/` costs **only your slice**.
 - A public name in your `contract/` costs **you plus every slice that depends on you** — the fan-in column in `AGENTS.md`'s slice map is the multiplier.
-- A public name in `shared_kernel` costs **every slice in the repo**, forever. That is why the kernel is two files — `Result`, and the `Message`/`Query`/`Command`/`Bus` messaging primitives — and why "should this go in the kernel?" is usually answered no.
+- A public name in `pfa.kernel` costs **every feature in the repo**, forever. That is why the kernel is two files — `Result`, and the `Message`/`Query`/`Command`/`Bus` messaging primitives — and why "should this go in the kernel?" is usually answered no.
 
 **When EIT100 fails** the fix is structural, never the number. Split the slice by sub-capability (two slices with a contract between them each fit; one god-slice does not), slim the contract (a consumer should see messages and result types, not helpers — move the rest to `internal/`), or slim the kernel. Raising `token_budget` is a change to the promise, not to the code, and Brokkr will ask you to run the canaries afterwards. [rules/EIT100.md](../harness/rules/EIT100.md) is the one-page version of this section.
 
@@ -180,12 +183,12 @@ Everything Heimdall knows comes from `.heimdall/map.json`, and everything it wri
 | Artifact | Who writes it | What it tells the agent |
 |---|---|---|
 | `AGENTS.md` (root) | you, except the slice table | The dependency direction, the walls, the exact working set for a task, how to add a slice, how to change a contract, which guide to read. `CLAUDE.md` is one line, `@AGENTS.md`, so Claude Code loads the same document. |
-| the **slice table** inside it | `heimdall map` | Every slice with its declared dependencies, fan-in, contract path, and routes — generated from the manifests and `routes.py`, so it cannot be stale. |
-| `src/slices/<name>/AGENTS.md` | `heimdall map` writes the first two lines, you write the rest | `depends on:` and `routes:` (generated), then what the slice is for, its working set, its gotchas. |
+| the **slice table** inside it | `heimdall map` | Every slice with its declared dependencies, fan-in, contract path, and routes — generated from the manifests and `src/pfa/api/routes/<feature>.py`, so it cannot be stale. |
+| `src/pfa/features/<name>/AGENTS.md` | `heimdall map` writes the first two lines, you write the rest | `depends on:` and `routes:` (generated), then what the slice is for, its working set, its gotchas. |
 | [Change guides](../harness/guides/) | you | One guide per kind of change: adding a route, returning an error, what the PR review judges. |
-| `.heimdall/map.json` | `heimdall map` | The machine-readable slice table plus the **shared packages** from `[tool.heimdall] shared` (today `http_common`). This is what the sensors and the review read. |
+| `.heimdall/map.json` | `heimdall map` | The machine-readable feature table plus the layout from `[tool.heimdall]` as paths: `features`, `kernel`, `app` (the application; any read inside it that is not a feature is in-bounds) and `routes` (`<routes>/<feature>.py` classifies as the feature), plus any `shared` packages. This is what the sensors and the review read. |
 
-`heimdall map --root .` regenerates all of it. Run it after adding a slice, changing a `slice.json`, adding a route, or changing `[tool.heimdall]`.
+`heimdall map --root .` regenerates all of it. Run it after adding a feature, changing a `feature.json`, adding a route, or changing `[tool.heimdall]`.
 
 ### 2 · Sensors — what the agent actually touches
 
@@ -193,7 +196,7 @@ Everything Heimdall knows comes from `.heimdall/map.json`, and everything it wri
 
 | Sensor | Fires on | What it records |
 |---|---|---|
-| `boundary_reads` | Read, Grep, Glob of a `.py`, `.pyi`, `.md` or `slice.json` | The path's class: `kernel`, `shared:<pkg>`, `slice:<name>`, `contract:<name>`, or `outside`. Pure observation. |
+| `boundary_reads` | Read, Grep, Glob of a `.py`, `.pyi`, `.md` or `feature.json` | The path's class: `kernel`, `app`, `shared:<pkg>`, `slice:<name>` (the feature's folder or its route module), `contract:<name>`, or `outside`. Pure observation. |
 | `boundary_edits` | Edit, Write, MultiEdit inside a slice | Which slice, remembered per session in `.heimdall/session-<id>.json`, and whether the edit deserves feedback. |
 
 Constraints, because this runs on *every* tool call: stdlib only, no network, no model or framework imports, one small state file per session, and any failure exits 0 so a broken hook can never block the agent. Latency is about 100 ms, mostly interpreter start-up. Adding a sensor is one class and one line in `tools/heimdall/sensors/__init__.py` — an explicit list, never a package scan.

@@ -1,24 +1,32 @@
 %%{init: {"theme": "base", "themeVariables": {"fontFamily": "Arial, sans-serif", "fontSize": "14px", "lineColor": "#64748b", "edgeLabelBackground": "#ffffff", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1"}, "htmlLabels": false, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 30, "rankSpacing": 35, "padding": 12, "wrappingWidth": 260}}}%%
 flowchart TB
     accTitle: Allowed imports: arrows point from importer to dependency
-    root["pfa_api<br/>Composition root"]:::input
-    subgraph feature ["A feature slice"]
-        internal["internal/<br/>Handlers, routes and wiring"]:::process
-        contract["contract/<br/>Framework-free messages and results"]:::input
+    subgraph pfa ["pfa — the application"]
+        subgraph api ["api/ — the entry point"]
+            routes["routes/&lt;feature&gt;.py<br/>pydantic models, router, Problem"]:::process
+            edge["problems.py · validation.py<br/>RFC 9457 errors, request hygiene"]:::process
+        end
+        application["application.py<br/>Builds the bus, plugs every feature in"]:::input
+        subgraph feature ["features/&lt;name&gt;/ — one feature"]
+            module["module.py<br/>register(bus), ready, warmup"]:::input
+            internal["internal/<br/>Handlers and engine"]:::process
+            contract["contract/<br/>Framework-free messages, results, errors"]:::input
+        end
+        dep["Another feature<br/>Public contract only"]:::input
+        kernel["kernel/<br/>Result, Bus, Query, Command"]:::output
     end
-    dep["Declared dependency<br/>Public contract only"]:::input
-    http["http_common<br/>FastAPI-aware HTTP helpers"]:::process
-    kernel["shared_kernel<br/>Stable framework-free primitives"]:::output
-    root -->|Registers internal/module.py| internal
-    root --> http
-    root --> kernel
+    routes -->|Dispatches messages| contract
+    routes --> edge
+    api -->|build_bus| application
+    application -->|Plugs in| module
+    application --> kernel
+    module --> internal
+    module --> contract
     internal -->|Own messages and results| contract
-    internal -->|Declared in slice.json| dep
-    internal -->|HTTP routes only| http
+    internal -->|Declared in feature.json| dep
     internal --> kernel
     contract --> kernel
     dep --> kernel
-    http --> kernel
     classDef input fill:#eff6ff,stroke:#2563eb,color:#172554
     classDef process fill:#f0fdfa,stroke:#0f766e,color:#134e4a
     classDef decision fill:#fffbeb,stroke:#b45309,color:#78350f

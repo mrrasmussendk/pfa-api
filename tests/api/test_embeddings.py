@@ -9,12 +9,12 @@ from collections.abc import Sequence
 import pytest
 from fastapi.testclient import TestClient
 
-from pfa_api import create_app
-from slices.chunking.contract import CountTokens, SplitText
-from slices.chunking.internal.handlers import CountTokensHandler, SplitTextHandler
-from slices.embeddings.contract import EmbedPassages, EmbedQuery, RankCandidates
-from slices.embeddings.internal.e5_engine import E5Engine, EngineBusy
-from slices.embeddings.internal.handlers import EmbedPassagesHandler, EmbedQueryHandler, RankCandidatesHandler
+from pfa.api.app import create_app
+from pfa.features.chunking.contract import CountTokens, SplitText
+from pfa.features.chunking.internal.handlers import CountTokensHandler, SplitTextHandler
+from pfa.features.embeddings.contract import EmbedPassages, EmbedQuery, EngineBusy, RankCandidates
+from pfa.features.embeddings.internal.e5_engine import E5Engine
+from pfa.features.embeddings.internal.handlers import EmbedPassagesHandler, EmbedQueryHandler, RankCandidatesHandler
 
 
 class FakeTokenizer:

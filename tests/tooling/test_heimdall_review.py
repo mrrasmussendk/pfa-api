@@ -28,20 +28,20 @@ from heimdall.commands.review import (
 from heimdall.model import MapModel
 
 DIFF = """\
-diff --git a/src/slices/kvad/internal/routes.py b/src/slices/kvad/internal/routes.py
+diff --git a/src/pfa/api/routes/kvad.py b/src/pfa/api/routes/kvad.py
 index 1111111..2222222 100644
---- a/src/slices/kvad/internal/routes.py
-+++ b/src/slices/kvad/internal/routes.py
+--- a/src/pfa/api/routes/kvad.py
++++ b/src/pfa/api/routes/kvad.py
 @@ -1,4 +1,5 @@
  from fastapi import APIRouter
-+from http_common import Problem
++from pfa.api.problems import Problem
  router = APIRouter(prefix="/kvad")
 -    raise HTTPException(422)
 +    raise Problem.domain_rejection(result.error)
-diff --git a/src/slices/rune/contract/rune_service.py b/src/slices/rune/contract/rune_service.py
+diff --git a/src/pfa/features/rune/contract/rune_service.py b/src/pfa/features/rune/contract/rune_service.py
 index 1111111..2222222 100644
---- a/src/slices/rune/contract/rune_service.py
-+++ b/src/slices/rune/contract/rune_service.py
+--- a/src/pfa/features/rune/contract/rune_service.py
++++ b/src/pfa/features/rune/contract/rune_service.py
 @@ -1,2 +1,3 @@
  class RuneService:
 +    def new_member(self): ...
@@ -74,12 +74,15 @@ index 1111111..2222222 100644
 def _map() -> MapModel:
     return MapModel.from_dict(
         {
-            "kernel": "shared_kernel",
-            "slices_dir": "src/slices",
+            "kernel": "kernel",
+            "kernel_dir": "src/pfa/kernel",
+            "slices_dir": "src/pfa/features",
+            "app_dir": "src/pfa",
+            "routes_dir": "src/pfa/api/routes",
             "shared": ["http_common"],
             "slices": {
-                "kvad": {"path": "src/slices/kvad", "depends_on": ["rune"], "budget": 15000, "fan_in": 0},
-                "rune": {"path": "src/slices/rune", "depends_on": [], "budget": 15000, "fan_in": 12},
+                "kvad": {"path": "src/pfa/features/kvad", "depends_on": ["rune"], "budget": 15000, "fan_in": 0},
+                "rune": {"path": "src/pfa/features/rune", "depends_on": [], "budget": 15000, "fan_in": 12},
             },
         }
     )
@@ -152,8 +155,8 @@ def _run(repo: TempRepo, *args: str, transport=None, env: dict[str, str] | None 
 def test_diff_is_parsed_per_file_and_generated_files_are_ignored() -> None:
     files = parse_unified_diff(DIFF)
     assert [f.path for f in files] == [
-        "src/slices/kvad/internal/routes.py",
-        "src/slices/rune/contract/rune_service.py",
+        "src/pfa/api/routes/kvad.py",
+        "src/pfa/features/rune/contract/rune_service.py",
         "tests/api/test_kvad.py",
         "harness/guides/x.md",
     ]
@@ -171,8 +174,8 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
     assert facts["routes_changed"] is True and facts["source_changed"] is True and facts["docs_changed"] is True
     assert facts["tests_changed"] == ["tests/api/test_kvad.py"]
     areas = {e["path"]: e["area"] for e in state["files"]}
-    assert areas["src/slices/kvad/internal/routes.py"] == "slice:kvad"
-    assert areas["src/slices/rune/contract/rune_service.py"] == "contract:rune"
+    assert areas["src/pfa/api/routes/kvad.py"] == "slice:kvad"
+    assert areas["src/pfa/features/rune/contract/rune_service.py"] == "contract:rune"
     assert areas["tests/api/test_kvad.py"] == "tests" and areas["harness/guides/x.md"] == "docs"
     assert state["architecture"]["slices"]["kvad"]["depends_on"] == ["rune"]
     assert any("RFC 9457" in r for r in state["architecture"]["rules"])
@@ -182,8 +185,8 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
 def test_oversized_files_are_truncated_and_named(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(review.state, "MAX_FILE_CHARS", 120)
     state = build_state(parse_unified_diff(DIFF), _map(), None)
-    assert "src/slices/kvad/internal/routes.py" in state["facts"]["files_truncated"]
-    big = next(e for e in state["files"] if e["path"].endswith("routes.py"))
+    assert "src/pfa/api/routes/kvad.py" in state["facts"]["files_truncated"]
+    big = next(e for e in state["files"] if e["path"].endswith("routes/kvad.py"))
     assert "more diff lines not shown" in big["diff"]
 
 
@@ -416,7 +419,7 @@ def test_policy_blocks_on_eitri_findings_whatever_the_judge_says() -> None:
         "source_changed": True,
         "wall_violations": [
             {
-                "path": "src/slices/kvad/internal/leak.py",
+                "path": "src/pfa/features/kvad/internal/leak.py",
                 "line": 3,
                 "rule": "EIT001",
                 "message": "imports rune internals",
@@ -436,18 +439,18 @@ def test_wall_findings_come_from_eitri_and_only_for_changed_files(project: TempP
         ["rune"],
         **{
             "internal/__init__.py": "",
-            "internal/leak.py": "from slices.rune.internal.rune_engine import RuneEngine\n",
-            "internal/old_leak.py": "from slices.rune.internal.rune_engine import RuneEngine\n",
+            "internal/leak.py": "from pfa.features.rune.internal.rune_engine import RuneEngine\n",
+            "internal/old_leak.py": "from pfa.features.rune.internal.rune_engine import RuneEngine\n",
         },
     )
     project.write("harness/rules/EIT001.md", "# EIT001\nWhy it matters.\n**Fix:** import the dependency's `contract` package instead.\n")
     changed = parse_unified_diff(
-        "diff --git a/slices/kvad/internal/leak.py b/slices/kvad/internal/leak.py\n"
-        "new file mode 100644\n--- /dev/null\n+++ b/slices/kvad/internal/leak.py\n@@ -0,0 +1 @@\n"
-        "+from slices.rune.internal.rune_engine import RuneEngine\n"
+        "diff --git a/pfa/features/kvad/internal/leak.py b/pfa/features/kvad/internal/leak.py\n"
+        "new file mode 100644\n--- /dev/null\n+++ b/pfa/features/kvad/internal/leak.py\n@@ -0,0 +1 @@\n"
+        "+from pfa.features.rune.internal.rune_engine import RuneEngine\n"
     )
     found = wall_findings(str(project.root), changed)
-    assert [(f["path"], f["line"], f["rule"]) for f in found] == [("slices/kvad/internal/leak.py", 1, "EIT001")]
+    assert [(f["path"], f["line"], f["rule"]) for f in found] == [("pfa/features/kvad/internal/leak.py", 1, "EIT001")]
     assert found[0]["fix"] == "import the dependency's `contract` package instead."  # read from the rule doc, never hardcoded
     assert found[0]["doc"] == "harness/rules/EIT001.md"
     state = build_state(changed, None, None, found)
@@ -473,7 +476,7 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
         "files_truncated": [],
         "wall_violations": [
             {
-                "path": "src/slices/kvad/internal/leak.py",
+                "path": "src/pfa/features/kvad/internal/leak.py",
                 "line": 3,
                 "rule": "EIT001",
                 "message": "imports rune internals",
@@ -485,7 +488,7 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
     md = render_markdown(v, {"facts": facts}, questions())
     assert "### What went wrong" in md
     assert "**Eitri found 1 wall violation(s) in the changed files.** The change crosses a slice wall." in md
-    assert "- `src/slices/kvad/internal/leak.py:3 — EIT001: imports rune internals` **Fix:** use the contract" in md
+    assert "- `src/pfa/features/kvad/internal/leak.py:3 — EIT001: imports rune internals` **Fix:** use the contract" in md
     assert "**not safe to merge p(safe)=0.30.**" in md
     assert "**Next:** fix what is named above and push" in md
     assert md.index("What went wrong") < md.index("| question | answer |")  # the explanation comes before the numbers

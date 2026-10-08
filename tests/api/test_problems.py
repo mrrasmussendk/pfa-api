@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from http_common import DOMAIN_REJECTION, PROBLEM_MEDIA_TYPE, VALIDATION_ERROR, Problem
-from pfa_api import create_app
+from pfa.api.app import create_app
+from pfa.api.problems import DOMAIN_REJECTION, PROBLEM_MEDIA_TYPE, VALIDATION_ERROR, Problem
 
 
 def _is_problem(r) -> dict:
@@ -163,7 +163,7 @@ def test_validation_detail_counts_locations_not_errors(client: TestClient) -> No
 
 
 def test_installing_twice_is_a_no_op(client: TestClient) -> None:
-    from http_common import install_problem_details
+    from pfa.api.problems import install_problem_details
 
     app = client.app
     before = app.openapi
@@ -192,8 +192,8 @@ def test_control_characters_are_rejected_with_their_position(client: TestClient)
     (err,) = r.json()["errors"]
     assert err["loc"] == ["body", "text"] and "U+0000" in err["msg"] and "position 2" in err["msg"]
     # tabs and newlines are text, not control noise — checked over a fake tokenizer, never the real one
-    from slices.chunking.contract import CountTokens, SplitText
-    from slices.chunking.internal.handlers import CountTokensHandler, SplitTextHandler
+    from pfa.features.chunking.contract import CountTokens, SplitText
+    from pfa.features.chunking.internal.handlers import CountTokensHandler, SplitTextHandler
 
     class _Words:
         tokenizer_id = "fake/whitespace"
