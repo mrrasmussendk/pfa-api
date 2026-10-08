@@ -15,7 +15,7 @@ contract) so the HTTP edge can answer 503 with Retry-After instead of letting th
 
 The model's window is 512 tokens and it truncates silently beyond that. ``max_tokens``
 (default 500, ``PFA_EMBED_MAX_TOKENS``) is the hard ceiling per encoded text INCLUDING the
-instruction prefix and the two special tokens. Splitting to fit is the chunking slice's job;
+instruction prefix and the two special tokens. Splitting to fit is the chunking feature's job;
 the handlers ask it through the bus before encoding.
 """
 

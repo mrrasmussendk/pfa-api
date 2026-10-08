@@ -1,4 +1,4 @@
-"""Infrastructure failures a consumer of this slice may see. Not domain outcomes (those come
+"""Infrastructure failures a consumer of this feature may see. Not domain outcomes (those come
 back as ``Result.failure``): the request was fine, the service could not serve it right now.
 Handlers let these propagate; the HTTP edge decides what they mean on the wire."""
 

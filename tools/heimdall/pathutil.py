@@ -28,10 +28,8 @@ def slice_of(path: str, m: MapModel) -> str | None:
     """Which slice a path belongs to, or None: a file under the slice's folder, or the slice's
     HTTP edge ``<routes_dir>/<slice>.py``."""
     rest = _within(path, m.slices_dir)
-    if rest:
-        seg = rest.split("/", 1)[0]
-        if seg:
-            return seg
+    if rest and "/" in rest:  # inside a slice's folder; the features package's own files belong to the application
+        return rest.split("/", 1)[0]
     return route_slice_of(path, m)
 
 

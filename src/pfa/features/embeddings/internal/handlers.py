@@ -2,7 +2,7 @@
 ``module.py`` registers them. Handlers return ``Result``, never raise for domain reasons,
 and never know about HTTP.
 
-Chunking is another slice's capability: the handlers dispatch ``SplitText`` / ``CountTokens``
+Chunking is another feature's capability: the handlers dispatch ``SplitText`` / ``CountTokens``
 from ``pfa.features.chunking.contract`` on the bus — declared in ``feature.json``, consumed by contract.
 """
 

@@ -14,6 +14,9 @@ from .diff import FileChange
 
 MAX_FILE_CHARS = 12_000  # per file; the rest is summarised as "+N/-M more lines"
 MAX_STATE_CHARS = 60_000  # all files together
+# The order the budget is spent in: the code the walls are about first, prose last. A wide diff
+# then truncates docs and tooling, never the slice the judge is asked about.
+_AREA_PRIORITY = ("slice:", "contract:", "kernel", "app", "service", "shared:", "tests", "tooling", "ci", "docs", "other")
 
 _FIX_LINE = re.compile(r"^\*\*Fix[^*]*:\*\*\s*(.+?)\s*$", re.MULTILINE)
 
@@ -43,6 +46,10 @@ def area_of(path: str, m: MapModel | None) -> str:
     if p.startswith("src/"):
         return "service"
     return "other"
+
+
+def _priority(area: str) -> int:
+    return next((i for i, prefix in enumerate(_AREA_PRIORITY) if area == prefix or area.startswith(prefix)), len(_AREA_PRIORITY))
 
 
 def _truncate(text: str, limit: int) -> tuple[str, bool]:
@@ -106,7 +113,8 @@ def wall_findings(cwd: str, files: list[FileChange]) -> list[dict[str, Any]]:
 
 
 def build_state(files: list[FileChange], m: MapModel | None, task: str | None, walls: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """The JSON object Jev judges."""
+    """The JSON object Jev judges. Files are listed source first (see ``_AREA_PRIORITY``), git order
+    within an area, and the character budget is spent in that order."""
     slices_touched: set[str] = set()
     contracts_touched: dict[str, int] = {}
     routes_changed = False
@@ -116,8 +124,8 @@ def build_state(files: list[FileChange], m: MapModel | None, task: str | None, w
     truncated: list[str] = []
     budget = MAX_STATE_CHARS
     entries: list[dict[str, Any]] = []
-    for f in files:
-        area = area_of(f.path, m)
+    classified = sorted(((area_of(f.path, m), f) for f in files), key=lambda pair: _priority(pair[0]))
+    for area, f in classified:
         if area.startswith(("slice:", "contract:")):
             name = area.split(":", 1)[1]
             slices_touched.add(name)
