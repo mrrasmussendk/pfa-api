@@ -117,14 +117,6 @@ def _answers(**over: Any) -> dict[str, Any]:
             "confidence": 0.8,
         },
         "clean_code_limit": {"type": "choice", "choice": "none", "probabilities": {"none": 0.9, "comments": 0.1}, "confidence": 0.8},
-        "readability": {
-            "type": "score",
-            "score": 2.8,
-            "legend": {"0": "Hard to follow", "1": "Readable with effort", "2": "Readable", "3": "Reads like prose"},
-            "probabilities": {"0": 0.0, "1": 0.0, "2": 0.2, "3": 0.8},
-            "confidence": 0.7,
-        },
-        "readability_limit": {"type": "choice", "choice": "none", "probabilities": {"none": 0.8, "names": 0.2}, "confidence": 0.7},
         "single_purpose": {"type": "noul", "noul": 0.9},
         "lean_signatures": {"type": "noul", "noul": 0.9},
         "blast_radius": {
@@ -219,11 +211,11 @@ def test_the_craft_floor_is_about_the_application_not_the_tooling() -> None:
     )
     facts = build_state(tooling, _map(), None)["facts"]
     assert facts["code_changed"] is False and facts["source_changed"] is False
-    readable = {"type": "score", "score": 2.0, "confidence": 0.7}
-    assert decide(_answers(readability=readable, clean_code=readable), facts, "m", {}).outcome == "approve"
+    clean = {"type": "score", "score": 2.0, "confidence": 0.7}
+    assert decide(_answers(clean_code=clean), facts, "m", {}).outcome == "approve"
     # a low safety score over a tooling diff with only craft doubts behind it needs a person, not a prose edit
-    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, readability=readable), facts, "m", {})
-    assert v.outcome == "escalate" and "rates readability" not in v.advice[0]
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, clean_code=clean), facts, "m", {})
+    assert v.outcome == "escalate" and "rates clean code" not in v.advice[0]
 
 
 def test_the_features_package_init_is_the_application_not_a_slice() -> None:
@@ -258,8 +250,8 @@ def test_questions_are_valid_system_one_requests() -> None:
         else:
             assert isinstance(q["criteria"], dict) and 1 < len(q["criteria"]) <= 255, key
     assert {"safe_to_merge", "needs_human_review", "has_security_concern", "clean_code", "correctness"} <= set(qs)
-    assert {"readability", "single_purpose", "lean_signatures"} <= set(qs)  # function size, parameters, single purpose, readability
-    assert {"readability_limit", "clean_code_limit"} <= set(qs)  # what limits each score, so the advice names the fix
+    assert {"single_purpose", "lean_signatures"} <= set(qs)  # function size, parameters, single purpose
+    assert "clean_code_limit" in qs  # what limits the score, so the advice names the fix
 
 
 # ---------------------------------------------------------------- the policy
@@ -700,42 +692,44 @@ def test_shape_facts_block_only_when_the_judge_agrees_and_then_name_the_function
     assert decide(_answers(), _shape_facts(), "m", {}).outcome == "approve"
 
 
-def test_readability_and_clean_code_below_target_send_the_agent_back_naming_the_limit() -> None:
-    """The user's floor (2026-10-08): readability and clean code 2.7 on 0–3, 90%, not to be lowered. Below it the check fails so the
+def test_clean_code_below_target_sends_the_agent_back_naming_the_limit() -> None:
+    """The user's floor (2026-10-08): clean code 2.7 on 0–3, 90%, not to be lowered. Below it the check fails so the
     agent is retriggered, and the advice says what the judge found limiting and where to start."""
-    readable = {"type": "score", "score": 2.07, "confidence": 0.7}
-    nesting = {"type": "choice", "choice": "nesting", "probabilities": {"nesting": 0.62, "names": 0.3}, "confidence": 0.6}
-    v = decide(_answers(readability=readable, readability_limit=nesting), _shape_facts(), "m", {})
-    assert v.outcome == "request_changes" and v.reasons == ["readability 2.07/3 below the target 2.7"]
-    assert (
-        "the target is 2.7. In its answer, its most probable limit: nesting (0.62): flatten the nesting with early returns" in v.advice[0]
-    )
-    assert "— start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)." in v.advice[0]
     clean = {"type": "score", "score": 2.28, "confidence": 0.7}
     dup = {"type": "choice", "choice": "duplication", "probabilities": {"duplication": 0.7}, "confidence": 0.7}
     v = decide(_answers(clean_code=clean, clean_code_limit=dup), _shape_facts(), "m", {})
     assert v.outcome == "request_changes" and v.reasons == ["clean code 2.28/3 below the target 2.7"]
-    assert "its most probable limit: duplication (0.70): extract the logic written twice into one function" in v.advice[0]
+    assert "the target is 2.7. In its answer, its most probable limit: duplication (0.70): extract the logic written twice" in v.advice[0]
+    assert "— start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)." in v.advice[0]
     # `none` wins the choice under a short score (PR #9: none at 0.40): the runner-up in the judge's probabilities is the fix
-    none_first = {"type": "choice", "choice": "none", "probabilities": {"none": 0.40, "names": 0.25, "nesting": 0.2}, "confidence": 0.3}
-    v = decide(_answers(readability=readable, readability_limit=none_first), _shape_facts(), "m", {})
-    assert "its most probable limit: names (0.25): rename what the judge could not follow" in v.advice[0]
+    none_first = {"type": "choice", "choice": "none", "probabilities": {"none": 0.40, "comments": 0.25, "style": 0.2}, "confidence": 0.3}
+    v = decide(_answers(clean_code=clean, clean_code_limit=none_first), _shape_facts(), "m", {})
+    assert "its most probable limit: comments (0.25): replace what-comments with why-comments" in v.advice[0]
     # no actionable label at all: every fix is listed, so a code change is still named
     v = decide(_answers(clean_code=clean, clean_code_limit={"type": "choice", "choice": "none"}), _shape_facts(), "m", {})
     assert "the judge named no single limit, so: extract the logic written twice" in v.advice[0] and "never swallow one" in v.advice[0]
-    # the targets are about code: a change with no Python outside tests is not sent back for prose
-    assert decide(_answers(readability=readable, clean_code=clean), {"source_changed": False}, "m", {}).outcome == "approve"
+    # the target is about code: a change with no Python outside tests is not sent back for prose
+    assert decide(_answers(clean_code=clean), {"source_changed": False}, "m", {}).outcome == "approve"
     # exactly on target passes
     on = {"type": "score", "score": 2.7, "confidence": 0.7}
-    assert decide(_answers(readability=on), _shape_facts(), "m", {}).outcome == "approve"
+    assert decide(_answers(clean_code=on), _shape_facts(), "m", {}).outcome == "approve"
 
 
-def test_readability_doubt_behind_not_safe_names_the_limit_and_where_to_start() -> None:
+def test_readability_is_not_scored() -> None:
+    """Dropped from the verdict (2026-10-08): on application code the judge withheld its top level for the subject,
+    not the craft, naming no limit across eight runs, so the score named nothing an edit could answer. A
+    readability answer in the response changes nothing; the top-risk label `readability` still carries its fix."""
     hard = {"type": "score", "score": 1.0, "confidence": 0.8}
-    names = {"type": "choice", "choice": "names", "probabilities": {"names": 0.8}, "confidence": 0.8}
-    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, readability=hard, readability_limit=names), _shape_facts(), "m", {})
+    assert "readability" not in questions() and "readability_limit" not in questions()
+    assert decide(_answers(readability=hard), _shape_facts(), "m", {}).outcome == "approve"
+
+
+def test_craft_doubt_behind_not_safe_names_the_limit_and_where_to_start() -> None:
+    hard = {"type": "score", "score": 1.0, "confidence": 0.8}
+    dup = {"type": "choice", "choice": "duplication", "probabilities": {"duplication": 0.8}, "confidence": 0.8}
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, clean_code=hard, clean_code_limit=dup), _shape_facts(), "m", {})
     assert v.outcome == "request_changes"
-    assert "it rates readability 1.00/3 against the target 2.7: its most probable limit: names (0.80): rename what" in v.advice[0]
+    assert "it rates clean code 1.00/3 against the target 2.7: its most probable limit: duplication (0.80): extract the" in v.advice[0]
     assert "start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)" in v.advice[0]
     label = {"type": "choice", "choice": "readability", "probabilities": {"readability": 0.9}, "confidence": 0.9}
     v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, biggest_risk=label), _shape_facts(), "m", {})
@@ -749,7 +743,7 @@ def test_the_comment_and_the_table_list_the_functions_over_the_limits() -> None:
     md = render_markdown(v, {"facts": facts}, questions())
     assert "- changed functions over 40 lines or 5 parameters:" in md
     assert "  - `src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)`" in md
-    assert "| `readability` |" in md and "| `single_purpose` |" in md and "| `lean_signatures` |" in md
+    assert "| `clean_code` |" in md and "| `single_purpose` |" in md and "| `lean_signatures` |" in md
     assert "over the limits: src/pfa/features/kvad/internal/kvad_engine.py:60 wide (2 lines, 7 params)" in render_table(
         v, questions(), facts
     )
