@@ -46,7 +46,7 @@ def _violation_item(v: dict[str, Any]) -> str:
 
 def render_table(v: Verdict, qs: dict[str, dict[str, Any]], facts: dict[str, Any] | None = None) -> str:
     """The stdout report. The Stop hook hands the agent its tail, so each reason carries its advice: the
-    reason alone ("readability 2.11/3 below the target") names nothing to fix."""
+    reason alone ("clean code 2.28/3 below the target") names nothing to fix."""
     rows = [f"outcome: {v.outcome}  ({'; '.join(v.reasons)})", ""]
     rows += [f"  {reason}: {why}" for reason, why in zip(v.reasons, v.advice, strict=False)]
     if v.advice:
