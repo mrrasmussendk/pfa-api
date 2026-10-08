@@ -77,6 +77,38 @@ def _choice(answers: dict[str, Any], key: str) -> tuple[str, float]:
     return c, float(p) if isinstance(p, (int, float)) else 0.0
 
 
+# What answers each "what limits it most" label in code. An unanswered label falls back to the whole
+# list, so the advice still names a code change.
+_READABILITY_FIXES = {
+    "names": "rename what the judge could not follow until each name says what the thing is",
+    "nesting": "flatten the nesting with early returns so the happy path reads straight down",
+    "length": "split the long function into functions whose names say what they do",
+    "mixed_levels": "keep one level of abstraction per function: pull the low-level steps out under their own names",
+    "magic_values": "name every literal and replace each behaviour flag with two functions",
+    "cleverness": "unfold the clever one-liners into plain statements",
+}
+_CLEAN_FIXES = {
+    "duplication": "extract the logic written twice into one function",
+    "dead_code": "delete the unused code, parameters and branches",
+    "comments": "replace what-comments with why-comments, and add a why where the reader would ask",
+    "style": "match the surrounding code's conventions",
+    "error_handling": "handle each error where it arises and never swallow one",
+}
+
+
+def _limit(answers: dict[str, Any], key: str, fixes: dict[str, str]) -> tuple[str, float]:
+    """The judge's most probable *actionable* limit label. ``none`` wins the choice easily under a short score
+    (PR #9: none at 0.40 beside a 2.08 readability), and none is not a fix; the runner-up in the judge's own
+    probabilities is. ``("?", 0.0)`` when it gave no actionable label at all."""
+    a = answers.get(key) or {}
+    probs = a.get("probabilities") or {}
+    ranked = sorted(((float(p), k) for k, p in probs.items() if k in fixes and isinstance(p, (int, float))), reverse=True)
+    if ranked:
+        return ranked[0][1], ranked[0][0]
+    label, p = _choice(answers, key)
+    return (label, p) if label in fixes else ("?", 0.0)
+
+
 @dataclass(frozen=True)
 class _Judgment:
     """The judge's answers read once, with the policy's neutral defaults for anything unanswered:
@@ -107,8 +139,8 @@ class _Judgment:
     @classmethod
     def read(cls, answers: dict[str, Any]) -> _Judgment:
         risk, risk_p = _choice(answers, "biggest_risk")
-        readability_limit, readability_limit_p = _choice(answers, "readability_limit")
-        clean_limit, clean_limit_p = _choice(answers, "clean_code_limit")
+        readability_limit, readability_limit_p = _limit(answers, "readability_limit", _READABILITY_FIXES)
+        clean_limit, clean_limit_p = _limit(answers, "clean_code_limit", _CLEAN_FIXES)
         return cls(
             safe=_noul(answers, "safe_to_merge"),
             human=_noul(answers, "needs_human_review"),
@@ -154,29 +186,10 @@ _RISK_FIXES = {
 }
 
 
-# What answers each "what limits it most" label in code. ``none`` and an unanswered label fall back to the
-# whole list, so the advice still names a code change.
-_READABILITY_FIXES = {
-    "names": "rename what the judge could not follow until each name says what the thing is",
-    "nesting": "flatten the nesting with early returns so the happy path reads straight down",
-    "length": "split the long function into functions whose names say what they do",
-    "mixed_levels": "keep one level of abstraction per function: pull the low-level steps out under their own names",
-    "magic_values": "name every literal and replace each behaviour flag with two functions",
-    "cleverness": "unfold the clever one-liners into plain statements",
-}
-_CLEAN_FIXES = {
-    "duplication": "extract the logic written twice into one function",
-    "dead_code": "delete the unused code, parameters and branches",
-    "comments": "replace what-comments with why-comments, and add a why where the reader would ask",
-    "style": "match the surrounding code's conventions",
-    "error_handling": "handle each error where it arises and never swallow one",
-}
-
-
 def _limit_fix(label: str, p: float, fixes: dict[str, str]) -> str:
-    """``what limits it most: nesting (0.62): flatten …``, or every fix when the judge named nothing."""
+    """``its most probable limit: nesting (0.62): flatten …``, or every fix when the judge named nothing."""
     if label in fixes:
-        return f"what limits it most: {label} ({p:.2f}): {fixes[label]}"
+        return f"its most probable limit: {label} ({p:.2f}): {fixes[label]}"
     return "the judge named no single limit, so: " + "; ".join(fixes.values())
 
 
