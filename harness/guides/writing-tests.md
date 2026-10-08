@@ -47,11 +47,11 @@ Every test body has three parts, in this order, and nothing else:
 
 ```python
 def test_blank_question_is_a_domain_rejection(fake) -> None:
-    client, _ = fake                                                     # arrange
+    client, _ = fake  # arrange
 
-    r = client.post("/embeddings/query", json={"question": "   "})       # act
+    r = client.post("/embeddings/query", json={"question": "   "})  # act
 
-    assert r.status_code == 422 and r.json()["detail"] == "empty question"   # assert
+    assert r.status_code == 422 and r.json()["detail"] == "empty question"  # assert
 ```
 
 The order is the point. A reader finds the input at the top, the call in the middle and the expectation at the bottom, every time, so no test has to be traced. The rules that follow from it:

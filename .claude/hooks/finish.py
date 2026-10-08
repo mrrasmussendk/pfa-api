@@ -21,7 +21,7 @@ EXIT_REQUEST_CHANGES, EXIT_ESCALATE, EXIT_ERROR = 1, 2, 3
 
 
 def _run(cmd: list[str]) -> tuple[int, str]:
-    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     return p.returncode, (p.stdout + p.stderr).strip()
 
 
