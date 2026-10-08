@@ -101,34 +101,12 @@ _CRAFT: dict[str, dict[str, Any]] = {
             "false": "A changed signature is wide, flag-driven or passes values through",
         },
     },
-    "readability": {
-        "type": "score",
-        "instructions": (
-            "Can each changed function be read top-down in one pass? Judge names that say what things are, one level of abstraction "
-            "per function, shallow nesting with early returns, no clever one-liners, no magic values, and that the happy path is "
-            "visible without reading the error handling. Judge the code, not the size of the diff."
-        ),
-        "criteria": ["Hard to follow", "Readable with effort", "Readable", "Reads like prose"],
-    },
-    "readability_limit": {
-        "type": "choice",
-        "instructions": "What limits the readability of the changed code most? Choose `none` only when nothing would make it read better.",
-        "criteria": {
-            "none": "Nothing: it reads top-down in one pass",
-            "names": "Names that do not say what things are",
-            "nesting": "Deep nesting or late returns that hide the happy path",
-            "length": "Functions too long to hold in one pass",
-            "mixed_levels": "Several levels of abstraction in one function",
-            "magic_values": "Unexplained literals or flags",
-            "cleverness": "Clever one-liners or implicit control flow",
-        },
-    },
     "clean_code": {
         "type": "score",
         "instructions": (
             "Rate the craft of the changed code as a whole: no duplication, no dead code, comments that explain why rather than what, "
-            "consistency with the surrounding style, errors handled where they arise. Readability, single purpose and signatures "
-            "are asked separately; do not re-score them here."
+            "consistency with the surrounding style, errors handled where they arise. Single purpose and signatures are asked "
+            "separately; do not re-score them here."
         ),
         "criteria": ["Hard to follow", "Acceptable", "Clean", "Exemplary"],
     },
