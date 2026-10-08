@@ -694,15 +694,21 @@ def test_readability_and_clean_code_below_target_send_the_agent_back_naming_the_
     nesting = {"type": "choice", "choice": "nesting", "probabilities": {"nesting": 0.62, "names": 0.3}, "confidence": 0.6}
     v = decide(_answers(readability=readable, readability_limit=nesting), _shape_facts(), "m", {})
     assert v.outcome == "request_changes" and v.reasons == ["readability 2.07/3 below the target 2.5"]
-    assert "the target is 2.5. In its answer, what limits it most: nesting (0.62): flatten the nesting with early returns" in v.advice[0]
+    assert (
+        "the target is 2.5. In its answer, its most probable limit: nesting (0.62): flatten the nesting with early returns" in v.advice[0]
+    )
     assert "Start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)." in v.advice[0]
     clean = {"type": "score", "score": 2.28, "confidence": 0.7}
     dup = {"type": "choice", "choice": "duplication", "probabilities": {"duplication": 0.7}, "confidence": 0.7}
     v = decide(_answers(clean_code=clean, clean_code_limit=dup), _shape_facts(), "m", {})
     assert v.outcome == "request_changes" and v.reasons == ["clean code 2.28/3 below the target 2.8"]
-    assert "what limits it most: duplication (0.70): extract the logic written twice into one function" in v.advice[0]
-    # no limit named (or `none` while the score is still short): every fix is listed, so a code change is still named
-    v = decide(_answers(clean_code=clean), _shape_facts(), "m", {})
+    assert "its most probable limit: duplication (0.70): extract the logic written twice into one function" in v.advice[0]
+    # `none` wins the choice under a short score (PR #9: none at 0.40): the runner-up in the judge's probabilities is the fix
+    none_first = {"type": "choice", "choice": "none", "probabilities": {"none": 0.40, "names": 0.25, "nesting": 0.2}, "confidence": 0.3}
+    v = decide(_answers(readability=readable, readability_limit=none_first), _shape_facts(), "m", {})
+    assert "its most probable limit: names (0.25): rename what the judge could not follow" in v.advice[0]
+    # no actionable label at all: every fix is listed, so a code change is still named
+    v = decide(_answers(clean_code=clean, clean_code_limit={"type": "choice", "choice": "none"}), _shape_facts(), "m", {})
     assert "the judge named no single limit, so: extract the logic written twice" in v.advice[0] and "never swallow one" in v.advice[0]
     # the targets are about code: a change with no Python outside tests is not sent back for prose
     assert decide(_answers(readability=readable, clean_code=clean), {"source_changed": False}, "m", {}).outcome == "approve"
@@ -716,7 +722,7 @@ def test_readability_doubt_behind_not_safe_names_the_limit_and_where_to_start() 
     names = {"type": "choice", "choice": "names", "probabilities": {"names": 0.8}, "confidence": 0.8}
     v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, readability=hard, readability_limit=names), _shape_facts(), "m", {})
     assert v.outcome == "request_changes"
-    assert "it rates readability 1.00/3 against the target 2.5: what limits it most: names (0.80): rename what" in v.advice[0]
+    assert "it rates readability 1.00/3 against the target 2.5: its most probable limit: names (0.80): rename what" in v.advice[0]
     assert "start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)" in v.advice[0]
     label = {"type": "choice", "choice": "readability", "probabilities": {"readability": 0.9}, "confidence": 0.9}
     v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, biggest_risk=label), _shape_facts(), "m", {})
