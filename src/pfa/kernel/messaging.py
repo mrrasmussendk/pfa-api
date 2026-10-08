@@ -1,7 +1,7 @@
 """CQRS primitives: a message is a frozen dataclass naming one use case; a handler is the one
 callable that serves it; the bus routes a message to its handler.
 
-A slice's Contract is its messages and result types. Consumers (routes, other slices)
+A feature's Contract is its messages and result types. Consumers (routes, other features)
 dispatch a message and get a ``Result`` back — they never see a handler or a service class.
 ``grep EmbedPassages`` therefore finds every caller of that use case.
 """
@@ -15,7 +15,7 @@ from .primitives import Result
 
 
 class Message:
-    """Base for all messages. Subclass as a frozen dataclass in a slice's ``contract/``."""
+    """Base for all messages. Subclass as a frozen dataclass in a feature's ``contract/``."""
 
 
 class Command(Message):

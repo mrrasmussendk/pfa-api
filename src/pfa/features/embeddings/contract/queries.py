@@ -1,4 +1,4 @@
-"""Queries the embeddings slice answers. The model embeds; it does not answer questions.
+"""Queries the embeddings feature answers. The model embeds; it does not answer questions.
 It places text in a vector space so passages can be ranked against a question.
 
 Queries and passages are embedded differently (the model needs an instruction prefix on

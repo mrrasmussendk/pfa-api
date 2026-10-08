@@ -1,5 +1,5 @@
 """The model's tokenizer, loaded lazily and alone (a few MB — the weights stay with the
-embeddings slice). Counting with the real tokenizer is what makes the 500-token budget a
+embeddings feature). Counting with the real tokenizer is what makes the 500-token budget a
 hard guarantee rather than an estimate."""
 
 from __future__ import annotations

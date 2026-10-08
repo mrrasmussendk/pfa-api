@@ -25,6 +25,7 @@ from heimdall.commands.review import (
     render_table,
     wall_findings,
 )
+from heimdall.commands.review.state import area_of
 from heimdall.model import MapModel
 
 DIFF = """\
@@ -188,6 +189,26 @@ def test_oversized_files_are_truncated_and_named(monkeypatch: pytest.MonkeyPatch
     assert "src/pfa/api/routes/kvad.py" in state["facts"]["files_truncated"]
     big = next(e for e in state["files"] if e["path"].endswith("routes/kvad.py"))
     assert "more diff lines not shown" in big["diff"]
+
+
+def test_the_features_package_init_is_the_application_not_a_slice() -> None:
+    assert area_of("src/pfa/features/__init__.py", _map()) == "app"
+    assert area_of("src/pfa/features/kvad/internal/x.py", _map()) == "slice:kvad"
+
+
+def test_exported_diagrams_are_dropped_from_the_diff() -> None:
+    svg = "diff --git a/docs/diagrams/x.svg b/docs/diagrams/x.svg\n--- a/docs/diagrams/x.svg\n+++ b/docs/diagrams/x.svg\n@@ -1 +1 @@\n-<svg/>\n+<svg></svg>\n"
+    assert [f.path for f in parse_unified_diff(svg + DIFF)] == [f.path for f in parse_unified_diff(DIFF)]
+
+
+def test_the_budget_is_spent_on_the_source_before_tests_and_docs(monkeypatch: pytest.MonkeyPatch) -> None:
+    files = parse_unified_diff(DIFF)
+    files.reverse()  # git lists the docs first; the judge must still see the code
+    source = [f for f in files if f.path.startswith("src/")]
+    monkeypatch.setattr(review.state, "MAX_STATE_CHARS", sum(len(f.text) for f in source))
+    state = build_state(files, _map(), None)
+    assert [e["area"] for e in state["files"]] == ["slice:kvad", "contract:rune", "tests", "docs"]
+    assert not any(p.startswith("src/") for p in state["facts"]["files_truncated"])
 
 
 def test_questions_are_valid_system_one_requests() -> None:

@@ -1,5 +1,5 @@
 """Liveness and readiness. Both are ``async def`` on purpose: they run on the event loop,
-never on the threadpool the sync slice routes share. A cold model load (or a burst of
+never on the threadpool the sync feature routes share. A cold model load (or a burst of
 first requests) can tie that pool up for seconds; the orchestrator's probes must keep
 answering through it, or a slow start is mistaken for a dead process and restarted — a
 loop that never finishes loading."""
