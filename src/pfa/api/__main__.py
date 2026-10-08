@@ -23,7 +23,8 @@ def main() -> int:
         reload=os.environ.get("PFA_RELOAD", "") == "1",
         workers=int(os.environ.get("PFA_WORKERS", "1")),
         log_level=os.environ.get("PFA_LOG_LEVEL", "info"),
-        access_log=os.environ.get("PFA_ACCESS_LOG", "1") == "1",
+        log_config=None,  # the app configures logging (RFC 5424 / JSON, one stream); uvicorn's loggers write through it
+        access_log=os.environ.get("PFA_ACCESS_LOG", "0") == "1",  # replaced by the app's request line; 1 to compare
         # Behind a reverse proxy, trust X-Forwarded-* only from the proxy: PFA_FORWARDED_ALLOW_IPS=10.0.0.5
         proxy_headers=True,
         forwarded_allow_ips=os.environ.get("PFA_FORWARDED_ALLOW_IPS", "127.0.0.1"),

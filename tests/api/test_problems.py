@@ -4,11 +4,15 @@ app over the chunking route, whose blank-text rejection happens before the token
 
 from __future__ import annotations
 
+import re
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pfa.api.app import create_app
 from pfa.api.problems import DOMAIN_REJECTION, PROBLEM_MEDIA_TYPE, VALIDATION_ERROR, Problem
+
+_TRACE = re.compile(r"[0-9a-f]{32}")
 
 
 def _is_problem(r) -> dict:
@@ -45,6 +49,7 @@ def test_unknown_path_and_wrong_method_are_about_blank_problems(client: TestClie
     r = client.get("/nope")
     assert r.status_code == 404
     body = _is_problem(r)
+    assert _TRACE.fullmatch(body.pop("trace_id"))
     assert body == {"type": "about:blank", "title": "Not Found", "status": 404, "instance": "/nope"}
 
     r = client.get("/chunking/split")
@@ -62,6 +67,7 @@ def test_unhandled_exception_is_a_500_problem_without_detail() -> None:
     r = TestClient(app, raise_server_exceptions=False).get("/boom")
     assert r.status_code == 500
     body = _is_problem(r)
+    assert _TRACE.fullmatch(body.pop("trace_id"))
     assert body == {"type": "about:blank", "title": "Internal Server Error", "status": 500, "instance": "/boom"}
     assert "secret" not in r.text
 
@@ -90,7 +96,7 @@ def test_a_route_can_raise_any_problem_with_extensions_and_headers() -> None:
 def test_openapi_documents_errors_as_problem_details(client: TestClient) -> None:
     spec = client.get("/openapi.json").json()
     problem = spec["components"]["schemas"]["ProblemDetails"]
-    assert set(problem["properties"]) == {"type", "title", "status", "detail", "instance"}
+    assert set(problem["properties"]) == {"type", "title", "status", "detail", "instance", "trace_id"}
     assert problem.get("additionalProperties", True) is not False  # extension members are allowed
     assert "HTTPValidationError" not in spec["components"]["schemas"]
 
