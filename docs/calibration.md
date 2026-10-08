@@ -17,4 +17,4 @@ tiktoken's `o200k_base` on any Python tree:
 Target: within ~±10% of `o200k_base`, erring conservative (+) on typical Python — a stricter
 budget is the safe failure mode. Run the comparison on your own tree before trusting the
 number to the token. If you retune the estimator, `tests/tooling/test_token_estimator.py`
-pins the regex to the reference loop — update both, and the README claim.
+pins the regex to the reference loop — update both, and the claim in [Development tooling](tooling.md#how-the-token-budget-works).

@@ -53,7 +53,7 @@ def _truncate(text: str, limit: int) -> tuple[str, bool]:
 
 
 def fix_from_docs(root: Path, help_link: str) -> str:
-    """The ``**Fix:**`` line of a rule's page under ``docs/rules/`` — the rule doc is the single
+    """The ``**Fix:**`` line of a rule's page under ``harness/rules/`` — the rule doc is the single
     source of what to do about a wall, so the PR comment never drifts from it."""
     try:
         text = (root / help_link).read_text(encoding="utf-8")

@@ -54,10 +54,10 @@ index 0000000..3333333
 @@ -0,0 +1,2 @@
 +def test_it():
 +    assert True
-diff --git a/docs/guides/x.md b/docs/guides/x.md
+diff --git a/harness/guides/x.md b/harness/guides/x.md
 index 1111111..2222222 100644
---- a/docs/guides/x.md
-+++ b/docs/guides/x.md
+--- a/harness/guides/x.md
++++ b/harness/guides/x.md
 @@ -1 +1 @@
 -old
 +new
@@ -155,7 +155,7 @@ def test_diff_is_parsed_per_file_and_generated_files_are_ignored() -> None:
         "src/slices/kvad/internal/routes.py",
         "src/slices/rune/contract/rune_service.py",
         "tests/api/test_kvad.py",
-        "docs/guides/x.md",
+        "harness/guides/x.md",
     ]
     routes = files[0]
     assert (routes.status, routes.added, routes.removed) == ("modified", 2, 1)
@@ -173,7 +173,7 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
     areas = {e["path"]: e["area"] for e in state["files"]}
     assert areas["src/slices/kvad/internal/routes.py"] == "slice:kvad"
     assert areas["src/slices/rune/contract/rune_service.py"] == "contract:rune"
-    assert areas["tests/api/test_kvad.py"] == "tests" and areas["docs/guides/x.md"] == "docs"
+    assert areas["tests/api/test_kvad.py"] == "tests" and areas["harness/guides/x.md"] == "docs"
     assert state["architecture"]["slices"]["kvad"]["depends_on"] == ["rune"]
     assert any("RFC 9457" in r for r in state["architecture"]["rules"])
     assert state["task"].startswith("Switch kvad")
@@ -440,7 +440,7 @@ def test_wall_findings_come_from_eitri_and_only_for_changed_files(project: TempP
             "internal/old_leak.py": "from slices.rune.internal.rune_engine import RuneEngine\n",
         },
     )
-    project.write("docs/rules/EIT001.md", "# EIT001\nWhy it matters.\n**Fix:** import the dependency's `contract` package instead.\n")
+    project.write("harness/rules/EIT001.md", "# EIT001\nWhy it matters.\n**Fix:** import the dependency's `contract` package instead.\n")
     changed = parse_unified_diff(
         "diff --git a/slices/kvad/internal/leak.py b/slices/kvad/internal/leak.py\n"
         "new file mode 100644\n--- /dev/null\n+++ b/slices/kvad/internal/leak.py\n@@ -0,0 +1 @@\n"
@@ -449,7 +449,7 @@ def test_wall_findings_come_from_eitri_and_only_for_changed_files(project: TempP
     found = wall_findings(str(project.root), changed)
     assert [(f["path"], f["line"], f["rule"]) for f in found] == [("slices/kvad/internal/leak.py", 1, "EIT001")]
     assert found[0]["fix"] == "import the dependency's `contract` package instead."  # read from the rule doc, never hardcoded
-    assert found[0]["doc"] == "docs/rules/EIT001.md"
+    assert found[0]["doc"] == "harness/rules/EIT001.md"
     state = build_state(changed, None, None, found)
     assert state["facts"]["wall_violations"] == found
 
