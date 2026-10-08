@@ -32,9 +32,10 @@ T = {
     "human_approve": 0.35,
     "security_approve": 0.20,
     "tests_approve": 0.50,
-    # 2.7 of 3 is 90%: the floor the author set for the craft of changed code, and it is not to be lowered.
-    "readability_target": 2.7,  # expected readability on 0..3 below → request_changes when code changed; the agent goes back
-    "clean_target": 2.7,  # expected clean_code on 0..3 below → request_changes when code changed
+    # 2.7 of 3 is 90%: the floor the author set for the craft of the application's code, and it is not to be lowered.
+    # The tooling under tools/ is judged on correctness and tests, not on prose (facts.code_changed is about the application).
+    "readability_target": 2.7,  # expected readability on 0..3 below → request_changes when the application's code changed
+    "clean_target": 2.7,  # expected clean_code on 0..3 below → request_changes when the application's code changed
     "purpose_approve": 0.50,  # single_purpose >=
     "signatures_approve": 0.50,  # lean_signatures >=
 }
@@ -202,12 +203,11 @@ def _craft_shortfalls(j: _Judgment) -> list[tuple[str, float, float, str, str]]:
 
 def _craft_doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
     """The clean-code answers below their bar, each with the code change that answers it. The AST facts
-    name the function when there is one over the limits; otherwise the advice names the kind of fix."""
+    name the function when there is one over the limits; otherwise the advice names the kind of fix. The
+    craft targets are about the application's code: a tooling diff is not sent back for prose."""
     where = _start_with(facts)
-    out = [
-        (f"it rates {name} {score:.2f}/3 against the target {target}: {fix}{where}", True)
-        for name, score, target, _, fix in _craft_shortfalls(j)
-    ]
+    shortfalls = _craft_shortfalls(j) if facts.get("code_changed") else []
+    out = [(f"it rates {name} {score:.2f}/3 against the target {target}: {fix}{where}", True) for name, score, target, _, fix in shortfalls]
     if j.purpose < T["purpose_approve"]:
         out.append((f"it doubts every changed function does one thing ({j.purpose:.2f}): {_SPLIT_FIX}{where}", True))
     if j.signatures < T["signatures_approve"]:
@@ -398,8 +398,9 @@ def _shape_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
 
 
 def _craft_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
-    """Readability and clean code below their target send the agent back, when code changed at all. The target
-    is deliberately above "good enough": the advice names what the judge says limits the score, and the
+    """Readability and clean code below their target send the agent back, when the application's code changed
+    (``facts.code_changed``; the tooling is judged on correctness and tests, not on prose). The target is
+    deliberately above "good enough": the advice names what the judge says limits the score, and the
     functions the AST found over the limits, so the agent knows where to start."""
     if not facts.get("code_changed"):
         return

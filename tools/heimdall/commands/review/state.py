@@ -174,7 +174,7 @@ class _Tally:
     contracts: dict[str, int] = field(default_factory=dict)
     routes_changed: bool = False
     source_changed: bool = False
-    code_changed: bool = False  # any Python outside tests: the craft questions are about this
+    code_changed: bool = False  # Python in the application (a slice, the kernel, the app): the craft floor is about this, not the tooling
     docs_changed: bool = False
     tests: set[str] = field(default_factory=set)
     truncated: list[str] = field(default_factory=list)
@@ -182,7 +182,8 @@ class _Tally:
     state_tokens: int = 0  # what the judge gets after the caps
 
     def count(self, area: str, f: FileChange, m: MapModel | None) -> None:
-        if f.status != "deleted" and norm(f.path).endswith(".py") and area != "tests":
+        in_application = area.startswith(("slice:", "contract:", "shared:")) or area in ("kernel", "app", "service")
+        if in_application and f.status != "deleted" and norm(f.path).endswith(".py"):
             self.code_changed = True
         if area.startswith(("slice:", "contract:")):
             name = area.split(":", 1)[1]
