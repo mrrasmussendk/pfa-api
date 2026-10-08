@@ -18,12 +18,18 @@ Every document carries ``trace_id`` — the W3C Trace Context id the log lines h
 client can quote what the operator can grep (``docs/decisions/0001-logging.md``).
 
 ``install_problem_details(app)`` wires all of it and rewrites the OpenAPI document so error
-responses are documented as ``application/problem+json`` ``ProblemDetails``.
+responses are documented as ``application/problem+json`` ``ProblemDetails`` with examples:
+the ``422`` of every operation with a body shows a validation failure (built from the
+body's required fields) next to the domain rejections the route declared with
+``domain_rejections(...)``; any other problem response a route declares goes through
+``problem_response(...)``. Examples are rendered by the same code that answers requests,
+so the document cannot drift from the wire.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable, Mapping
 from http import HTTPStatus
 from typing import Any
@@ -55,13 +61,15 @@ _BODILESS = frozenset({204, 304})
 # The RFC members a ``Problem`` extension may not shadow; they are named constructor arguments.
 _RESERVED = frozenset({"type", "title", "status", "detail", "instance"})
 
+EXAMPLE_TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"  # the W3C Trace Context example id, in every documented example
+
 _EXAMPLE: JsonDict = {
     "type": DOMAIN_REJECTION,
     "title": "Request rejected",
     "status": 422,
     "detail": "empty question",
     "instance": "/embeddings/query",
-    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+    "trace_id": EXAMPLE_TRACE_ID,
 }
 
 
@@ -189,10 +197,15 @@ async def _on_validation_error(request: Request, exc: Exception) -> Response:
     which may be a 200 kB document."""
     assert isinstance(exc, RequestValidationError)
     errors = [{"loc": list(e.get("loc", ())), "msg": e.get("msg", ""), "type": e.get("type", "")} for e in exc.errors()]
+    return _respond(request, _validation_problem(errors))
+
+
+def _validation_problem(errors: list[dict[str, Any]]) -> Problem:
+    """``detail`` names the fields; ``errors`` carries each failure. Also what the document shows."""
     where = sorted({".".join(str(p) for p in e["loc"]) for e in errors})
     noun = "field" if len(where) == 1 else "fields"
     detail = f"{len(where)} invalid {noun}: {', '.join(where)}" if where else "request is invalid"
-    return _respond(request, Problem(422, detail, type=VALIDATION_ERROR, title="Request validation failed", errors=errors))
+    return Problem(422, detail, type=VALIDATION_ERROR, title="Request validation failed", errors=errors)
 
 
 async def _on_unhandled(request: Request, exc: Exception) -> Response:
@@ -222,14 +235,43 @@ def install_problem_details(app: FastAPI) -> None:
 
 
 _REF = {"$ref": "#/components/schemas/ProblemDetails"}
-_PROBLEM_CONTENT = {PROBLEM_MEDIA_TYPE: {"schema": _REF}}
+_HEADER_SCHEMA = {"type": "string"}
+_REJECTION_DESCRIPTION = (
+    "Validation error (the body does not fit the model: `errors` names each field) "
+    "or domain rejection (it fits, but made no sense to the handler: `detail` says why)"
+)
+
+
+def problem_response(description: str, examples: Mapping[str, Problem], *, headers: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """An OpenAPI response entry for a route's ``responses={<status>: ...}``: a problem document
+    with one named example per ``Problem`` in ``examples``, rendered exactly as the wire would carry it.
+    ``headers`` maps a response header to its description (``{"Retry-After": "seconds to wait"}``).
+    An example's ``instance`` is filled in with the operation's path when the document is built."""
+    rendered = {name: {"summary": problem.title, "value": problem.to_body(None, EXAMPLE_TRACE_ID)} for name, problem in examples.items()}
+    response: dict[str, Any] = {"description": description, "content": {PROBLEM_MEDIA_TYPE: {"schema": _REF, "examples": rendered}}}
+    if headers:
+        response["headers"] = {name: {"description": about, "schema": _HEADER_SCHEMA} for name, about in headers.items()}
+    return response
+
+
+def domain_rejections(*details: str) -> dict[str, Any]:
+    """The ``422`` entry of a route: one example per reason its handler may reject a request
+    (``Result.failure("empty question")`` → ``domain_rejections("empty question")``). The
+    validation example is added when the document is built, so routes declare only their own."""
+    return problem_response(_REJECTION_DESCRIPTION, {_example_name(d): Problem.domain_rejection(d) for d in details})
+
+
+def _example_name(detail: str) -> str:
+    """OpenAPI example keys are ``[A-Za-z0-9._-]+``: ``"empty question"`` → ``empty_question``."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "_", detail).strip("_") or "rejected"
 
 
 def _documenting(app: FastAPI, original: Callable[[], dict[str, Any]]) -> Callable[[], dict[str, Any]]:
     """Wrap ``app.openapi`` so error responses are described as problem documents: FastAPI's
     auto-generated 422 (``HTTPValidationError`` as ``application/json``) becomes a
-    ``ProblemDetails`` as ``application/problem+json`` — it now also covers domain rejections —
-    and every operation gets a ``default`` problem response for everything else (404, 500 …)."""
+    ``ProblemDetails`` as ``application/problem+json`` with a validation example next to the
+    route's domain rejections, and every operation gets a ``default`` problem response for
+    everything else (404, 500 …)."""
 
     def openapi() -> dict[str, Any]:
         if app.openapi_schema:
@@ -237,17 +279,10 @@ def _documenting(app: FastAPI, original: Callable[[], dict[str, Any]]) -> Callab
         schema = original()
         schemas = schema.setdefault("components", {}).setdefault("schemas", {})
         schemas["ProblemDetails"] = ProblemDetails.model_json_schema()
-        for operations in schema.get("paths", {}).values():
+        for path, operations in schema.get("paths", {}).items():
             for operation in operations.values():
-                if not isinstance(operation, dict) or "responses" not in operation:
-                    continue
-                responses = operation["responses"]
-                if _is_fastapi_validation_response(responses.get("422")):
-                    responses["422"] = {
-                        "description": "Validation Error or domain rejection (RFC 9457 problem details)",
-                        "content": _PROBLEM_CONTENT,
-                    }
-                responses.setdefault("default", {"description": "Error (RFC 9457 problem details)", "content": _PROBLEM_CONTENT})
+                if isinstance(operation, dict) and "responses" in operation:
+                    _document_errors(path, operation, schemas)
         if not _referenced(schema, "HTTPValidationError"):
             schemas.pop("HTTPValidationError", None)
             if not _referenced(schema, "ValidationError"):
@@ -258,13 +293,39 @@ def _documenting(app: FastAPI, original: Callable[[], dict[str, Any]]) -> Callab
     return openapi
 
 
-def _is_fastapi_validation_response(response: Any) -> bool:
+def _document_errors(path: str, operation: dict[str, Any], schemas: dict[str, Any]) -> None:
+    """Every error response of one operation: the ``422`` gains the validation example (an
+    empty body: each required field missing) ahead of the route's rejections, ``default``
+    covers the rest, and every example learns the operation's path as its ``instance``."""
+    responses = operation["responses"]
+    if "422" in responses:
+        missing = [
+            {"loc": ["body", name], "msg": "Field required", "type": "missing"} for name in _required_body_fields(operation, schemas)
+        ]
+        rejected = problem_response(_REJECTION_DESCRIPTION, {"validation_error": _validation_problem(missing)})
+        rejected["content"][PROBLEM_MEDIA_TYPE]["examples"].update(_problem_examples(responses["422"]))
+        responses["422"] = rejected
+    responses.setdefault("default", problem_response("Any other error (RFC 9457 problem details)", {"internal_error": Problem(500)}))
+    for response in responses.values():
+        for example in _problem_examples(response).values():
+            example["value"].setdefault("instance", path)
+
+
+def _problem_examples(response: Any) -> dict[str, Any]:
+    """The named examples of a problem response; ``{}`` for anything else (FastAPI's own 422)."""
     if not isinstance(response, dict):
-        return False
-    for media in response.get("content", {}).values():
-        if isinstance(media, dict) and str(media.get("schema", {}).get("$ref", "")).endswith("/HTTPValidationError"):
-            return True
-    return False
+        return {}
+    media = response.get("content", {}).get(PROBLEM_MEDIA_TYPE, {})
+    examples = media.get("examples", {})
+    return examples if isinstance(examples, dict) else {}
+
+
+def _required_body_fields(operation: dict[str, Any], schemas: dict[str, Any]) -> list[str]:
+    """The required properties of the operation's JSON body model, in declaration order."""
+    body = operation.get("requestBody", {}).get("content", {}).get("application/json", {}).get("schema", {})
+    name = str(body.get("$ref", "")).rpartition("/")[2]
+    required = schemas.get(name, {}).get("required", [])
+    return [str(field) for field in required]
 
 
 def _referenced(schema: dict[str, Any], name: str) -> bool:
