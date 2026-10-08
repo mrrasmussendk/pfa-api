@@ -34,7 +34,8 @@ T = {
     "tests_approve": 0.50,
     # 2.7 of 3 is 90%: the floor the author set for the craft of the application's code, and it is not to be lowered.
     # The tooling under tools/ is judged on correctness and tests, not on prose (facts.code_changed is about the application).
-    "readability_target": 2.7,  # expected readability on 0..3 below → request_changes when the application's code changed
+    # Readability is not scored: across eight runs on application code the judge withheld its top level for the
+    # subject, not the craft, naming no limit, so the score could not be acted on (harness/guides/pr-review.md).
     "clean_target": 2.7,  # expected clean_code on 0..3 below → request_changes when the application's code changed
     "purpose_approve": 0.50,  # single_purpose >=
     "signatures_approve": 0.50,  # lean_signatures >=
@@ -51,14 +52,6 @@ _CORRECTNESS_FIX = "walk the new branches with empty input, None, boundaries and
 
 # What answers each "what limits it most" label in code. An unanswered label falls back to the whole
 # list, so the advice still names a code change.
-_READABILITY_FIXES = {
-    "names": "rename what the judge could not follow until each name says what the thing is",
-    "nesting": "flatten the nesting with early returns so the happy path reads straight down",
-    "length": _SPLIT_FIX,
-    "mixed_levels": "keep one level of abstraction per function: pull the low-level steps out under their own names",
-    "magic_values": "name every literal and replace each behaviour flag with two functions",
-    "cleverness": "unfold the clever one-liners into plain statements",
-}
 _CLEAN_FIXES = {
     "duplication": "extract the logic written twice into one function",
     "dead_code": "delete the unused code, parameters and branches",
@@ -115,8 +108,8 @@ def _choice(answers: dict[str, Any], key: str) -> tuple[str, float]:
 
 def _limit_fix(answers: dict[str, Any], key: str, fixes: dict[str, str]) -> str:
     """The fix for the judge's most probable *actionable* limit label. ``none`` wins the choice easily under a
-    short score (PR #9: none at 0.40 beside a 2.08 readability), and none is not a fix; the runner-up in the
-    judge's own probabilities is. Every fix is listed when it gave no actionable label at all."""
+    short score (PR #9: none at 0.40 beside a 2.08), and none is not a fix; the runner-up in the judge's own
+    probabilities is. Every fix is listed when it gave no actionable label at all."""
     a = answers.get(key) or {}
     probs = a.get("probabilities") or {}
     actionable = {k: float(p) for k, p in probs.items() if k in fixes and isinstance(p, (int, float))}
@@ -145,8 +138,6 @@ class _Judgment:
     correctness: float
     clean: float
     clean_fix: str
-    readability: float
-    readability_fix: str
     purpose: float
     signatures: float
     blast: float
@@ -169,8 +160,6 @@ class _Judgment:
             correctness=_score(answers, "correctness", 4),
             clean=_score(answers, "clean_code", 4),
             clean_fix=_limit_fix(answers, "clean_code_limit", _CLEAN_FIXES),
-            readability=_score(answers, "readability", 4),
-            readability_fix=_limit_fix(answers, "readability_limit", _READABILITY_FIXES),
             purpose=_noul(answers, "single_purpose", 1.0),
             signatures=_noul(answers, "lean_signatures", 1.0),
             blast=_score(answers, "blast_radius", 3),
@@ -193,11 +182,8 @@ def _start_with(facts: dict[str, Any], limit: str = "lines") -> str:
 
 
 def _craft_shortfalls(j: _Judgment) -> list[tuple[str, float, float, str, str]]:
-    """The two craft scores below their target, as ``(name, score, target, what 3 means, fix)``."""
-    rubrics = [
-        ("readability", j.readability, T["readability_target"], "3 reads like prose", j.readability_fix),
-        ("clean code", j.clean, T["clean_target"], "3 is exemplary", j.clean_fix),
-    ]
+    """The craft score below its target, as ``(name, score, target, what 3 means, fix)``; empty when on target."""
+    rubrics = [("clean code", j.clean, T["clean_target"], "3 is exemplary", j.clean_fix)]
     return [r for r in rubrics if r[1] < r[2]]
 
 
@@ -398,7 +384,7 @@ def _shape_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
 
 
 def _craft_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
-    """Readability and clean code below their target send the agent back, when the application's code changed
+    """Clean code below its target sends the agent back, when the application's code changed
     (``facts.code_changed``; the tooling is judged on correctness and tests, not on prose). The target is
     deliberately above "good enough": the advice names what the judge says limits the score, and the
     functions the AST found over the limits, so the agent knows where to start."""
@@ -463,7 +449,7 @@ def _approval(j: _Judgment, facts: dict[str, Any]) -> tuple[str, list[str]]:
         (j.signatures >= T["signatures_approve"], f"signatures may be wide p={j.signatures:.2f}"),
     ]
     if all(met for met, _ in bars):
-        return "approve", [f"p(safe)={j.safe:.2f} p(human)={j.human:.2f} clean={j.clean:.2f}/3 readable={j.readability:.2f}/3"]
+        return "approve", [f"p(safe)={j.safe:.2f} p(human)={j.human:.2f} clean={j.clean:.2f}/3"]
     notes = [f"p(safe)={j.safe:.2f}", f"p(human)={j.human:.2f}"] + [note for met, note in bars if not met and note]
     return "comment", notes
 
