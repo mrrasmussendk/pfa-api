@@ -96,7 +96,7 @@ def test_read_contract_file_classified_contract_with_slice(repo: TempRepo) -> No
 # 11
 def test_read_outside_slices_dir_classified_outside(repo: TempRepo) -> None:
     repo.write_sample_map()
-    repo.hook(ev("s1", "Read", "docs/rules/EIT001.md"))
+    repo.hook(ev("s1", "Read", "harness/rules/EIT001.md"))
     assert '"kind": "outside"' in repo.telemetry
 
 

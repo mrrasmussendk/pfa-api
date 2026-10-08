@@ -1,0 +1,21 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Arial, sans-serif", "fontSize": "14px", "lineColor": "#64748b", "edgeLabelBackground": "#ffffff", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1"}, "htmlLabels": false, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 30, "rankSpacing": 35, "padding": 12, "wrappingWidth": 260}}}%%
+flowchart TB
+    accTitle: PR review: inputs, judgment, policy and outputs
+    diff["PR diff<br/>base...HEAD"]:::input
+    map["Slice map<br/>.heimdall/map.json"]:::input
+    task["Task<br/>PR title and body"]:::input
+    state["Heimdall builds bounded state<br/>Diff, architecture and computed facts"]:::process
+    jev["Jev API<br/>Answers typed review questions"]:::process
+    policy["Policy in code<br/>Applies thresholds and gates"]:::decision
+    verdict["Outcome<br/>approve / comment<br/>request_changes / escalate"]:::output
+    reports["Review artifacts<br/>JSON, Markdown and telemetry"]:::output
+    comment["Workflow updates the PR comment<br/>and check status"]:::output
+    diff --> state
+    map --> state
+    task --> state
+    state --> jev --> policy --> verdict
+    verdict --> reports --> comment
+    classDef input fill:#eff6ff,stroke:#2563eb,color:#172554
+    classDef process fill:#f0fdfa,stroke:#0f766e,color:#134e4a
+    classDef decision fill:#fffbeb,stroke:#b45309,color:#78350f
+    classDef output fill:#f0fdf4,stroke:#15803d,color:#14532d
