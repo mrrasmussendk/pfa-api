@@ -194,6 +194,8 @@ Everything Heimdall knows comes from `.heimdall/map.json`, and everything it wri
 
 `.claude/settings.json` registers `python -m heimdall hook` as a Claude Code `PostToolUse` hook for `Read`, `Grep`, `Glob`, `Edit`, `Write` and `MultiEdit`. Claude Code runs it as a fresh process after every one of those calls. The hook loads the map, runs every sensor over the event, appends findings as JSON lines to `.heimdall/telemetry.jsonl`, and exits.
 
+The same file registers `.claude/hooks/finish.py` as a `Stop` hook: when the agent is about to end its turn and the tree differs from `origin/main`, it runs `pytest` and then `heimdall review --base origin/main`. A red suite or a `request_changes` verdict exits 2 with the output on stderr, which Claude Code feeds back to the agent and refuses the stop; `escalate` and a review that cannot run (no `TYPESAFE_API_KEY`) become a message to the user, and the turn ends. `stop_hook_active` on the event exits 0 so a block never loops. Because `--base` diffs `origin/main...HEAD`, only committed work is judged.
+
 | Sensor | Fires on | What it records |
 |---|---|---|
 | `boundary_reads` | Read, Grep, Glob of a `.py`, `.pyi`, `.md` or `feature.json` | The path's class: `kernel`, `app`, `shared:<pkg>`, `slice:<name>` (the feature's folder or its route module), `contract:<name>`, or `outside`. Pure observation. |
