@@ -3,11 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic.json_schema import JsonDict, JsonValue
 
 from pfa.api.problems import MODEL_BUSY, Problem, domain_rejections, problem_response
-from pfa.api.validation import StrictRequest, check_total_chars, text
+from pfa.api.validation import StrictRequest, check_total_chars, text, with_example
 from pfa.features.embeddings.contract import EmbedPassages, EmbedQuery, EngineBusy, RankCandidates
 from pfa.kernel import Message, Result
 
@@ -49,6 +49,8 @@ _SIMILARITY_OUT: JsonDict = {
     ],
 }
 _VECTOR = "Unit-normalised vector of `dimensions` floats (1024 for the default model); the example shows the first four"
+_CHUNK_INDEX = "Position of this chunk within its source text, from 0"
+_CHUNK_COUNT = "How many chunks the source text became; 1 when it fit the model's window"
 
 
 def _busy(e: EngineBusy) -> Problem:
@@ -79,13 +81,13 @@ def _dispatch(request: Request, message: Message) -> Result[Any]:
 
 
 class QuestionRequest(StrictRequest):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"question": _QUESTION}]})
+    model_config = with_example({"question": _QUESTION})
 
     question: text(MAX_QUESTION_CHARS) = Field(description="Natural-language question, any of the model's 100+ languages")  # type: ignore[valid-type]
 
 
 class EmbeddingOut(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [_QUERY_OUT]})
+    model_config = with_example(_QUERY_OUT)
 
     model: str = Field(description="The model that embedded")
     dimensions: int = Field(description="Length of `embedding`")
@@ -93,7 +95,7 @@ class EmbeddingOut(BaseModel):
 
 
 class PassagesRequest(StrictRequest):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"texts": _PASSAGES}]})
+    model_config = with_example({"texts": _PASSAGES})
 
     texts: list[text(MAX_TEXT_CHARS)] = Field(  # type: ignore[valid-type]
         min_length=1, max_length=MAX_TEXTS, description="Documents; long ones are chunked on sentence boundaries"
@@ -107,14 +109,14 @@ class PassagesRequest(StrictRequest):
 
 class PassageEmbeddingOut(BaseModel):
     source_index: int = Field(description="Index in `texts` of the document this chunk came from")
-    chunk_index: int = Field(description="Position of this chunk within its document, from 0")
-    chunk_count: int = Field(description="How many chunks the document became; 1 when it fit the model's window")
+    chunk_index: int = Field(description=_CHUNK_INDEX)
+    chunk_count: int = Field(description=_CHUNK_COUNT)
     text: str = Field(description="The chunk that was embedded")
     embedding: list[float] = Field(description=_VECTOR)
 
 
 class PassagesOut(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [_PASSAGES_OUT]})
+    model_config = with_example(_PASSAGES_OUT)
 
     model: str = Field(description="The model that embedded")
     dimensions: int = Field(description="Length of every `embedding`")
@@ -122,7 +124,7 @@ class PassagesOut(BaseModel):
 
 
 class SimilarityRequest(StrictRequest):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"question": _QUESTION, "candidates": _PASSAGES}]})
+    model_config = with_example({"question": _QUESTION, "candidates": _PASSAGES})
 
     question: text(MAX_QUESTION_CHARS) = Field(description="Natural-language question, any of the model's 100+ languages")  # type: ignore[valid-type]
     candidates: list[text(MAX_TEXT_CHARS)] = Field(  # type: ignore[valid-type]
@@ -144,12 +146,12 @@ class MatchOut(BaseModel):
             "so compare within one response rather than against a fixed threshold"
         )
     )
-    chunk_index: int = Field(description="Position of `text` within its candidate, from 0")
-    chunk_count: int = Field(description="How many chunks the candidate became; 1 when it fit the model's window")
+    chunk_index: int = Field(description=_CHUNK_INDEX)
+    chunk_count: int = Field(description=_CHUNK_COUNT)
 
 
 class SimilarityOut(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [_SIMILARITY_OUT]})
+    model_config = with_example(_SIMILARITY_OUT)
 
     model: str = Field(description="The model that scored")
     matches: list[MatchOut] = Field(description="Every candidate, best first")

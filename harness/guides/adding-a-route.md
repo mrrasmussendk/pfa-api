@@ -26,10 +26,10 @@ A route never does work itself. It converts the HTTP request into a **message** 
 ```python
 # src/pfa/api/routes/<feature>.py
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from pfa.api.problems import Problem, domain_rejections  # RFC 9457 errors, and how a route documents its own
-from pfa.api.validation import StrictRequest, text       # request hygiene: unknown fields, bounds, control characters
+from pfa.api.validation import StrictRequest, text, with_example   # request hygiene, and the one example /docs shows
 from pfa.features.<feature>.contract import <Message>    # the feature's contract: the message to dispatch — nothing else
 
 TAG = {"name": "<feature>", "description": "..."}             # the group's blurb in /docs; listed in routes/__init__.py
@@ -37,13 +37,13 @@ router = APIRouter(prefix="/<feature>", tags=["<feature>"])   # exactly one rout
 
 
 class <Verb><Noun>Request(StrictRequest):   # unknown fields are a 422; models never appear in a feature (EIT006)
-    model_config = ConfigDict(json_schema_extra={"examples": [{"<field>": "..."}]})   # what /docs offers under Try it out
+    model_config = with_example({"<field>": "..."})   # what /docs offers under Try it out
 
     <field>: text(MAX_CHARS) = Field(description="...")   # length-bounded, no control characters
 
 
 class <Noun>Out(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [{...}]})   # a real response, captured once
+    model_config = with_example({...})   # a real response, captured once
 
     ...
 
@@ -70,7 +70,7 @@ The rules this encodes:
 - ✅ **Convert at the edge.** Pydantic models are the HTTP representation and stay in `pfa/api/routes/`. Messages and result types are frozen dataclasses from `contract/`; tuples in, lists out. The route is the only place that knows both.
 - ✅ **Status codes are decided here, not in the handler.** `Result.ok=False` maps to `Problem.domain_rejection(result.error)`: a `422` RFC 9457 problem document with the handler's reason as `detail`. A missing entity would be `Problem(404, ...)`. Request-body validation failures are FastAPI's own `422`, converted to the same shape. The handler never raises for domain reasons; the route never raises `HTTPException` (EIT005). An **infrastructure** failure the feature cannot express as a `Result` (a saturated model) is a plain exception declared in the feature's `contract/` — `EngineBusy` in embeddings — that the route catches and maps to a `Problem`. See [Returning errors](returning-errors.md).
 - ✅ **`response_model` is always set.** It is the contract of the route for OpenAPI consumers, the same way `contract/` is the contract of the feature for code consumers.
-- ✅ **The document is part of the route.** `summary=` says what the operation does in one line, every field has a `description`, every request and response model carries one real example in its `model_config` (what `/docs` offers under *Try it out*; capture it from a real exchange, do not invent numbers), and `responses={422: domain_rejections(...)}` names each reason the handler may reject with. The module's `TAG` describes the group and is listed in `TAGS` in `routes/__init__.py`. `tests/api/test_openapi.py` validates every example against its model and every error example against the wire. See [Returning errors](returning-errors.md) for documenting any other problem a route raises.
+- ✅ **The document is part of the route.** `summary=` says what the operation does in one line, every field has a `description`, every request and response model carries one real example as `model_config = with_example(...)` (what `/docs` offers under *Try it out*; capture it from a real exchange, do not invent numbers), and `responses={422: domain_rejections(...)}` names each reason the handler may reject with. The module's `TAG` describes the group and is listed in `TAGS` in `routes/__init__.py`. `tests/api/test_openapi.py` validates every example against its model and every error example against the wire. See [Returning errors](returning-errors.md) for documenting any other problem a route raises.
 
 ## Case A — worked example: `POST /chunking/count`
 
@@ -79,13 +79,13 @@ Say the API should tell a caller how many model tokens a text costs. The chunkin
 ```python
 # src/pfa/api/routes/chunking.py  (add to the existing file)
 class CountRequest(StrictRequest):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"text": "Its contract is the only door."}]})
+    model_config = with_example({"text": "Its contract is the only door."})
 
     text: Text = Field(description="The text to count")  # ``Text`` is the module's ``text(MAX_TEXT_CHARS)``
 
 
 class CountOut(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"tokens": 8}]})
+    model_config = with_example({"tokens": 8})
 
     tokens: int = Field(description="Model tokens, counted with the model's own tokenizer")
 

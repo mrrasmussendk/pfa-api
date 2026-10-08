@@ -7,9 +7,10 @@ loop that never finishes loading."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 from pfa.api.problems import NOT_READY, Problem, problem_response
+from pfa.api.validation import with_example
 
 TAG = {
     "name": "service",
@@ -22,15 +23,13 @@ router = APIRouter(tags=["service"])
 
 
 class HealthOut(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"status": "ok"}]})
+    model_config = with_example({"status": "ok"})
 
     status: str = Field(description="Always `ok`: the process answers")
 
 
 class ReadyOut(BaseModel):
-    model_config = ConfigDict(
-        json_schema_extra={"examples": [{"status": "ready", "components": {"tokenizer": True, "embedding_model": True}}]}
-    )
+    model_config = with_example({"status": "ready", "components": {"tokenizer": True, "embedding_model": True}})
 
     status: str = Field(description="`ready` once every component is loaded")
     components: dict[str, bool] = Field(description="Each heavy component and whether it is in memory")

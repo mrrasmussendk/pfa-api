@@ -28,6 +28,14 @@ def _operations(spec: Spec) -> list[tuple[str, Spec]]:
     return [(path, operation) for path, operations in spec["paths"].items() for operation in operations.values()]
 
 
+def _operations_with_a_body(spec: Spec) -> list[tuple[str, Spec]]:
+    return [(path, operation) for path, operation in _operations(spec) if "requestBody" in operation]
+
+
+def _operations_under(spec: Spec, prefix: str) -> list[tuple[str, Spec]]:
+    return [(path, operation) for path, operation in _operations(spec) if path.startswith(prefix)]
+
+
 def _responses(spec: Spec, operation: str) -> Spec:
     """The responses of ``"POST /chunking/split"``."""
     method, path = operation.split(" ")
@@ -103,9 +111,7 @@ def test_request_models_still_reject_unknown_fields_with_an_example_configured(s
 
 def test_documented_validation_example_is_what_the_wire_sends(client: TestClient, spec: Spec) -> None:
     """The 422 example (an empty body) is rendered by the code that answers one."""
-    for path, operation in _operations(spec):
-        if "requestBody" not in operation:
-            continue
+    for path, operation in _operations_with_a_body(spec):
         example = _examples(operation["responses"]["422"])["validation_error"]
         actual = client.post(path, json={}).json()
         assert example["trace_id"] == EXAMPLE_TRACE_ID
@@ -122,9 +128,7 @@ def test_documented_domain_rejection_is_what_the_wire_sends(client: TestClient, 
 
 
 def test_every_embeddings_route_documents_the_busy_response(spec: Spec) -> None:
-    for path, operation in _operations(spec):
-        if not path.startswith("/embeddings/"):
-            continue
+    for path, operation in _operations_under(spec, "/embeddings/"):
         busy = operation["responses"]["503"]
         assert list(busy["headers"]) == ["Retry-After"], path
         assert list(busy["content"]) == [PROBLEM_MEDIA_TYPE], path

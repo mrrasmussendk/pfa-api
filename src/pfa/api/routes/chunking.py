@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 from pydantic.json_schema import JsonDict
 
 from pfa.api.problems import Problem, domain_rejections
-from pfa.api.validation import StrictRequest, text
+from pfa.api.validation import StrictRequest, text, with_example
 from pfa.features.chunking.contract import SplitText
 
 TAG = {
@@ -40,7 +40,7 @@ Text = text(MAX_TEXT_CHARS)  # bound outside the model: inside it, ``text`` is t
 
 
 class SplitRequest(StrictRequest):
-    model_config = ConfigDict(json_schema_extra={"examples": [{"text": _TEXT, "budget": 12}]})
+    model_config = with_example({"text": _TEXT, "budget": 12})
 
     text: Text = Field(description="The text to split; paragraph and sentence boundaries are the preferred cut points")  # type: ignore[valid-type]
     budget: int = Field(
@@ -49,7 +49,7 @@ class SplitRequest(StrictRequest):
 
 
 class SplitOut(BaseModel):
-    model_config = ConfigDict(json_schema_extra={"examples": [_SPLIT_OUT]})
+    model_config = with_example(_SPLIT_OUT)
 
     tokenizer: str = Field(description="The tokenizer that counted: the embedding model's own")
     budget: int = Field(description="The budget the chunks were cut to")
