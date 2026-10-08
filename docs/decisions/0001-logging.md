@@ -1,6 +1,6 @@
 # ADR 0001 — Logging follows RFC 5424, RFC 3339 and W3C Trace Context
 
-**Status:** proposed · **Owner:** Marc Rasmussen · **Date:** 2026-10-08 · **Scope:** `src/pfa/api`, `src/pfa/features/embeddings/internal/e5_engine.py`, `docs/service.md`
+**Status:** accepted and implemented 2026-10-08 (see *Implementation notes*) · **Owner:** Marc Rasmussen · **Date:** 2026-10-08 · **Scope:** `src/pfa/api`, `src/pfa/features/embeddings/internal/e5_engine.py`, `docs/service.md`
 
 Errors already follow a standard: every error response is an RFC 9457 problem document, so a client parses one shape. Logging should be held to the same bar. This decision names the standards a log record follows, maps the service onto them, and lays out the lines, the tests and the rollout.
 
@@ -63,16 +63,16 @@ Values are escaped as the RFC says (`"`, `\` and `]` backslash-escaped); the for
 
 | Piece | Module | Why there |
 |---|---|---|
-| Configuration, the RFC 5424 and JSON formatters, the trace filter | `src/pfa/api/logging.py` (new) | The entry point owns process concerns. May import Starlette. |
-| Trace-context middleware and the request line | `src/pfa/api/logging.py` | ASGI middleware is HTTP; it belongs in `pfa/api` (EIT006). |
+| Configuration, the RFC 5424 and JSON formatters, the trace filter | `src/pfa/api/logs.py` (new) | The entry point owns process concerns. May import Starlette. |
+| Trace-context middleware and the request line | `src/pfa/api/logs.py` | ASGI middleware is HTTP; it belongs in `pfa/api` (EIT006). |
 | Inference and load lines | `src/pfa/features/embeddings/internal/e5_engine.py` | The engine knows the numbers. It uses `logging.getLogger` only — stdlib, framework-free, so the feature stays inside its walls. |
-| Error lines | `src/pfa/api/problems.py` (`_on_unhandled`), `src/pfa/api/routes/embeddings.py` (`_dispatch`) | Logged where the error is turned into a response. |
+| Error lines | `src/pfa/api/problems.py` (`_on_unhandled`); the busy line in the engine | Logged where the error is turned into a response; the engine already has the wait time, so the route adds no second line. |
 
 The trace id travels in a `contextvars.ContextVar` set by the middleware. A `logging.Filter` on the handler copies it onto every record. The engine never sees the middleware or the variable; its records get the id because the filter runs on the handler, in whichever thread the record was made. FastAPI runs sync routes on a worker thread through anyio, which copies the context into the thread. Verified on 2026-10-08 with a context variable set in middleware and read inside a sync route on the "AnyIO worker thread"; a test keeps it true.
 
 ### Configuration
 
-`configure_logging()` in `pfa/api/logging.py` is called once from `create_app()` and is idempotent, guarded like `install_problem_details`, so tests that build many apps configure once.
+`configure_logging()` in `pfa/api/logs.py` is called once from `create_app()` and is idempotent, guarded like `install_problem_details`, so tests that build many apps configure once.
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -189,6 +189,16 @@ Behaviour change for existing operators: uvicorn's access line disappears unless
 - **`BaseHTTPMiddleware`.** Simpler to write, but it buffers responses and breaks background tasks and streaming. Pure ASGI is thirty more lines once.
 - **`structlog` or `python-json-logger`.** One more dependency in the image and a second way to log next to the stdlib loggers uvicorn and sentence-transformers already use. The stdlib does this in about a hundred and fifty lines including the escaping.
 - **Log the request text at debug.** Tempting for debugging chunking; rejected outright, because a debug run in production would write customer documents to disk. Reproduce chunking from the `chars` count and the `/chunking/split` endpoint instead.
+
+## Implementation notes
+
+What the implementation settled against the proposal above:
+
+- The module is `pfa/api/logs.py`, not `logging.py`: a module named `logging` inside the package shadows the stdlib in every reader's head, even though absolute imports keep it working.
+- The `busy` line is logged once, by the engine (it has `wait_ms`); the route does not log a second line when it maps `EngineBusy` to `503`.
+- The trace-context middleware does not reset the context variable at the end of the request. Starlette's server-error layer sits *above* user middleware, so the 500 handler runs after the middleware returns; it needs the trace to put `trace_id` in the document and `traceparent` on the response. Each request runs in its own task, so nothing leaks.
+- The trace filter sits on the handler, so a record made on the worker thread carries the id. The test for the inference line is the proof.
+- The syslog parser in the tests is twelve lines: `PRI`, the six header fields, one SD-ELEMENT with unescaping, and the message. A receiver that parses RFC 5424 reads the same thing.
 
 ## Open questions
 

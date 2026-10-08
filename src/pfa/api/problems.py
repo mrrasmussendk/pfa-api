@@ -12,7 +12,10 @@ Four sources of errors are covered, so a client never has to parse two formats:
 - any other ``Problem`` a route raises (``Problem(409, "…", type=…, **extensions)``);
 - FastAPI's request validation failure (``RequestValidationError``) and its ``HTTPException``
   (404 for an unknown path, 405, anything a dependency raises);
-- an unhandled exception → 500 with no detail, so internals never leak.
+- an unhandled exception → 500 with no detail, so internals never leak (the traceback is logged).
+
+Every document carries ``trace_id`` — the W3C Trace Context id the log lines have — so a
+client can quote what the operator can grep (``docs/decisions/0001-logging.md``).
 
 ``install_problem_details(app)`` wires all of it and rewrites the OpenAPI document so error
 responses are documented as ``application/problem+json`` ``ProblemDetails``.
@@ -20,6 +23,7 @@ responses are documented as ``application/problem+json`` ``ProblemDetails``.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Mapping
 from http import HTTPStatus
 from typing import Any
@@ -31,6 +35,10 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import JsonDict
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from .trace import current_trace
+
+log = logging.getLogger("pfa.api.problems")
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
 ABOUT_BLANK = "about:blank"  # RFC 9457 §4.2.1: the type whose title is the HTTP status phrase
@@ -53,6 +61,7 @@ _EXAMPLE: JsonDict = {
     "status": 422,
     "detail": "empty question",
     "instance": "/embeddings/query",
+    "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
 }
 
 
@@ -67,6 +76,7 @@ class ProblemDetails(BaseModel):
     status: int = Field(ge=100, le=599, description="HTTP status code of this response")
     detail: str | None = Field(default=None, description="Human-readable explanation of this occurrence")
     instance: str | None = Field(default=None, description="URI reference identifying this occurrence (the request path)")
+    trace_id: str | None = Field(default=None, description="W3C Trace Context trace id of the request; quote it when reporting")
 
 
 class ProblemResponse(JSONResponse):
@@ -113,7 +123,7 @@ class Problem(Exception):
         """A handler said the request did not make sense (``Result.ok`` is false): 422."""
         return cls(422, detail, type=DOMAIN_REJECTION, title="Request rejected")
 
-    def to_details(self, instance: str | None) -> ProblemDetails:
+    def to_details(self, instance: str | None, trace_id: str | None = None) -> ProblemDetails:
         """The document; ``instance`` is the fallback (the request path) if the raiser set none."""
         return ProblemDetails(
             type=self.type,
@@ -121,14 +131,16 @@ class Problem(Exception):
             status=self.status,
             detail=self.detail,
             instance=self.instance or instance,
+            trace_id=trace_id,
             **self.extensions,
         )
 
-    def to_body(self, instance: str | None) -> dict[str, Any]:
-        """The JSON body: RFC members that are ``None`` are omitted (they are optional);
-        extension members are passed through exactly as given, ``None`` included."""
-        details = self.to_details(instance)
-        omit = {name for name in ("detail", "instance") if getattr(details, name) is None}
+    def to_body(self, instance: str | None, trace_id: str | None = None) -> dict[str, Any]:
+        """The JSON body: RFC members that are ``None`` are omitted (they are optional), as is
+        ``trace_id`` outside a request; extension members are passed through exactly as given,
+        ``None`` included."""
+        details = self.to_details(instance, trace_id)
+        omit = {name for name in ("detail", "instance", "trace_id") if getattr(details, name) is None}
         return details.model_dump(exclude=omit)
 
 
@@ -140,9 +152,11 @@ def _phrase(status: int) -> str:
 
 
 def _respond(request: Request, problem: Problem) -> Response:
+    trace = current_trace.get()
     if problem.status in _BODILESS:
         return Response(status_code=problem.status, headers=problem.headers)
-    return ProblemResponse(problem.to_body(request.url.path), status_code=problem.status, headers=problem.headers)
+    body = problem.to_body(request.url.path, trace.trace_id if trace else None)
+    return ProblemResponse(body, status_code=problem.status, headers=problem.headers)
 
 
 # ---------------------------------------------------------------- exception handlers
@@ -182,8 +196,13 @@ async def _on_validation_error(request: Request, exc: Exception) -> Response:
 
 
 async def _on_unhandled(request: Request, exc: Exception) -> Response:
-    """A bug. No ``detail``: the traceback belongs in the server log, not on the wire."""
-    return _respond(request, Problem(500))
+    """A bug. No ``detail``: the traceback belongs in the server log, not on the wire. This
+    handler runs above the trace middleware (Starlette's server-error layer), so it adds the
+    ``traceparent`` header itself; the trace id is still in the context."""
+    log.error("unhandled error", exc_info=exc, extra={"msgid": "error", "method": request.method, "path": request.url.path})
+    trace = current_trace.get()
+    headers = {"traceparent": trace.traceparent} if trace else None
+    return _respond(request, Problem(500, headers=headers))
 
 
 # ---------------------------------------------------------------- installation
