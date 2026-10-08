@@ -39,9 +39,10 @@ def run(args: list[str], stdin: TextIO, stdout: TextIO, stderr: TextIO, root: st
 
         return drift(stdout, stderr, root)
     if cmd == "review":
+        from .commands.review import Streams
         from .commands.review import run as review
 
-        return review(rest, stdin, stdout, stderr, root)
+        return review(rest, Streams(stdin, stdout, stderr), root)
     stderr.write(USAGE + "\n")
     return 2
 

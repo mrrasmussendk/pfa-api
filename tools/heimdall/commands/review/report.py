@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from .policy import Verdict
+from .state import shape_line
 
 _BADGE = {"approve": "✅", "comment": "💬", "request_changes": "🛑", "escalate": "🙋"}
 
@@ -48,6 +49,9 @@ def render_table(v: Verdict, qs: dict[str, dict[str, Any]], facts: dict[str, Any
     violations = (facts or {}).get("wall_violations") or []
     if violations:
         rows += [f"  {violation_line(x)}" + (f"  fix: {x['fix']}" if x.get("fix") else "") for x in violations] + [""]
+    shape = (facts or {}).get("function_shape") or []
+    if shape:
+        rows += [f"  over the limits: {shape_line(x)}" for x in shape] + [""]
     rows.append("question".ljust(28) + "answer".ljust(44) + "probability")
     for key in qs:
         a = v.answers.get(key)
@@ -83,6 +87,25 @@ def _contract_label(name: str, d: dict[str, Any]) -> str:
     return f"{name} (fan-in {d['fan_in']}" + (", frozen)" if d["frozen"] else ")")
 
 
+def _told_the_judge(facts: dict[str, Any]) -> list[str]:
+    """The facts, for whoever wants to see what the judge was given."""
+    lines = [
+        f"- files: {facts['files_changed']} (+{facts['lines_added']} / −{facts['lines_removed']})",
+        f"- slices touched: {', '.join(facts['slices_touched']) or '(none)'}"
+        + (" — **cross-slice**" if facts["cross_slice_change"] else ""),
+        "- contracts touched: " + (", ".join(_contract_label(k, d) for k, d in facts["contracts_touched"].items()) or "(none)"),
+        f"- routes changed: {'yes' if facts['routes_changed'] else 'no'} · tests changed: {len(facts['tests_changed'])} · docs changed: {'yes' if facts['docs_changed'] else 'no'}",
+    ]
+    shape = facts.get("function_shape") or []
+    if shape:
+        limits = facts.get("function_limits") or {}
+        lines.append(f"- changed functions over {limits.get('lines', '?')} lines or {limits.get('params', '?')} parameters:")
+        lines += [f"  - `{shape_line(v)}`" for v in shape]
+    if facts["files_truncated"]:
+        lines.append(f"- truncated for the judge: {', '.join(facts['files_truncated'])}")
+    return lines
+
+
 def render_markdown(v: Verdict, state: dict[str, Any], qs: dict[str, dict[str, Any]]) -> str:
     facts = state["facts"]
     lines = [
@@ -100,25 +123,9 @@ def render_markdown(v: Verdict, state: dict[str, Any], qs: dict[str, dict[str, A
         if isinstance(a, dict):
             ans, prob = _fmt_answer(key, a, qs)
             lines.append(f"| `{key}` | {ans} | {prob} |")
-    lines += [
-        "",
-        "<details><summary>What Heimdall told the judge</summary>",
-        "",
-        f"- files: {facts['files_changed']} (+{facts['lines_added']} / −{facts['lines_removed']})",
-        f"- slices touched: {', '.join(facts['slices_touched']) or '(none)'}"
-        + (" — **cross-slice**" if facts["cross_slice_change"] else ""),
-        "- contracts touched: " + (", ".join(_contract_label(k, d) for k, d in facts["contracts_touched"].items()) or "(none)"),
-        f"- routes changed: {'yes' if facts['routes_changed'] else 'no'} · tests changed: {len(facts['tests_changed'])} · docs changed: {'yes' if facts['docs_changed'] else 'no'}",
-    ]
-    if facts["files_truncated"]:
-        lines.append(f"- truncated for the judge: {', '.join(facts['files_truncated'])}")
-    lines += [
-        "",
-        "</details>",
-        "",
-        (
-            f"<sub>Jev `{v.model}` via `heimdall review` — typed judgments, policy in code. "
-            f"Probabilities are a policy input, not proof; `request changes` fails the check, `escalate` asks for a human.</sub>"
-        ),
-    ]
+    lines += ["", "<details><summary>What Heimdall told the judge</summary>", "", *_told_the_judge(facts), "", "</details>", ""]
+    lines.append(
+        f"<sub>Jev `{v.model}` via `heimdall review` — typed judgments, policy in code. "
+        f"Probabilities are a policy input, not proof; `request changes` fails the check, `escalate` asks for a human.</sub>"
+    )
     return "\n".join(lines) + "\n"

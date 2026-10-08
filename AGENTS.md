@@ -143,8 +143,8 @@ python -m pfa.api                    # run the service
 
 With the Claude Code hooks configured and `.heimdall/map.json` present, supported Read/Grep/Glob/Edit/Write events are classified against the map and logged to `.heimdall/telemetry.jsonl`. A feature's route module in `pfa/api/routes/` counts as the feature; everything else in `src/pfa/` outside the features is always in-bounds.
 
-- ⚠️ **Immediate feedback:** hook exit 2 flags edits to a second feature in one session or to a frozen high fan-in contract. Check the dependency boundary or migration plan before continuing.
+- ⚠️ **Immediate feedback:** hook exit 2 flags edits to a second feature in one session, to a frozen high fan-in contract, or that leave a function over the shape limit (40 lines or 5 parameters). Check the dependency boundary or migration plan, or split the function, before continuing; the shape feedback must be answered, not raised.
 - ✅ **After work:** use `heimdall drift` to inspect recorded reads. Reads are never interrupted; sustained out-of-bounds reads above 20% suggest the feature boundary needs investigation.
 - ❌ **Do not assume complete coverage:** shell-based reads are invisible to the hook, and a missing map disables observation. Eitri remains the enforcement check.
 
-Before you open a PR, `heimdall review --base origin/main --task "<what you set out to do>"` runs the same Jev judgment the PR check will: correctness, clean code, tests covering the change, scope, the walls, Problem Details on error paths. `request_changes` fails the PR check; `escalate` asks for a human. Fix what it names rather than arguing with the probability.
+Before you open a PR, `heimdall review --base origin/main --task "<what you set out to do>"` runs the same Jev judgment the PR check will: correctness, clean code (readability, single purpose, lean signatures, asked about the functions the hook already flagged), tests covering the change, scope, the walls, Problem Details on error paths. `request_changes` fails the PR check; `escalate` asks for a human. Fix what it names rather than arguing with the probability.

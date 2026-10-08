@@ -19,6 +19,7 @@ from heimdall.commands.review import (
     ReviewError,
     build_state,
     decide,
+    function_shape,
     parse_unified_diff,
     questions,
     render_markdown,
@@ -114,6 +115,15 @@ def _answers(**over: Any) -> dict[str, Any]:
             "probabilities": {"0": 0.0, "1": 0.1, "2": 0.7, "3": 0.2},
             "confidence": 0.7,
         },
+        "readability": {
+            "type": "score",
+            "score": 2.2,
+            "legend": {"0": "Hard to follow", "1": "Readable with effort", "2": "Readable", "3": "Reads like prose"},
+            "probabilities": {"0": 0.0, "1": 0.1, "2": 0.6, "3": 0.3},
+            "confidence": 0.7,
+        },
+        "single_purpose": {"type": "noul", "noul": 0.9},
+        "lean_signatures": {"type": "noul", "noul": 0.9},
         "blast_radius": {
             "type": "score",
             "score": 1.0,
@@ -146,7 +156,8 @@ def _transport(answers: dict[str, Any], seen: list[dict[str, Any]] | None = None
 
 def _run(repo: TempRepo, *args: str, transport=None, env: dict[str, str] | None = None, stdin: str = "") -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
-    code = review.run(list(args), io.StringIO(stdin), out, err, str(repo.root), transport=transport, env=env if env is not None else {})
+    streams = review.Streams(io.StringIO(stdin), out, err)
+    code = review.run(list(args), streams, str(repo.root), transport=transport, env=env if env is not None else {})
     return code, out.getvalue(), err.getvalue()
 
 
@@ -223,6 +234,7 @@ def test_questions_are_valid_system_one_requests() -> None:
         else:
             assert isinstance(q["criteria"], dict) and 1 < len(q["criteria"]) <= 255, key
     assert {"safe_to_merge", "needs_human_review", "has_security_concern", "clean_code", "correctness"} <= set(qs)
+    assert {"readability", "single_purpose", "lean_signatures"} <= set(qs)  # function size, parameters, single purpose, readability
 
 
 # ---------------------------------------------------------------- the policy
@@ -600,3 +612,107 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
         decide(_answers(), facts | {"wall_violations": []}, "jev-1", {}), {"facts": facts | {"wall_violations": []}}, questions()
     )
     assert "What went wrong" not in md and "What the judge wants" not in md
+
+
+# ---------------------------------------------------------------- function shape: facts for the judge, named in the advice
+
+_LONG = (
+    "def long_one():\n" + "\n".join(f"    x{i} = {i}" for i in range(44)) + "\n    return x0\n\n\ndef short_one(a, b):\n    return a + b\n"
+)
+
+
+def _shape_diff(path: str, new_line: int, text: str) -> str:
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -{new_line},1 +{new_line},2 @@\n {text}\n+    pass\n"
+
+
+def test_function_shape_names_only_the_changed_functions_over_the_limits(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    path = "src/pfa/features/kvad/internal/kvad_engine.py"
+    repo.write_file(path, _LONG)
+    m = MapModel.load(str(repo.root / ".heimdall" / "map.json"))
+    touched_long = function_shape(str(repo.root), parse_unified_diff(_shape_diff(path, 10, "x8 = 8")), m)
+    assert touched_long == [{"path": path, "line": 1, "name": "long_one", "lines": 46, "params": 0, "over": ["lines"]}]
+    assert function_shape(str(repo.root), parse_unified_diff(_shape_diff(path, 50, "return a + b")), m) == []
+    # tests, deleted files and files that are not on disk contribute nothing
+    repo.write_file("tests/api/test_long.py", _LONG)
+    assert function_shape(str(repo.root), parse_unified_diff(_shape_diff("tests/api/test_long.py", 10, "x8 = 8")), m) == []
+    gone = parse_unified_diff(_shape_diff("src/pfa/kernel/gone.py", 10, "x8 = 8"))
+    assert function_shape(str(repo.root), gone, m) == []
+    state = build_state(gone, m, None, None, touched_long)
+    assert state["facts"]["function_shape"] == touched_long and state["facts"]["function_limits"] == {"lines": 40, "params": 5}
+
+
+def _shape_facts(**over: Any) -> dict[str, Any]:
+    long_one = {
+        "path": "src/pfa/features/kvad/internal/kvad_engine.py",
+        "line": 1,
+        "name": "long_one",
+        "lines": 46,
+        "params": 0,
+        "over": ["lines"],
+    }
+    wide = {
+        "path": "src/pfa/features/kvad/internal/kvad_engine.py",
+        "line": 60,
+        "name": "wide",
+        "lines": 2,
+        "params": 7,
+        "over": ["params"],
+    }
+    return {"source_changed": True, "function_shape": [long_one, wide], "function_limits": {"lines": 40, "params": 5}, **over}
+
+
+def test_shape_facts_block_only_when_the_judge_agrees_and_then_name_the_function() -> None:
+    no = {"type": "noul", "noul": 0.2}
+    v = decide(_answers(single_purpose=no), _shape_facts(), "m", {})
+    assert v.outcome == "request_changes" and v.reasons == ["functions do more than one thing p(single)=0.20"]
+    assert "kvad_engine.py:1 long_one (46 lines, 0 params)" in v.advice[0] and "within 40 lines" in v.advice[0]
+    assert "wide (2 lines, 7 params)" not in v.advice[0]  # the line limit names long functions, not wide ones
+    v = decide(_answers(lean_signatures=no), _shape_facts(), "m", {})
+    assert v.outcome == "request_changes" and v.reasons == ["signatures too wide p(lean)=0.20"]
+    assert "kvad_engine.py:60 wide (2 lines, 7 params)" in v.advice[0] and "at most 5 parameters" in v.advice[0]
+    # the judge's No without a function named by the AST is a note, not a block: nothing to point at
+    v = decide(_answers(single_purpose=no), {"source_changed": True}, "m", {})
+    assert v.outcome == "comment" and "functions may not be single-purpose p=0.20" in v.reasons
+    # the AST's list without the judge's No is a fact in the comment, not a verdict: a flat table may stay whole
+    assert decide(_answers(), _shape_facts(), "m", {}).outcome == "approve"
+
+
+def test_readability_is_its_own_bar_and_names_where_to_start() -> None:
+    hard = {"type": "score", "score": 1.0, "confidence": 0.8}
+    v = decide(_answers(readability=hard), _shape_facts(), "m", {})
+    assert v.outcome == "comment" and "readability 1.00/3" in v.reasons
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, readability=hard), _shape_facts(), "m", {})
+    assert v.outcome == "request_changes"
+    assert "it rates readability only 1.00/3: rename what it could not follow" in v.advice[0]
+    assert "start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)" in v.advice[0]
+    label = {"type": "choice", "choice": "readability", "probabilities": {"readability": 0.9}, "confidence": 0.9}
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, biggest_risk=label), _shape_facts(), "m", {})
+    assert "it names readability as the one thing to check (0.90): rename what the judge could not follow" in v.advice[0]
+    assert "— start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one" in v.advice[0]
+
+
+def test_the_comment_and_the_table_list_the_functions_over_the_limits() -> None:
+    facts = {
+        "files_changed": 1,
+        "lines_added": 10,
+        "lines_removed": 0,
+        "slices_touched": ["kvad"],
+        "cross_slice_change": False,
+        "contracts_touched": {},
+        "routes_changed": False,
+        "source_changed": True,
+        "tests_changed": [],
+        "docs_changed": False,
+        "files_truncated": [],
+        "wall_violations": [],
+        **_shape_facts(),
+    }
+    v = decide(_answers(), facts, "jev-1", {})
+    md = render_markdown(v, {"facts": facts}, questions())
+    assert "- changed functions over 40 lines or 5 parameters:" in md
+    assert "  - `src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)`" in md
+    assert "| `readability` |" in md and "| `single_purpose` |" in md and "| `lean_signatures` |" in md
+    assert "over the limits: src/pfa/features/kvad/internal/kvad_engine.py:60 wide (2 lines, 7 params)" in render_table(
+        v, questions(), facts
+    )
