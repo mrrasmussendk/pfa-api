@@ -32,8 +32,9 @@ T = {
     "human_approve": 0.35,
     "security_approve": 0.20,
     "tests_approve": 0.50,
-    "readability_target": 2.5,  # expected readability on 0..3 below → request_changes when code changed; the agent goes back
-    "clean_target": 2.8,  # expected clean_code on 0..3 below → request_changes when code changed
+    # 2.7 of 3 is 90%: the floor the author set for the craft of changed code, and it is not to be lowered.
+    "readability_target": 2.7,  # expected readability on 0..3 below → request_changes when code changed; the agent goes back
+    "clean_target": 2.7,  # expected clean_code on 0..3 below → request_changes when code changed
     "purpose_approve": 0.50,  # single_purpose >=
     "signatures_approve": 0.50,  # lean_signatures >=
 }
