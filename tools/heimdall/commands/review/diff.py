@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from ...pathutil import norm
 from .base import ReviewError
 
-IGNORED = re.compile(r"(^|/)(\.heimdall/|.*\.egg-info/|.*\.lock$|.*\.min\.(js|css)$|.*\.(png|jpg|gif|ico|woff2?|pdf)$)")
+IGNORED = re.compile(r"(^|/)(\.heimdall/|.*\.egg-info/|.*\.lock$|.*\.min\.(js|css)$|.*\.(png|jpg|gif|ico|woff2?|pdf|svg)$)")
 _DIFF_GIT = re.compile(r"^diff --git a/(.+?) b/(.+)$")
 
 

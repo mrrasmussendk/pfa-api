@@ -33,9 +33,9 @@ Jev does not write review comments. It answers questions whose answers are **typ
 `heimdall review` builds **bounded state**: the facts Heimdall can compute are stated as facts, so Jev spends its judgment on what only judgment can decide.
 
 - **`task`** — the PR title and body (or `--task` locally).
-- **`architecture`** — from `.heimdall/map.json`: the kernel, shared packages, every slice's declared dependencies and contract fan-in, and the walls in one sentence each (EIT001–EIT005, frozen contracts, handlers never raise).
-- **`facts`** — slices touched, whether the change is cross-slice, contracts touched with fan-in and frozen flag, whether `internal/routes.py` changed, which tests changed, whether docs changed, which files were truncated.
-- **`files`** — one entry per changed file: path, status, its **area** (`slice:<name>`, `contract:<name>`, `kernel`, `shared:<pkg>`, `service`, `tests`, `tooling`, `ci`, `docs`), line counts and the hunks.
+- **`architecture`** — from `.heimdall/map.json`: the kernel, the app package, shared packages, every slice's declared dependencies and contract fan-in, and the walls in one sentence each (EIT001–EIT006, frozen contracts, handlers never raise).
+- **`facts`** — slices touched, whether the change is cross-slice, contracts touched with fan-in and frozen flag, whether a feature's route module (`pfa/api/routes/<feature>.py`) changed, which tests changed, whether docs changed, which files were truncated.
+- **`files`** — one entry per changed file: path, status, its **area** (`slice:<name>` — a slice's folder or its route module, `contract:<name>`, `kernel`, `app`, `shared:<pkg>`, `service`, `tests`, `tooling`, `ci`, `docs`), line counts and the hunks.
 
 Caps: 12 000 characters per file, 60 000 for the whole state; the rest is summarised as "N more diff lines not shown" and the file is listed under `files_truncated`. Lock files, minified assets, images and `.heimdall/` are never sent. Missing context produces confident wrong answers, so a truncated review is flagged in the comment.
 
@@ -65,16 +65,18 @@ Fixed, typed, greppable: `questions()` in `tools/heimdall/commands/review.py`.
 Thresholds live in `T` in `tools/heimdall/commands/review/policy.py`, not in the model. In order:
 
 0. **Facts first.** Eitri runs on the changed files before the judge is consulted; any error (`EIT001`–`EIT100`) lands in `facts.wall_violations` and is a `request_changes` on its own. The walls are decided by the import graph, never by a probability — a persuasive docstring cannot argue an import away.
-1. **Block** (`request_changes`): `has_security_concern ≥ 0.50`, `leaks_internals ≥ 0.5`, `safe_to_merge ≤ 0.35`, `respects_slice_walls ≤ 0.40`, `biggest_risk = architecture` with `p ≥ 0.80` (the judge's own top-risk label overrides a Yes on the walls), `correctness ≤ 1.25`, or routes changed and `errors_use_problem_details ≤ 0.4`.
-2. **Escalate**: `needs_human_review ≥ 0.60`, or `safe_to_merge` within 0.15 of 0.5.
+1. **Block** (`request_changes`): `has_security_concern ≥ 0.50`, `leaks_internals ≥ 0.5`, `safe_to_merge ≤ 0.35` when at least one doubt behind it has a code fix (tests, the error path, correctness, scope, placement), `respects_slice_walls ≤ 0.40`, `biggest_risk = architecture` with `p ≥ 0.80` (the judge's own top-risk label overrides a Yes on the walls — except on a wide refactor, see 2), `correctness ≤ 1.25`, or routes changed and `errors_use_problem_details ≤ 0.4`.
+2. **Escalate**: `needs_human_review ≥ 0.60`, `safe_to_merge` within 0.15 of 0.5, `safe_to_merge ≤ 0.35` when nothing the judge doubts is a code change (a human wanted, a wide blast radius, the restructure itself), or `biggest_risk = architecture` on a `refactor` with expected `blast_radius ≥ 1.5` and no Eitri finding — the judge is pointing at the restructure itself, which no import fix can answer; a person reviews the layout.
 3. **Approve**: `safe_to_merge ≥ 0.75`, `needs_human_review ≤ 0.35`, `has_security_concern ≤ 0.20`, `clean_code ≥ 1.5`, and (no source change or `tests_cover_change ≥ 0.50`).
 4. Otherwise **comment**.
 
-Every reason the policy records carries one sentence of advice. The PR comment opens with those sentences under **What went wrong** (or **What the judge wants** on escalate), lists Eitri's findings with the file, the line and the `**Fix:**` line from the rule's page under `harness/rules/`, and only then shows the probability table.
+The contract of the comment: **every `request_changes` names a code change that turns it green; a doubt no code change can answer never blocks — it requires a human.** Every reason the policy records carries advice that names its evidence and one next action: `not safe to merge` lists the answers that drive the doubt (a human wanted at 0.79, a wide blast radius, architecture named as the thing to check), never "see the other rows"; the architecture label says what Eitri already ruled out and what to look for instead; any other `biggest_risk` label (correctness, security, tests, readability, docs) is about the diff and always comes with its code path. The PR comment opens with those sentences under **What went wrong** (or **What the judge wants** on escalate), lists Eitri's findings with the file, the line and the `**Fix:**` line from the rule's page under `harness/rules/`, and only then shows the probability table.
 
 A probability is a policy input, not proof. Before letting `approve` bypass human review, measure these thresholds against your own merge history: `heimdall review --json` on past PRs, compare outcomes to what reviewers actually did, and move the numbers. Missing answers fall back to neutral values, which lands on `escalate`, never on `approve`.
 
 Two calibration points so far (2026-10-07), both the same `EIT001` import of another slice's `internal/`: written bluntly it scored `p(safe)=0.06`, `p(respects_slice_walls)=0.25`; dressed in a docstring selling it as a performance fast path it scored `p(safe)=0.30`, `p(respects_slice_walls)=0.62`, `clean_code` "Exemplary" — and still `biggest_risk = architecture` at `0.96`. The walls rule alone would have let the second one through. That is why Eitri's facts and the top-risk label now sit above it.
+
+A third point (2026-10-08), a 101-file move of the whole package layout with no Eitri finding: `p(respects_slice_walls)=0.93`, `change_kind=refactor` at 1.00, `blast_radius` wide at 1.99, and still `biggest_risk = architecture` at `0.98`. Here the label means "review the restructure", not "find the import" — the first comment sent the author hunting for a cross-slice import that did not exist. That is why the label escalates instead of blocking on a wide refactor.
 
 ## Running it locally
 

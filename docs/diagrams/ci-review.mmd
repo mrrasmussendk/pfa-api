@@ -2,7 +2,7 @@
 flowchart TB
     accTitle: PR review workflow outcomes
     pr["Non-draft pull request"]:::input
-    map["Generate current slice map"]:::process
+    map["Generate current feature map"]:::process
     key{"TYPESAFE_API_KEY available?"}:::decision
     skipped["Review skipped<br/>Comment explains why; check passes"]:::output
     run["Run heimdall review<br/>Save reports and update PR comment"]:::process

@@ -16,10 +16,12 @@ Requires **Python 3.10+**. Run these commands from the repository root, inside a
 
 ```bash
 python -m pip install -e ".[dev]" -e ./tools
-python -m pfa_api
+python -m pfa.api
 ```
 
 Open **[the interactive API docs](http://127.0.0.1:8000/docs)** to try a request. The OpenAPI schema is at `/openapi.json`.
+
+The service logs one RFC 5424 line per request and per inference to stdout, each carrying the W3C `traceparent` trace id that every response header and every error document also carry, so a reported `trace_id` finds its lines with `grep`. See [the log](docs/service.md#observability-the-log).
 
 The model loads on the first request and may download about **2.2 GB** of weights. To download them ahead of time:
 
@@ -94,7 +96,7 @@ This observation depends on the hooks: shell-based reads are invisible to them, 
 
 Its **EIT100 token budget** also limits how much code an agent must load to work on one slice:
 
-![Slice context budget](docs/diagrams/context-budget.svg)
+![Feature context budget](docs/diagrams/context-budget.svg)
 
 [Mermaid source](docs/diagrams/context-budget.mmd)
 
@@ -132,14 +134,14 @@ See [Development tooling](docs/tooling.md) for the rule table, budget calculatio
 
 ## Development
 
-The service is organized into **vertical slices**: each feature owns its public contract, implementation, and routes. Embeddings uses chunking through its contract. Shared primitives live in a small, framework-free kernel.
+`src/pfa/` is the application. Each feature under `src/pfa/features/` is a **vertical slice**: it owns its public contract and implementation and knows nothing of HTTP. `src/pfa/application.py` registers every feature on one bus, and `src/pfa/api/` is the entry point: one thin routes module per feature turns requests into the feature's messages. Embeddings uses chunking through its contract. Shared primitives live in a small, framework-free kernel.
 
 | Path | Responsibility |
 |---|---|
-| `src/pfa_api/` | App setup and composition root |
-| `src/slices/` | Features: chunking and embeddings |
-| `src/shared_kernel/` | Result, Bus, Query, and Command |
-| `src/http_common/` | HTTP problem details |
+| `src/pfa/application.py` | The application: every feature registered on one bus |
+| `src/pfa/features/` | Features: chunking and embeddings — messages in, `Result` out, no framework |
+| `src/pfa/kernel/` | Result, Bus, Query, and Command |
+| `src/pfa/api/` | The entry point: `create_app()`, one routes module per feature, problem details, request validation |
 | `tools/` | Development tooling; never deployed |
 | `tests/api/` | Service tests |
 | `tests/tooling/` | Architecture and tooling tests |
@@ -158,7 +160,7 @@ eitri check --root .
 
 The default tests use fake model components, so they do not download or load the embedding model.
 
-Read [AGENTS.md](AGENTS.md) before changing code. After adding slices or routes, changing slice dependencies, or changing Heimdall's shared packages, regenerate the maps with `heimdall map --root .`.
+Read [AGENTS.md](AGENTS.md) before changing code. After adding slices or routes, changing slice dependencies, or changing `[tool.heimdall]`, regenerate the maps with `heimdall map --root .`.
 
 ## Documentation
 

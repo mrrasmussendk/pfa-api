@@ -8,12 +8,15 @@ from pathlib import Path
 from typing import Any
 
 from ...model import MapModel
-from ...pathutil import is_contract_path, norm, shared_of, slice_of
+from ...pathutil import app_of, is_contract_path, is_kernel_path, is_route_path, norm, shared_of, slice_of
 from ...sensors.boundary_edits import FAN_IN_FREEZE
 from .diff import FileChange
 
 MAX_FILE_CHARS = 12_000  # per file; the rest is summarised as "+N/-M more lines"
 MAX_STATE_CHARS = 60_000  # all files together
+# The order the budget is spent in: the code the walls are about first, prose last. A wide diff
+# then truncates docs and tooling, never the slice the judge is asked about.
+_AREA_PRIORITY = ("slice:", "contract:", "kernel", "app", "service", "shared:", "tests", "tooling", "ci", "docs", "other")
 
 _FIX_LINE = re.compile(r"^\*\*Fix[^*]*:\*\*\s*(.+?)\s*$", re.MULTILINE)
 
@@ -25,11 +28,13 @@ def area_of(path: str, m: MapModel | None) -> str:
         s = slice_of(p, m)
         if s is not None:
             return f"contract:{s}" if is_contract_path(p) else f"slice:{s}"
-        if m.kernel and f"/{m.kernel}/" in f"/{p}":
+        if is_kernel_path(p, m):
             return "kernel"
         sh = shared_of(p, m)
         if sh is not None:
             return f"shared:{sh}"
+        if app_of(p, m) is not None:
+            return "app"
     if p.startswith("tests/"):
         return "tests"
     if p.startswith("tools/"):
@@ -41,6 +46,10 @@ def area_of(path: str, m: MapModel | None) -> str:
     if p.startswith("src/"):
         return "service"
     return "other"
+
+
+def _priority(area: str) -> int:
+    return next((i for i, prefix in enumerate(_AREA_PRIORITY) if area == prefix or area.startswith(prefix)), len(_AREA_PRIORITY))
 
 
 def _truncate(text: str, limit: int) -> tuple[str, bool]:
@@ -104,7 +113,8 @@ def wall_findings(cwd: str, files: list[FileChange]) -> list[dict[str, Any]]:
 
 
 def build_state(files: list[FileChange], m: MapModel | None, task: str | None, walls: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """The JSON object Jev judges."""
+    """The JSON object Jev judges. Files are listed source first (see ``_AREA_PRIORITY``), git order
+    within an area, and the character budget is spent in that order."""
     slices_touched: set[str] = set()
     contracts_touched: dict[str, int] = {}
     routes_changed = False
@@ -114,17 +124,17 @@ def build_state(files: list[FileChange], m: MapModel | None, task: str | None, w
     truncated: list[str] = []
     budget = MAX_STATE_CHARS
     entries: list[dict[str, Any]] = []
-    for f in files:
-        area = area_of(f.path, m)
+    classified = sorted(((area_of(f.path, m), f) for f in files), key=lambda pair: _priority(pair[0]))
+    for area, f in classified:
         if area.startswith(("slice:", "contract:")):
             name = area.split(":", 1)[1]
             slices_touched.add(name)
             source_changed = True
             if area.startswith("contract:"):
                 contracts_touched[name] = m.slices[name].fan_in if m and name in m.slices else 0
-            if norm(f.path).endswith("/internal/routes.py"):
+            if m is not None and is_route_path(f.path, m):
                 routes_changed = True
-        elif area in ("kernel", "service") or area.startswith("shared:"):
+        elif area in ("kernel", "app", "service") or area.startswith("shared:"):
             source_changed = True
         elif area == "tests":
             tests_touched.add(norm(f.path))
@@ -142,14 +152,18 @@ def build_state(files: list[FileChange], m: MapModel | None, task: str | None, w
     architecture: dict[str, Any] = {}
     if m is not None:
         architecture = {
-            "kernel": m.kernel,
+            "kernel": m.kernel_dir or m.kernel,
+            "application": m.app_dir,
+            "http_edge": m.routes_dir,
             "shared_packages": list(m.shared),
             "slices": {name: {"depends_on": info.depends_on, "contract_fan_in": info.fan_in} for name, info in sorted(m.slices.items())},
             "rules": [
-                "a slice imports another slice only through its contract/ package, never internal/",
+                "a slice imports another slice only through its contract/ package, never internal/ or module.py",
                 "contract/ modules import only the standard library, the kernel and their own contract — no FastAPI, no pydantic",
-                "importing slices.<x>.contract requires <x> declared in the slice's slice.json",
+                "importing another feature's contract requires that feature declared in feature.json",
                 "no dynamic imports, sys.path edits or wildcard imports inside slices",
+                "a slice (feature) imports nothing above itself: no HTTP framework, nothing from the application or its entry points",
+                "the application consumes a feature through its contract/; only the composition root (application.py) imports a feature's module.py; nothing imports internal/",
                 "errors leave as RFC 9457 problem documents raised through the shared Problem type, never HTTPException",
                 f"a contract with fan-in >= {FAN_IN_FREEZE} is frozen: additive changes only",
                 "handlers return Result and never raise for domain reasons; routes decide status codes",

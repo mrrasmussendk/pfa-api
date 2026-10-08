@@ -29,7 +29,7 @@ curl -X POST localhost:8000/embeddings/similarity -H "content-type: application/
 
 The service serves [`intfloat/multilingual-e5-large`](https://huggingface.co/intfloat/multilingual-e5-large), an **embedding** model: text in, a unit-normalised 1024-dimensional vector out, in 100+ languages. It does not answer questions. `POST /embeddings/query` turns a question into a *query* vector; rank your *passage* vectors against it (dot product = cosine, since both are normalised) to find what answers it. A Danish question ranks an English answer on meaning, not on shared words.
 
-e5 needs an instruction prefix per side — `query: ` for questions, `passage: ` for documents. Only `slices/embeddings/internal/e5_engine.py` knows that; callers choose the side by choosing the endpoint.
+e5 needs an instruction prefix per side — `query: ` for questions, `passage: ` for documents. Only `pfa/features/embeddings/internal/e5_engine.py` knows that; callers choose the side by choosing the endpoint.
 
 ```bash
 # 1. torch: install the CUDA build FIRST if you have an NVIDIA GPU, otherwise skip this line
@@ -80,7 +80,7 @@ Every error the API sends — a domain rejection, a validation failure, an unkno
 | `urn:pfa-api:problem:model-busy` | 503 | The inference gate did not open within `PFA_EMBED_QUEUE_TIMEOUT`. `Retry-After` header and `retry_after` member. |
 | `about:blank` | 404, 405, 500, … | Plain HTTP errors. A 500 carries **no `detail`**: the traceback goes to the server log, not the wire. |
 
-The machinery lives in `src/http_common/problems.py` and is installed once in `create_app()`. Inside a slice, a route raises `Problem.domain_rejection(result.error)` or `Problem(status, detail, type=…, **extensions)`; raising FastAPI's `HTTPException` in a slice fails `eitri check` (rule EIT005). The developer side of this is [guides/returning-errors.md](../harness/guides/returning-errors.md).
+The machinery lives in `src/pfa/api/problems.py` and is installed once in `create_app()`. A route (`src/pfa/api/routes/<feature>.py`) raises `Problem.domain_rejection(result.error)` or `Problem(status, detail, type=…, **extensions)`; raising FastAPI's `HTTPException` fails `eitri check` (rule EIT005), and features themselves never see HTTP at all (rule EIT006). The developer side of this is [guides/returning-errors.md](../harness/guides/returning-errors.md).
 
 ## Running in production
 
@@ -110,7 +110,11 @@ Torch inference is CPU- or GPU-bound and blocking. The slice routes are therefor
 | `PFA_WORKERS` | `1` | uvicorn workers. Each holds its own 2 GB model — **scale with replicas, not workers** |
 | `PFA_FORWARDED_ALLOW_IPS` | `127.0.0.1` | the reverse proxy whose `X-Forwarded-*` headers to trust |
 | `PFA_GRACEFUL_SHUTDOWN` | `30` | seconds to let in-flight encodes finish on SIGTERM |
-| `PFA_LOG_LEVEL` / `PFA_ACCESS_LOG` | `info` / `1` | uvicorn logging |
+| `PFA_LOG_LEVEL` | `info` | level for the service's and uvicorn's loggers |
+| `PFA_LOG_FORMAT` | `syslog` (`json` in the image) | `syslog`: one RFC 5424 line per record · `json`: one object per line, same fields |
+| `PFA_LOG_FACILITY` | `local0` | RFC 5424 facility in `PRI` |
+| `PFA_LOG_ENTERPRISE_NUMBER` | `32473` | IANA Private Enterprise Number in the structured-data id (`pfa@<PEN>`); 32473 is the documentation number until the registration arrives |
+| `PFA_ACCESS_LOG` | `0` | uvicorn's access log; off because the service's request line replaces it, `1` to compare |
 | `PFA_RELOAD` | off | `1` for auto-reload in development |
 
 ### Request validation
@@ -128,9 +132,38 @@ Every request body is validated at the edge before a handler sees it, and every 
 
 Whether the *content* makes sense — a whitespace-only question, an empty passage — is the handler's decision and comes back as a `domain-rejection` with the reason. There is no body-size limit at the server itself; put that in the reverse proxy in front of it.
 
+### Observability: the log
+
+Logging follows standards the same way errors do ([decision record](decisions/0001-logging.md)): the record is **RFC 5424** (severity, facility, header, structured data), timestamps are **RFC 3339** UTC with milliseconds, and the correlation id is the **W3C Trace Context** trace id. The service writes one record per line to stdout; the platform ships it.
+
+```
+<134>1 2026-10-08T14:02:03.117Z api-7c9d pfa-api 1 request [pfa@32473 trace="4bf92f3577b34da6a3ce929d0e0e4736" method="POST" path="/embeddings/passages" status="200" ms="412.5" client="10.0.0.5"] -
+<134>1 2026-10-08T14:02:03.116Z api-7c9d pfa-api 1 encode [pfa@32473 trace="4bf92f3577b34da6a3ce929d0e0e4736" side="passage" texts="12" chars="18402" wait_ms="0.1" encode_ms="388.0" device="cpu"] -
+<131>1 2026-10-08T14:02:07.900Z api-7c9d pfa-api 1 error [pfa@32473 trace="8b11e0f4a2c74d0b9e1f3a5c7d9e0b12" method="POST" path="/embeddings/query"] unhandled error
+Traceback (most recent call last):
+  ...
+```
+
+`PRI` is `facility × 8 + severity`; `<134>` is `local0` + info, `<131>` is err. `MSGID` names the kind of line:
+
+| `MSGID` | Severity | Fields | When |
+|---|---|---|---|
+| `request` | info (debug for `/health`, `/ready`; err for a `5xx`) | `method`, `path`, `status`, `ms`, `client` | every request, when the response is done |
+| `encode` | info | `side`, `texts`, `chars`, `wait_ms`, `encode_ms`, `device` | every inference; `wait_ms` is time queued on `PFA_EMBED_CONCURRENCY`, `encode_ms` time in the model |
+| `busy` | warning | `side`, `texts`, `wait_ms` | the gate did not open within `PFA_EMBED_QUEUE_TIMEOUT`; the route answers `503 model-busy` |
+| `load` | info | `model_id`, `device`, `max_seq_length`, `load_ms` | the one-time model load |
+| `warmup` | info / error | `load_ms`, each component's readiness | start-up warm-up finished or failed |
+| `error` | err | `method`, `path`; the traceback as the message | an unhandled exception; the client got a `500` with no detail |
+
+**Correlation.** Send `traceparent` (`00-<trace-id>-<parent-id>-<flags>`) and the service keeps your trace id and answers with its own span; send nothing and it starts a trace. Every response carries `traceparent`, `tracestate` passes through untouched, and every problem document carries `trace_id` — the value to quote in a bug report and to `grep` in the log. The id is on every line the request produced, including the inference line made on the worker thread.
+
+**Never the text.** Passages are up to 200 kB and may be personal data. The log carries sizes and counts (`chars`, `texts`), never a passage, a question, or a query string, at any level.
+
+With `PFA_LOG_FORMAT=json` (the image's default) the same record is one JSON object per line: `pri`, `severity`, `facility`, `timestamp`, `hostname`, `app`, `procid`, `msgid`, `logger`, `trace`, the fields, and `msg` (the traceback, or `null`). Numbers are numbers there and strings in the syslog line, as each format requires.
+
 ### The image
 
-`Dockerfile` is multi-stage: stage one builds the wheel from `src/`, stage two installs it on `python:3.12-slim` as a non-root user with `PFA_WARMUP=1`, `PFA_EMBED_CONCURRENCY=1` and `TOKENIZERS_PARALLELISM=false` set. `.dockerignore` is an allow-list, so a new top-level folder stays out until someone adds it on purpose. The Docker `HEALTHCHECK` is liveness (`/health`); point the orchestrator's readiness probe at `/ready`.
+`Dockerfile` is multi-stage: stage one builds the wheel from `src/`, stage two installs it on `python:3.12-slim` as a non-root user with `PFA_WARMUP=1`, `PFA_LOG_FORMAT=json`, `PFA_EMBED_CONCURRENCY=1` and `TOKENIZERS_PARALLELISM=false` set. `.dockerignore` is an allow-list, so a new top-level folder stays out until someone adds it on purpose. The Docker `HEALTHCHECK` is liveness (`/health`); point the orchestrator's readiness probe at `/ready`.
 
 | Build arg | Default | Use |
 |---|---|---|

@@ -6,22 +6,25 @@ from conftest import TempRepo
 
 
 def _write_sample_tree(repo: TempRepo) -> None:
-    repo.write_file("src/slices/kvad/slice.json", '{"depends_on": ["rune", "shared_kernel"]}\n')
-    repo.write_file("src/slices/rune/slice.json", '{"depends_on": []}\n')
-    repo.write_file("src/slices/kvad/AGENTS.md", "# kvad\nhand-written notes stay.\n")
+    repo.write_file("src/pfa/features/kvad/feature.json", '{"depends_on": ["rune", "kernel"]}\n')
+    repo.write_file("src/pfa/features/rune/feature.json", '{"depends_on": []}\n')
+    repo.write_file("src/pfa/features/kvad/AGENTS.md", "# kvad\nhand-written notes stay.\n")
 
 
 def test_map_emits_indent2_map_json(repo: TempRepo) -> None:
     _write_sample_tree(repo)
     code, stdout, _ = repo.run("", "map", "--root", "src", "--budget", "15000")
     assert code == 0
-    assert "heimdall map: 2 slices -> .heimdall/map.json; AGENTS.md deps regenerated" in stdout
+    assert "heimdall map: 2 features -> .heimdall/map.json; AGENTS.md deps regenerated" in stdout
     expected = {
-        "kernel": "shared_kernel",
-        "slices_dir": "src/slices",
+        "kernel": "kernel",
+        "kernel_dir": "src/pfa/kernel",
+        "slices_dir": "src/pfa/features",
+        "app_dir": "src/pfa",
+        "routes_dir": "src/pfa/api/routes",
         "slices": {
-            "kvad": {"path": "src/slices/kvad", "depends_on": ["rune"], "budget": 15000, "fan_in": 0},
-            "rune": {"path": "src/slices/rune", "depends_on": [], "budget": 15000, "fan_in": 1},
+            "kvad": {"path": "src/pfa/features/kvad", "depends_on": ["rune"], "budget": 15000, "fan_in": 0},
+            "rune": {"path": "src/pfa/features/rune", "depends_on": [], "budget": 15000, "fan_in": 1},
         },
     }
     assert repo.read_file(".heimdall/map.json") == json.dumps(expected, indent=2)
@@ -30,19 +33,19 @@ def test_map_emits_indent2_map_json(repo: TempRepo) -> None:
 def test_map_injects_and_refreshes_agents_md_markers_idempotently(repo: TempRepo) -> None:
     _write_sample_tree(repo)
     repo.run("", "map", "--root", "src")
-    assert repo.read_file("src/slices/kvad/AGENTS.md") == (
-        "# kvad\nhand-written notes stay.\n<!--heimdall:deps-->depends on: rune + shared_kernel<!--/heimdall:deps-->\n"
+    assert repo.read_file("src/pfa/features/kvad/AGENTS.md") == (
+        "# kvad\nhand-written notes stay.\n<!--heimdall:deps-->depends on: rune + kernel<!--/heimdall:deps-->\n"
         "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n"
     )
     # rune had no AGENTS.md -> created from scratch
-    assert repo.read_file("src/slices/rune/AGENTS.md") == (
-        "# rune\n<!--heimdall:deps-->depends on: (none) + shared_kernel<!--/heimdall:deps-->\n"
+    assert repo.read_file("src/pfa/features/rune/AGENTS.md") == (
+        "# rune\n<!--heimdall:deps-->depends on: (none) + kernel<!--/heimdall:deps-->\n"
         "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n"
     )
     # rerun: markers replaced in place, no duplication
     repo.run("", "map", "--root", "src")
-    assert repo.read_file("src/slices/kvad/AGENTS.md") == (
-        "# kvad\nhand-written notes stay.\n<!--heimdall:deps-->depends on: rune + shared_kernel<!--/heimdall:deps-->\n"
+    assert repo.read_file("src/pfa/features/kvad/AGENTS.md") == (
+        "# kvad\nhand-written notes stay.\n<!--heimdall:deps-->depends on: rune + kernel<!--/heimdall:deps-->\n"
         "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n"
     )
 
@@ -52,13 +55,13 @@ def test_map_creates_and_refreshes_the_root_agents_md_block(repo: TempRepo) -> N
     # no root AGENTS.md -> created with the generated block
     repo.run("", "map", "--root", "src")
     txt = repo.read_file("AGENTS.md")
-    assert txt.startswith("# Agents\n\n## Slice map\n\n<!--heimdall:map-->\n")
-    assert "| kvad | rune | 0 | `src/slices/kvad/contract/` | (none) |" in txt
-    assert "| rune | (none) | 1 | `src/slices/rune/contract/` | (none) |" in txt
+    assert txt.startswith("# Agents\n\n## Feature map\n\n<!--heimdall:map-->\n")
+    assert "| kvad | rune | 0 | `src/pfa/features/kvad/contract/` | (none) |" in txt
+    assert "| rune | (none) | 1 | `src/pfa/features/rune/contract/` | (none) |" in txt
     assert txt.count("<!--heimdall:map-->") == 1 and txt.endswith("<!--/heimdall:map-->\n")
     # hand-written prose around the markers survives, the block is replaced in place
     repo.write_file("AGENTS.md", "# Mine\nintro stays.\n\n<!--heimdall:map-->\nstale\n<!--/heimdall:map-->\n\noutro stays.\n")
-    repo.write_file("src/slices/galdr/slice.json", '{"depends_on": ["rune"]}\n')
+    repo.write_file("src/pfa/features/galdr/feature.json", '{"depends_on": ["rune"]}\n')
     repo.run("", "map", "--root", "src")
     txt = repo.read_file("AGENTS.md")
     assert txt.startswith("# Mine\nintro stays.\n\n<!--heimdall:map-->\n") and txt.endswith("<!--/heimdall:map-->\n\noutro stays.\n")
@@ -66,7 +69,7 @@ def test_map_creates_and_refreshes_the_root_agents_md_block(repo: TempRepo) -> N
     # an AGENTS.md without markers gets the block appended under its own heading
     repo.write_file("AGENTS.md", "# Mine\nno markers yet.\n")
     repo.run("", "map", "--root", "src")
-    assert repo.read_file("AGENTS.md").startswith("# Mine\nno markers yet.\n\n## Slice map\n\n<!--heimdall:map-->\n")
+    assert repo.read_file("AGENTS.md").startswith("# Mine\nno markers yet.\n\n## Feature map\n\n<!--heimdall:map-->\n")
 
 
 def test_map_honors_budget_and_kernel_flags(repo: TempRepo) -> None:
@@ -75,23 +78,23 @@ def test_map_honors_budget_and_kernel_flags(repo: TempRepo) -> None:
     m = json.loads(repo.read_file(".heimdall/map.json"))
     assert m["kernel"] == "rune"
     assert m["slices"]["kvad"]["budget"] == 9000
-    # rune is now the kernel -> dropped from kvad's deps; the explicit shared_kernel entry stays
-    assert m["slices"]["kvad"]["depends_on"] == ["shared_kernel"]
+    # rune is now the kernel -> dropped from kvad's deps; the explicit "kernel" entry stays
+    assert m["slices"]["kvad"]["depends_on"] == ["kernel"]
     assert m["slices"]["rune"]["fan_in"] == 0
 
 
 def test_map_ignores_directories_without_manifest(repo: TempRepo) -> None:
     _write_sample_tree(repo)
-    repo.write_file("src/slices/__init__.py", "")
-    repo.write_file("src/slices/scratch/notes.md", "no manifest here")
+    repo.write_file("src/pfa/features/__init__.py", "")
+    repo.write_file("src/pfa/features/scratch/notes.md", "no manifest here")
     _, stdout, _ = repo.run("", "map", "--root", "src")
-    assert "2 slices" in stdout
+    assert "2 features" in stdout
 
 
 def test_map_no_slices_dir_exit1(repo: TempRepo) -> None:
     code, _, stderr = repo.run("", "map", "--root", "nowhere")
     assert code == 1
-    assert "no slices/ under nowhere" in stderr
+    assert "no features/ under nowhere" in stderr
 
 
 def test_map_usage_errors_exit2(repo: TempRepo) -> None:
@@ -100,10 +103,10 @@ def test_map_usage_errors_exit2(repo: TempRepo) -> None:
     assert repo.run("", "map", "--bogus")[0] == 2
 
 
-def test_map_inventories_routes_from_routes_py_without_importing_it(repo: TempRepo) -> None:
+def test_map_inventories_routes_from_the_app_routes_module_without_importing_it(repo: TempRepo) -> None:
     _write_sample_tree(repo)
     repo.write_file(
-        "src/slices/kvad/internal/routes.py",
+        "src/pfa/api/routes/kvad.py",
         "import this_module_does_not_exist\n"  # proves the file is parsed, not executed
         "from fastapi import APIRouter\n"
         'router = APIRouter(prefix="/kvad", tags=["kvad"])\n'
@@ -121,18 +124,18 @@ def test_map_inventories_routes_from_routes_py_without_importing_it(repo: TempRe
     assert code == 0
     assert (
         "<!--heimdall:routes-->routes: POST /kvad/compose, GET /kvad/{stave_id}, DELETE /other/x<!--/heimdall:routes-->"
-        in repo.read_file("src/slices/kvad/AGENTS.md")
+        in repo.read_file("src/pfa/features/kvad/AGENTS.md")
     )
-    assert "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->" in repo.read_file("src/slices/rune/AGENTS.md")
+    assert "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->" in repo.read_file("src/pfa/features/rune/AGENTS.md")
     assert (
-        "| kvad | rune | 0 | `src/slices/kvad/contract/` | `POST /kvad/compose`<br>`GET /kvad/{stave_id}`<br>`DELETE /other/x` |"
+        "| kvad | rune | 0 | `src/pfa/features/kvad/contract/` | `POST /kvad/compose`<br>`GET /kvad/{stave_id}`<br>`DELETE /other/x` |"
         in repo.read_file("AGENTS.md")
     )
     # a slice AGENTS.md that predates the routes marker gets the line inserted right after deps, once
-    repo.write_file("src/slices/rune/AGENTS.md", "# rune\n<!--heimdall:deps-->stale<!--/heimdall:deps-->\nnotes stay.\n")
+    repo.write_file("src/pfa/features/rune/AGENTS.md", "# rune\n<!--heimdall:deps-->stale<!--/heimdall:deps-->\nnotes stay.\n")
     repo.run("", "map", "--root", "src")
-    assert repo.read_file("src/slices/rune/AGENTS.md") == (
-        "# rune\n<!--heimdall:deps-->depends on: (none) + shared_kernel<!--/heimdall:deps-->\n"
+    assert repo.read_file("src/pfa/features/rune/AGENTS.md") == (
+        "# rune\n<!--heimdall:deps-->depends on: (none) + kernel<!--/heimdall:deps-->\n"
         "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\nnotes stay.\n"
     )
 
@@ -140,7 +143,37 @@ def test_map_inventories_routes_from_routes_py_without_importing_it(repo: TempRe
 def test_map_records_shared_packages_from_pyproject(repo: TempRepo) -> None:
     import json
 
-    repo.write_file("src/slices/rune/slice.json", '{"depends_on": []}\n')
+    repo.write_file("src/pfa/features/rune/feature.json", '{"depends_on": []}\n')
     repo.write_file("pyproject.toml", '[tool.other]\nx = 1\n\n[tool.heimdall]\nshared = ["http_common", "auth_common"]\n')
     assert repo.run("", "map", "--root", ".")[0] == 0
     assert json.loads(repo.read_file(".heimdall/map.json"))["shared"] == ["auth_common", "http_common"]
+
+
+def test_map_takes_the_layout_from_pyproject_and_reads_routes_there(repo: TempRepo) -> None:
+    import json
+
+    repo.write_file("src/svc/slices/rune/feature.json", '{"depends_on": []}\n')
+    repo.write_file("src/svc/core/__init__.py", "")
+    repo.write_file(
+        "pyproject.toml",
+        '[tool.heimdall]\nfeatures = "src/svc/slices"\nkernel = "src/svc/core"\napp = "src/svc"\nroutes = "src/svc/http"\n',
+    )
+    repo.write_file(
+        "src/svc/http/rune.py", 'from fastapi import APIRouter\nrouter = APIRouter(prefix="/rune")\n@router.get("/x")\ndef x(): ...\n'
+    )
+    repo.write_file(
+        "src/svc/api/routes/rune.py",
+        'from fastapi import APIRouter\nrouter = APIRouter(prefix="/wrong")\n@router.get("/y")\ndef y(): ...\n',
+    )
+    assert repo.run("", "map", "--root", ".")[0] == 0
+    m = json.loads(repo.read_file(".heimdall/map.json"))
+    assert (m["kernel"], m["kernel_dir"], m["slices_dir"], m["app_dir"], m["routes_dir"]) == (
+        "core",
+        "src/svc/core",
+        "src/svc/slices",
+        "src/svc",
+        "src/svc/http",
+    )
+    assert "depends on: (none) + core<!--" in repo.read_file("src/svc/slices/rune/AGENTS.md")
+    assert "routes: GET /rune/x<!--" in repo.read_file("src/svc/slices/rune/AGENTS.md")
+    assert "routes: `src/svc/http/<feature>.py`" in repo.read_file("AGENTS.md")

@@ -4,10 +4,15 @@ app over the chunking route, whose blank-text rejection happens before the token
 
 from __future__ import annotations
 
+import re
+
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from http_common import DOMAIN_REJECTION, PROBLEM_MEDIA_TYPE, VALIDATION_ERROR, Problem
-from pfa_api import create_app
+from pfa.api.app import create_app
+from pfa.api.problems import DOMAIN_REJECTION, PROBLEM_MEDIA_TYPE, VALIDATION_ERROR, Problem
+
+_TRACE = re.compile(r"[0-9a-f]{32}")
 
 
 def _is_problem(r) -> dict:
@@ -44,6 +49,7 @@ def test_unknown_path_and_wrong_method_are_about_blank_problems(client: TestClie
     r = client.get("/nope")
     assert r.status_code == 404
     body = _is_problem(r)
+    assert _TRACE.fullmatch(body.pop("trace_id"))
     assert body == {"type": "about:blank", "title": "Not Found", "status": 404, "instance": "/nope"}
 
     r = client.get("/chunking/split")
@@ -61,6 +67,7 @@ def test_unhandled_exception_is_a_500_problem_without_detail() -> None:
     r = TestClient(app, raise_server_exceptions=False).get("/boom")
     assert r.status_code == 500
     body = _is_problem(r)
+    assert _TRACE.fullmatch(body.pop("trace_id"))
     assert body == {"type": "about:blank", "title": "Internal Server Error", "status": 500, "instance": "/boom"}
     assert "secret" not in r.text
 
@@ -89,7 +96,7 @@ def test_a_route_can_raise_any_problem_with_extensions_and_headers() -> None:
 def test_openapi_documents_errors_as_problem_details(client: TestClient) -> None:
     spec = client.get("/openapi.json").json()
     problem = spec["components"]["schemas"]["ProblemDetails"]
-    assert set(problem["properties"]) == {"type", "title", "status", "detail", "instance"}
+    assert set(problem["properties"]) == {"type", "title", "status", "detail", "instance", "trace_id"}
     assert problem.get("additionalProperties", True) is not False  # extension members are allowed
     assert "HTTPValidationError" not in spec["components"]["schemas"]
 
@@ -163,7 +170,7 @@ def test_validation_detail_counts_locations_not_errors(client: TestClient) -> No
 
 
 def test_installing_twice_is_a_no_op(client: TestClient) -> None:
-    from http_common import install_problem_details
+    from pfa.api.problems import install_problem_details
 
     app = client.app
     before = app.openapi
@@ -186,25 +193,13 @@ def test_unknown_fields_are_rejected_not_ignored(client: TestClient) -> None:
     assert set(_errors(r)) == {("body", "question"), ("body", "questions")}
 
 
-def test_control_characters_are_rejected_with_their_position(client: TestClient) -> None:
+def test_control_characters_are_rejected_with_their_position(client: TestClient, words_app: FastAPI) -> None:
     r = client.post("/chunking/split", json={"text": "ok\u0000bad", "budget": 4})
     assert r.status_code == 422
     (err,) = r.json()["errors"]
     assert err["loc"] == ["body", "text"] and "U+0000" in err["msg"] and "position 2" in err["msg"]
-    # tabs and newlines are text, not control noise — checked over a fake tokenizer, never the real one
-    from slices.chunking.contract import CountTokens, SplitText
-    from slices.chunking.internal.handlers import CountTokensHandler, SplitTextHandler
-
-    class _Words:
-        tokenizer_id = "fake/whitespace"
-
-        def count(self, text: str) -> int:
-            return len(text.split())
-
-    app = create_app()
-    app.state.bus.register(CountTokens, CountTokensHandler(_Words()), replace=True)
-    app.state.bus.register(SplitText, SplitTextHandler(_Words()), replace=True)
-    assert TestClient(app).post("/chunking/split", json={"text": "line one\n\tline two", "budget": 400}).status_code == 200
+    # tabs and newlines are text, not control noise — checked over the fake chunking, never the real tokenizer
+    assert TestClient(words_app).post("/chunking/split", json={"text": "line one\n\tline two", "budget": 400}).status_code == 200
 
 
 def test_list_items_are_validated_individually(client: TestClient) -> None:
