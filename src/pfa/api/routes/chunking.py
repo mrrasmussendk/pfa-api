@@ -62,7 +62,7 @@ class SplitOut(BaseModel):
     summary="Split text into chunks within a token budget",
     response_model=SplitOut,
     response_description="The chunks in order, with the token count of each",
-    responses={422: domain_rejections("empty text")},
+    responses={422: domain_rejections("/chunking/split", "empty text")},
 )
 def split(body: SplitRequest, request: Request) -> SplitOut:
     """Split text into chunks that each fit the token budget, cutting on sentence boundaries.

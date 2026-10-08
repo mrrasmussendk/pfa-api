@@ -52,6 +52,7 @@ def _not_ready(components: dict[str, bool]) -> Problem:
 NOT_READY_RESPONSE = problem_response(
     "Still loading: route traffic elsewhere and poll again after `Retry-After` seconds; `components` says what is pending",
     {"loading": _not_ready({"tokenizer": True, "embedding_model": False})},
+    instance="/ready",
     headers={"Retry-After": "Seconds until the next poll", "Cache-Control": "`no-store`: a probe is never cached"},
 )
 
