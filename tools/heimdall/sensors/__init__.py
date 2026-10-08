@@ -7,10 +7,12 @@ Adding a sensor: implement ``Sensor`` in this package and add one line to ``ALL`
 
 from .boundary_edits import BoundaryEditsSensor
 from .boundary_reads import BoundaryReadsSensor
+from .function_shape import FunctionShapeSensor
 
 ALL = (
     BoundaryEditsSensor(),
     BoundaryReadsSensor(),
+    FunctionShapeSensor(),
 )
 
-__all__ = ["ALL", "BoundaryEditsSensor", "BoundaryReadsSensor"]
+__all__ = ["ALL", "BoundaryEditsSensor", "BoundaryReadsSensor", "FunctionShapeSensor"]

@@ -74,6 +74,7 @@ Read the guide for the kind of change before loading any code; each one names th
 
 - **Adding a route** (new endpoint for an existing feature, with or without a contract change): [Adding a route](harness/guides/adding-a-route.md).
 - **Returning an error** (what a route raises, what the client receives, how to add a problem type): [Returning errors](harness/guides/returning-errors.md).
+- **Writing tests** (test first, Arrange/Act/Assert, one concept per test, fakes on the bus, F.I.R.S.T.): [Writing tests](harness/guides/writing-tests.md).
 - **What the PR check judges** (Jev's typed questions, the policy, how to run it locally): [PR review with Jev](harness/guides/pr-review.md).
 - **Adding a feature** (a new capability with its own data and rules): [Adding a feature](#adding-a-feature).
 - **Changing a contract**: [Changing a contract](#changing-a-contract), and the fan-in column in the feature map.
@@ -143,8 +144,9 @@ python -m pfa.api                    # run the service
 
 With the Claude Code hooks configured and `.heimdall/map.json` present, supported Read/Grep/Glob/Edit/Write events are classified against the map and logged to `.heimdall/telemetry.jsonl`. A feature's route module in `pfa/api/routes/` counts as the feature; everything else in `src/pfa/` outside the features is always in-bounds.
 
-- ⚠️ **Immediate feedback:** hook exit 2 flags edits to a second feature in one session or to a frozen high fan-in contract. Check the dependency boundary or migration plan before continuing.
+- ⚠️ **Immediate feedback:** hook exit 2 flags edits to a second feature in one session, to a frozen high fan-in contract, or that leave a function over the shape limit (40 lines or 5 parameters). Check the dependency boundary or migration plan, or split the function, before continuing; the shape feedback must be answered, not raised.
+- ⚠️ **Before you finish:** the `Stop` hook (`.claude/hooks/finish.py`) runs `pytest` and then `heimdall review --base origin/main` whenever the tree differs from `origin/main`. A failing suite or a `request_changes` verdict blocks the stop and hands you the output; `escalate`, or a review that could not run because `TYPESAFE_API_KEY` is unset, is reported to the user instead. The review judges committed work only, so commit before you stop.
 - ✅ **After work:** use `heimdall drift` to inspect recorded reads. Reads are never interrupted; sustained out-of-bounds reads above 20% suggest the feature boundary needs investigation.
 - ❌ **Do not assume complete coverage:** shell-based reads are invisible to the hook, and a missing map disables observation. Eitri remains the enforcement check.
 
-Before you open a PR, `heimdall review --base origin/main --task "<what you set out to do>"` runs the same Jev judgment the PR check will: correctness, clean code, tests covering the change, scope, the walls, Problem Details on error paths. `request_changes` fails the PR check; `escalate` asks for a human. Fix what it names rather than arguing with the probability.
+Before you open a PR, `heimdall review --base origin/main --task "<what you set out to do>"` runs the same Jev judgment the PR check will: correctness, clean code (readability, single purpose, lean signatures, asked about the functions the hook already flagged), tests covering the change, scope, the walls, Problem Details on error paths. `request_changes` fails the PR check; `escalate` asks for a human. Readability or clean code below 2.7 (90% of the 0–3 rubric, the floor) fail it too when the application's code changed — the tooling under `tools/` is judged on correctness and tests, not on prose: the comment names what the judge found limiting and which function to start with. Fix what it names rather than arguing with the probability.

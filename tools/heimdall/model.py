@@ -147,10 +147,12 @@ class SessionStore(Protocol):
 
 @dataclass
 class HeimdallContext:
-    """What a sensor sees: the parsed map (or None) and per-session edit history."""
+    """What a sensor sees: the parsed map (or None), per-session edit history, and the repo root
+    the event's paths are relative to."""
 
     map: MapModel | None
     sessions: SessionStore
+    root: str = ""
 
 
 class Sensor(Protocol):

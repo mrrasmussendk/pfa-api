@@ -10,6 +10,12 @@ import pytest
 from eitri import EitriConfig, analyze
 from heimdall.app import run as heimdall_run
 
+# One sample of each shape the hook's sensor and the review's judge are asked about.
+LONG_FUNCTION = "def long_one():\n" + "\n".join(f"    x{i} = {i}" for i in range(44)) + "\n    return x0\n"  # 46 lines
+SHORT_FUNCTION = "def short_one(a, b):\n    return a + b\n"
+WIDE_FUNCTION = "def wide(a, b, c, d, e, f):\n    return a\n"
+SHAPED_SOURCE = LONG_FUNCTION + "\n\n" + SHORT_FUNCTION
+
 
 class TempRepo:
     """A throwaway repo root that ``heimdall.app.run`` treats as CWD (port of TempRepo.cs)."""
@@ -43,9 +49,9 @@ class TempRepo:
         return code, err
 
     @staticmethod
-    def ev(session: str, tool: str, path: str) -> str:
-        """A PostToolUse event exactly as the smoke test forges them."""
-        return json.dumps({"session_id": session, "tool_name": tool, "tool_input": {"file_path": path}})
+    def ev(session: str, tool: str, path: str, **tool_input: object) -> str:
+        """A PostToolUse event exactly as the smoke test forges them; ``tool_input`` adds an edit's own fields."""
+        return json.dumps({"session_id": session, "tool_name": tool, "tool_input": {"file_path": path, **tool_input}})
 
     def write_sample_map(self, with_frozen_core: bool = False) -> None:
         """The fixture-shaped map: kvad depends on rune; optional frozen high fan-in slice."""
