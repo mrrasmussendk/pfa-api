@@ -3,10 +3,10 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from pfa_api import create_app
-from slices.chunking.contract import CountTokens, SplitText
-from slices.chunking.internal.chunker import split_text
-from slices.chunking.internal.handlers import CountTokensHandler, SplitTextHandler
+from pfa.api.app import create_app
+from pfa.features.chunking.contract import CountTokens, SplitText
+from pfa.features.chunking.internal.chunker import split_text
+from pfa.features.chunking.internal.handlers import CountTokensHandler, SplitTextHandler
 
 words = lambda s: len(s.split())  # noqa: E731 — a word is a token
 

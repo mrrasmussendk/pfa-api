@@ -59,7 +59,7 @@ def run(stdout: TextIO, stderr: TextIO, root: str) -> int:
 
     def in_bounds(kind: str, s: _Session, allowed: set[str]) -> bool:
         return (
-            kind == "kernel"
+            kind in ("kernel", "app")
             or kind.startswith("shared:")
             or (kind.startswith("slice:") and kind[len("slice:") :] in s.edits)
             or (kind.startswith("contract:") and kind[len("contract:") :] in allowed)

@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           heimdall map --root . >/dev/null
-          git diff --exit-code -- AGENTS.md src/slices/*/AGENTS.md \
+          git diff --exit-code -- AGENTS.md src/pfa/features/*/AGENTS.md \
             || { echo "::error::AGENTS.md is stale — run 'heimdall map --root .' and commit"; exit 1; }
 
       - name: Review the diff with Jev

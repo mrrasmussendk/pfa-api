@@ -22,15 +22,21 @@ from eitri.cli import run  # noqa: E402
 from fixtures import write_fixture_tree  # noqa: E402
 
 CANARIES = [
-    ("EIT001", "slices/kvad/internal/_c.py", "from slices.rune.internal.rune_engine import RuneEngine\n"),
-    ("EIT002", "slices/rune/internal/_c.py", "import importlib\nengine = importlib.import_module('slices.kvad.internal.kvad_engine')\n"),
-    ("EIT003", "slices/kvad/contract/_c.py", "from slices.rune.contract import RuneReading\n"),
-    ("EIT004", "slices/rune/internal/_c.py", "from slices.kvad.contract import Verse\n"),
+    ("EIT001", "pfa/features/kvad/internal/_c.py", "from pfa.features.rune.internal.rune_engine import RuneEngine\n"),
+    (
+        "EIT002",
+        "pfa/features/rune/internal/_c.py",
+        "import importlib\nengine = importlib.import_module('pfa.features.kvad.internal.kvad_engine')\n",
+    ),
+    ("EIT003", "pfa/features/kvad/contract/_c.py", "from pfa.features.rune.contract import RuneReading\n"),
+    ("EIT004", "pfa/features/rune/internal/_c.py", "from pfa.features.kvad.contract import Verse\n"),
     (
         "EIT005",
-        "slices/rune/internal/_c.py",
+        "pfa/api/routes/_c.py",
         "from fastapi import HTTPException\n\ndef fail():\n    raise HTTPException(status_code=422, detail='x')\n",
     ),
+    ("EIT006", "pfa/features/rune/internal/_c.py", "from fastapi import APIRouter\n\nrouter = APIRouter()\n"),
+    ("EIT001", "pfa/api/_c.py", "from pfa.features.rune.internal.rune_engine import RuneEngine\n"),
 ]
 
 
@@ -81,7 +87,7 @@ def main() -> int:
 
         # disarming the config is the footgun Brokkr exists for
         (root / "pyproject.toml").write_text("[tool.eitri]\nenabled = false\n", encoding="utf-8")
-        (root / "slices/kvad/internal/_c.py").write_text(CANARIES[0][2], encoding="utf-8")
+        (root / "pfa/features/kvad/internal/_c.py").write_text(CANARIES[0][2], encoding="utf-8")
         if "error EIT001" not in check(root):
             print("canary note: 'enabled = false' silently disarms every wall — keep Brokkr in CI")
             passed += 1

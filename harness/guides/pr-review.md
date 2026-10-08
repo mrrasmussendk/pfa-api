@@ -33,9 +33,9 @@ Jev does not write review comments. It answers questions whose answers are **typ
 `heimdall review` builds **bounded state**: the facts Heimdall can compute are stated as facts, so Jev spends its judgment on what only judgment can decide.
 
 - **`task`** — the PR title and body (or `--task` locally).
-- **`architecture`** — from `.heimdall/map.json`: the kernel, shared packages, every slice's declared dependencies and contract fan-in, and the walls in one sentence each (EIT001–EIT005, frozen contracts, handlers never raise).
-- **`facts`** — slices touched, whether the change is cross-slice, contracts touched with fan-in and frozen flag, whether `internal/routes.py` changed, which tests changed, whether docs changed, which files were truncated.
-- **`files`** — one entry per changed file: path, status, its **area** (`slice:<name>`, `contract:<name>`, `kernel`, `shared:<pkg>`, `service`, `tests`, `tooling`, `ci`, `docs`), line counts and the hunks.
+- **`architecture`** — from `.heimdall/map.json`: the kernel, the app package, shared packages, every slice's declared dependencies and contract fan-in, and the walls in one sentence each (EIT001–EIT006, frozen contracts, handlers never raise).
+- **`facts`** — slices touched, whether the change is cross-slice, contracts touched with fan-in and frozen flag, whether a feature's route module (`pfa/api/routes/<feature>.py`) changed, which tests changed, whether docs changed, which files were truncated.
+- **`files`** — one entry per changed file: path, status, its **area** (`slice:<name>` — a slice's folder or its route module, `contract:<name>`, `kernel`, `app`, `shared:<pkg>`, `service`, `tests`, `tooling`, `ci`, `docs`), line counts and the hunks.
 
 Caps: 12 000 characters per file, 60 000 for the whole state; the rest is summarised as "N more diff lines not shown" and the file is listed under `files_truncated`. Lock files, minified assets, images and `.heimdall/` are never sent. Missing context produces confident wrong answers, so a truncated review is flagged in the comment.
 

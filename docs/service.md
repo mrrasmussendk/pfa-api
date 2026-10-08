@@ -29,7 +29,7 @@ curl -X POST localhost:8000/embeddings/similarity -H "content-type: application/
 
 The service serves [`intfloat/multilingual-e5-large`](https://huggingface.co/intfloat/multilingual-e5-large), an **embedding** model: text in, a unit-normalised 1024-dimensional vector out, in 100+ languages. It does not answer questions. `POST /embeddings/query` turns a question into a *query* vector; rank your *passage* vectors against it (dot product = cosine, since both are normalised) to find what answers it. A Danish question ranks an English answer on meaning, not on shared words.
 
-e5 needs an instruction prefix per side — `query: ` for questions, `passage: ` for documents. Only `slices/embeddings/internal/e5_engine.py` knows that; callers choose the side by choosing the endpoint.
+e5 needs an instruction prefix per side — `query: ` for questions, `passage: ` for documents. Only `pfa/features/embeddings/internal/e5_engine.py` knows that; callers choose the side by choosing the endpoint.
 
 ```bash
 # 1. torch: install the CUDA build FIRST if you have an NVIDIA GPU, otherwise skip this line
@@ -80,7 +80,7 @@ Every error the API sends — a domain rejection, a validation failure, an unkno
 | `urn:pfa-api:problem:model-busy` | 503 | The inference gate did not open within `PFA_EMBED_QUEUE_TIMEOUT`. `Retry-After` header and `retry_after` member. |
 | `about:blank` | 404, 405, 500, … | Plain HTTP errors. A 500 carries **no `detail`**: the traceback goes to the server log, not the wire. |
 
-The machinery lives in `src/http_common/problems.py` and is installed once in `create_app()`. Inside a slice, a route raises `Problem.domain_rejection(result.error)` or `Problem(status, detail, type=…, **extensions)`; raising FastAPI's `HTTPException` in a slice fails `eitri check` (rule EIT005). The developer side of this is [guides/returning-errors.md](../harness/guides/returning-errors.md).
+The machinery lives in `src/pfa/api/problems.py` and is installed once in `create_app()`. A route (`src/pfa/api/routes/<feature>.py`) raises `Problem.domain_rejection(result.error)` or `Problem(status, detail, type=…, **extensions)`; raising FastAPI's `HTTPException` fails `eitri check` (rule EIT005), and features themselves never see HTTP at all (rule EIT006). The developer side of this is [guides/returning-errors.md](../harness/guides/returning-errors.md).
 
 ## Running in production
 

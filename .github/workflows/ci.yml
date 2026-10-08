@@ -48,7 +48,7 @@ jobs:
         shell: bash
         run: |
           heimdall map --root . >/dev/null
-          git diff --exit-code -- AGENTS.md src/slices/*/AGENTS.md \
+          git diff --exit-code -- AGENTS.md src/pfa/features/*/AGENTS.md \
             || { echo "::error::AGENTS.md is stale — run 'heimdall map --root .' and commit"; exit 1; }
 
   # ------------------------------------------------------------------ 2. the distribution must not carry the tooling
@@ -65,7 +65,7 @@ jobs:
         run: |
           python -m zipfile -l dist/*.whl > wheel.txt
           ! grep -E "^(eitri|heimdall|brokkr)/" wheel.txt
-          grep -E "^(pfa_api|shared_kernel|slices)/" wheel.txt >/dev/null
+          grep -E "^pfa/(api|features|kernel)/" wheel.txt >/dev/null
       - uses: actions/upload-artifact@v4
         with: { name: dist, path: dist/* }
 
@@ -93,7 +93,7 @@ jobs:
             echo "::error::the image contains the dev tooling (eitri importable)"; exit 1; fi
           if docker run --rm pfa-api:ci python -c "import heimdall" 2>/dev/null; then
             echo "::error::the image contains the dev tooling (heimdall importable)"; exit 1; fi
-          docker run --rm pfa-api:ci python -c "import pfa_api, slices.embeddings.contract, slices.chunking.contract; print('service importable')"
+          docker run --rm pfa-api:ci python -c "import pfa.api.app, pfa.features.embeddings.contract, pfa.features.chunking.contract; print('service importable')"
 
       - name: Image must serve /health
         run: |

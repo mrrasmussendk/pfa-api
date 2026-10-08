@@ -27,7 +27,7 @@ dependencies = [
 dev = ["pytest>=8", "httpx2>=2.0", "ruff>=0.16", "mypy>=2.0"]
 
 [project.scripts]
-pfa-api = "pfa_api.__main__:main"
+pfa-api = "pfa.api.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -81,7 +81,7 @@ ignore = [
 "tests/**" = ["T20", "PLW1510", "PLW0108"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["pfa_api", "shared_kernel", "slices", "http_common", "eitri", "heimdall", "brokkr"]
+known-first-party = ["pfa", "eitri", "heimdall", "brokkr"]
 
 [tool.ruff.format]
 docstring-code-format = true
@@ -101,17 +101,23 @@ disallow_incomplete_defs = true
 ignore_missing_imports = true   # sentence-transformers / torch ship no stubs
 
 [[tool.mypy.overrides]]
-module = ["slices.*", "shared_kernel.*", "http_common.*", "pfa_api.*"]
+module = ["pfa.*"]
 disallow_untyped_defs = true     # the service is fully typed; the tooling may stay looser
 
-# Heimdall: packages every slice may read besides the kernel (HTTP-edge helpers). Reads of
-# them are in-bounds for `heimdall drift`; `heimdall map` records them in .heimdall/map.json.
+# Heimdall: where things are, as paths from the repo root. `<routes>/<feature>.py` is that
+# feature's HTTP edge (edits there count as edits to the feature; `heimdall map` inventories its
+# routes); any read inside `app` is in-bounds for `heimdall drift`.
 [tool.heimdall]
-shared = ["http_common"]
+features = "src/pfa/features"   # one folder per feature, each with a feature.json manifest
+kernel = "src/pfa/kernel"       # the primitives every feature shares
+app = "src/pfa"                 # the application: features, kernel, application.py and its entry points
+routes = "src/pfa/api/routes"   # the HTTP edge, one module per feature
 
 [tool.eitri]
-slice_prefix = "slices."       # the package Eitri polices (src/slices)
-kernel = "shared_kernel"       # the one package every slice may import freely (src/shared_kernel)
-token_budget = 15000           # the promise, as a number
-problem_helper = "http_common.Problem"   # what EIT005 tells a slice to raise instead of HTTPException
+slice_prefix = "pfa.features."          # the features package: EIT001-EIT004, EIT006, EIT100
+kernel = "pfa.kernel"                   # the one package every feature may import freely
+app_package = "pfa"                     # the application: everything under it that is not a feature or the kernel is policed (EIT001, EIT005)
+composition_root = "pfa.application"    # the one module that may import a feature's module.py
+token_budget = 15000                    # the promise, as a number
+problem_helper = "pfa.api.problems.Problem"   # what EIT005 tells the edge to raise instead of HTTPException
 enabled = true

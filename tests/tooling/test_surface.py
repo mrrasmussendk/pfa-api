@@ -110,4 +110,4 @@ def test_config_read_from_pyproject_with_overrides(tmp_path) -> None:
     cfg = EitriConfig.read(tmp_path, token_budget=None, kernel="k2")
     assert cfg.token_budget == 500
     assert cfg.kernel == "k2"
-    assert cfg.slices_package == "slices"
+    assert cfg.slices_package == "pfa.features"
