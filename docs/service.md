@@ -18,7 +18,7 @@
 | `POST /embeddings/passages` | Embed documents as *passage* vectors — one vector per chunk, tagged with its source and chunk position. |
 | `POST /embeddings/similarity` | Rank candidate texts against a question, best first; a long candidate scores as its best chunk. |
 
-Interactive documentation at `/docs`, the OpenAPI document at `/openapi.json`. Every error response is documented there as an `application/problem+json` `ProblemDetails`.
+Interactive documentation at `/docs` (*Try it out* is on; every operation carries a worked example captured from the real model), the OpenAPI document at `/openapi.json`. Every error response is documented there as an `application/problem+json` `ProblemDetails`, with an example per problem the operation can answer with. Operation ids are the route function names (`embed_passages`), so a generated client reads naturally.
 
 ```bash
 curl -X POST localhost:8000/embeddings/similarity -H "content-type: application/json" \
