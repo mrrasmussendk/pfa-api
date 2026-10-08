@@ -613,6 +613,9 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
     assert md.index("What went wrong") < md.index("| question | answer |")  # the explanation comes before the numbers
     table = render_table(v, questions(), facts)
     assert "leak.py:3 — EIT001" in table
+    # the Stop hook relays this table, so every reason must carry the advice that names the fix
+    assert "  not safe to merge p(safe)=0.30: The judge does not consider the change mergeable as-is." in table
+    assert table.index("mergeable as-is") < table.index("question".ljust(28))  # advice first, numbers after
 
     v = decide(_answers(needs_human_review={"type": "noul", "noul": 0.7}), facts | {"wall_violations": []}, "jev-1", {})
     md = render_markdown(v, {"facts": facts | {"wall_violations": []}}, questions())
