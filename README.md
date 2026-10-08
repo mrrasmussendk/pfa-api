@@ -598,31 +598,3 @@ pr-review.yml (every non-draft PR)
 
 **What the review needs from you.** A `TYPESAFE_API_KEY` repository secret. Without it the review posts a "skipped" comment and passes, so forks and key-less checkouts are never blocked by it.
 
----
-
-# Appendix
-
-## What changed from the .NET original
-
-| .NET original | Here |
-|---|---|
-| Roslyn analyzers inside `csc` | `eitri check`, an `ast`-based checker |
-| `internal` types invisible across assemblies | EIT001 forbids importing another slice's non-`contract` modules |
-| `InternalsVisibleTo` banned | EIT002 bans dynamic imports, `sys.path` surgery, wildcard imports |
-| Contract *signatures* restricted | EIT003 restricts contract *imports* (broader) |
-| csproj + `DisableTransitiveProjectReferences` | `slice.json` + EIT004 |
-| — | EIT005: one error shape on the wire (RFC 9457), enforced as a wall |
-| Surfaces from assembly metadata | Surfaces as AST stubs |
-| NativeAOT hook, ~26 ms | Python hook; latency is interpreter start-up (measured, not gated) |
-| — | `heimdall review`: Jev's typed judgments on the PR diff, policy in code |
-| Samples project (Kvad/Rune) | Removed; the tooling is tested against a synthetic tree in `tools/fixtures.py` |
-
-The original's measured results (3.3× cheaper single-feature tasks, O(1) vs O(n) growth) came from its .NET twin-repo experiment and were not re-run here. Its 16 behavioral harness checks are ported verbatim in `tests/tooling/test_behavioral_scenarios.py`.
-
-## The philosophy in one line
-
-> Agents don't feel architectural pain. Convert it into a number that fails a check.
-
-## License
-
-MIT
