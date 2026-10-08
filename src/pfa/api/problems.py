@@ -235,7 +235,6 @@ def install_problem_details(app: FastAPI) -> None:
 
 
 _REF = {"$ref": "#/components/schemas/ProblemDetails"}
-_HEADER_SCHEMA = {"type": "string"}
 _REJECTION_DESCRIPTION = (
     "Validation error (the body does not fit the model: `errors` names each field) "
     "or domain rejection (it fits, but made no sense to the handler: `detail` says why)"
@@ -247,11 +246,20 @@ def problem_response(description: str, examples: Mapping[str, Problem], *, heade
     with one named example per ``Problem`` in ``examples``, rendered exactly as the wire would carry it.
     ``headers`` maps a response header to its description (``{"Retry-After": "seconds to wait"}``).
     An example's ``instance`` is filled in with the operation's path when the document is built."""
-    rendered = {name: {"summary": problem.title, "value": problem.to_body(None, EXAMPLE_TRACE_ID)} for name, problem in examples.items()}
+    rendered = {name: _example(problem) for name, problem in examples.items()}
     response: dict[str, Any] = {"description": description, "content": {PROBLEM_MEDIA_TYPE: {"schema": _REF, "examples": rendered}}}
     if headers:
-        response["headers"] = {name: {"description": about, "schema": _HEADER_SCHEMA} for name, about in headers.items()}
+        response["headers"] = {name: _header(about) for name, about in headers.items()}
     return response
+
+
+def _example(problem: Problem) -> dict[str, Any]:
+    """One named OpenAPI example: the document as the wire would carry it, before its path is known."""
+    return {"summary": problem.title, "value": problem.to_body(None, EXAMPLE_TRACE_ID)}
+
+
+def _header(about: str) -> dict[str, Any]:
+    return {"description": about, "schema": {"type": "string"}}
 
 
 def domain_rejections(*details: str) -> dict[str, Any]:
@@ -294,18 +302,26 @@ def _documenting(app: FastAPI, original: Callable[[], dict[str, Any]]) -> Callab
 
 
 def _document_errors(path: str, operation: dict[str, Any], schemas: dict[str, Any]) -> None:
-    """Every error response of one operation: the ``422`` gains the validation example (an
-    empty body: each required field missing) ahead of the route's rejections, ``default``
-    covers the rest, and every example learns the operation's path as its ``instance``."""
+    """Every error response of one operation: its ``422``, a ``default`` for the rest, and the
+    operation's path on every example."""
     responses = operation["responses"]
     if "422" in responses:
-        missing = [
-            {"loc": ["body", name], "msg": "Field required", "type": "missing"} for name in _required_body_fields(operation, schemas)
-        ]
-        rejected = problem_response(_REJECTION_DESCRIPTION, {"validation_error": _validation_problem(missing)})
-        rejected["content"][PROBLEM_MEDIA_TYPE]["examples"].update(_problem_examples(responses["422"]))
-        responses["422"] = rejected
+        responses["422"] = _rejections_after_validation(responses["422"], _required_body_fields(operation, schemas))
     responses.setdefault("default", problem_response("Any other error (RFC 9457 problem details)", {"internal_error": Problem(500)}))
+    _locate_examples(responses, path)
+
+
+def _rejections_after_validation(declared: Any, required: list[str]) -> dict[str, Any]:
+    """The ``422`` entry: the validation example (an empty body, so each required field is
+    missing) ahead of the rejections the route declared with ``domain_rejections``."""
+    missing = [{"loc": ["body", name], "msg": "Field required", "type": "missing"} for name in required]
+    response = problem_response(_REJECTION_DESCRIPTION, {"validation_error": _validation_problem(missing)})
+    response["content"][PROBLEM_MEDIA_TYPE]["examples"].update(_problem_examples(declared))
+    return response
+
+
+def _locate_examples(responses: dict[str, Any], path: str) -> None:
+    """An example is rendered before its operation is known; here it learns the path as ``instance``."""
     for response in responses.values():
         for example in _problem_examples(response).values():
             example["value"].setdefault("instance", path)
