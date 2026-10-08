@@ -1,0 +1,20 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Arial, sans-serif", "fontSize": "14px", "lineColor": "#64748b", "edgeLabelBackground": "#ffffff", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1"}, "htmlLabels": false, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 30, "rankSpacing": 35, "padding": 12, "wrappingWidth": 260}}}%%
+flowchart TB
+    accTitle: Slice context budget
+    own["Own slice<br/>All source, including bodies"]:::input
+    deps["Declared dependencies<br/>Public contract surfaces only"]:::input
+    kernel["Shared kernel<br/>Public surface, counted for every slice"]:::input
+    total["Brokkr estimates the combined tokens"]:::process
+    limit{"At most 15,000 tokens?"}:::decision
+    passed["EIT100 passes"]:::output
+    revise["EIT100 fails<br/>Split the slice or slim its contracts"]:::decision
+    own --> total
+    deps --> total
+    kernel --> total
+    total --> limit
+    limit -->|Yes| passed
+    limit -->|No| revise
+    classDef input fill:#eff6ff,stroke:#2563eb,color:#172554
+    classDef process fill:#f0fdfa,stroke:#0f766e,color:#134e4a
+    classDef decision fill:#fffbeb,stroke:#b45309,color:#78350f
+    classDef output fill:#f0fdf4,stroke:#15803d,color:#14532d

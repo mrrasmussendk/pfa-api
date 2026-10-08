@@ -1,0 +1,23 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Arial, sans-serif", "fontSize": "14px", "lineColor": "#64748b", "edgeLabelBackground": "#ffffff", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1"}, "htmlLabels": false, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 30, "rankSpacing": 35, "padding": 12, "wrappingWidth": 260}}}%%
+flowchart TB
+    accTitle: Startup: independent liveness and readiness
+    start["Application starts<br/>PFA_WARMUP=1"]:::input
+    live["GET /health: 200<br/>Responds throughout background warm-up"]:::output
+    cold["GET /ready: 503<br/>Neither component loaded"]:::decision
+    tokenizer["Load tokenizer<br/>Background thread"]:::process
+    partial["GET /ready: 503<br/>Tokenizer loaded; model pending"]:::decision
+    model["Load embedding model<br/>Background thread"]:::process
+    ready["GET /ready: 200<br/>Tokenizer and model loaded"]:::output
+    traffic["Readiness probe allows traffic"]:::output
+    failed["Log warm-up failure<br/>GET /ready remains 503"]:::decision
+    start --> live
+    start --> cold --> tokenizer
+    tokenizer -->|Loaded| partial
+    tokenizer -->|Failure| failed
+    partial --> model
+    model -->|Loaded| ready --> traffic
+    model -->|Failure| failed
+    classDef input fill:#eff6ff,stroke:#2563eb,color:#172554
+    classDef process fill:#f0fdfa,stroke:#0f766e,color:#134e4a
+    classDef decision fill:#fffbeb,stroke:#b45309,color:#78350f
+    classDef output fill:#f0fdf4,stroke:#15803d,color:#14532d

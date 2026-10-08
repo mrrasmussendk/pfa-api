@@ -1,5 +1,14 @@
 # Returning errors
 
+| ✅ Do | ❌ Don't |
+|---|---|
+| Return `Result.failure(...)` for a handler's domain rejection. | Make handlers depend on HTTP or raise HTTP errors. |
+| Raise `Problem` in routes and keep one consistent error format. | Raise `HTTPException` inside a slice. |
+| Use a stable `type` and fixed `title`; write safe, human-readable `detail`. | Expose request bodies, secrets, file paths, or stack traces. |
+| Assert status, media type, and problem `type` in tests. | Check only the status code and miss a broken response format. |
+
+⚠️ **Check:** framework-generated 404/405 exceptions are converted by the shared error handler. That does not permit `HTTPException` in slice code.
+
 Every error the PFA API sends is an **RFC 9457 problem document**: status code in the header, `Content-Type: application/problem+json`, and a body with the five standard members plus optional extensions.
 
 ```json
@@ -21,7 +30,7 @@ Every error the PFA API sends is an **RFC 9457 problem document**: status code i
 | `instance` | URI reference for this occurrence: the request path. | `http_common`, always |
 | anything else | Extension members (`errors` on validation problems, `retry_after`, …). | keyword arguments to `Problem` |
 
-The machinery lives in **`src/http_common/problems.py`** and is installed once, in `create_app()`, by `install_problem_details(app)`. It covers four sources so a client never meets a second format:
+The machinery lives in **`src/http_common/problems.py`** and is installed once, in `create_app()`, by `install_problem_details(app)`. It covers the following sources so a client receives one consistent format:
 
 | Source | Status | `type` | `title` |
 |---|---|---|---|
@@ -54,12 +63,12 @@ def <verb>(body: <Verb>Request, request: Request) -> <Noun>Out:
 
 The rules this encodes:
 
-- **Handlers never know about HTTP.** They return `Result.failure("empty question")`; the *route* turns that into a problem. The handler's error string is the `detail`, so write it for the client, not for the log.
-- **The route decides the status; `Problem` decides the shape.** A domain rejection is `Problem.domain_rejection(...)`. A missing entity is `Problem(404, f"no document {id}")`. A conflict is `Problem(409, "...", type="urn:pfa-api:problem:<kind>", title="...")`.
-- **Never `HTTPException` inside a slice.** Eitri rule **EIT005** fails `eitri check` on any `HTTPException` imported from `fastapi` or `starlette` under `src/slices/`. The conversion handler for the framework's own exceptions exists so 404/405 come out right — not as an escape hatch for routes.
-- **New problem types are URNs** of the form `urn:pfa-api:problem:<kebab-kind>`, declared as constants in `http_common/problems.py` next to the two that exist, with a fixed `title`. One `type` ⇒ one `title`; `detail` varies per occurrence.
-- **`detail` is text and must not leak.** Do not echo request bodies, file paths or stack traces. Structured information goes in an extension member.
-- **OpenAPI follows.** `install_problem_details` rewrites the document: the `422` response of every operation with a body is `ProblemDetails` as `application/problem+json`, and every operation gets a `default` problem response. You do not add `responses=` to routes for errors.
+- ✅ **Handlers never know about HTTP.** They return `Result.failure("empty question")`; the *route* turns that into a problem. The handler's error string is the `detail`, so write it for the client, not for the log.
+- ✅ **The route decides the status; `Problem` decides the shape.** A domain rejection is `Problem.domain_rejection(...)`. A missing entity is `Problem(404, f"no document {id}")`. A conflict is `Problem(409, "...", type="urn:pfa-api:problem:<kind>", title="...")`.
+- ❌ **Never `HTTPException` inside a slice.** Eitri rule **EIT005** fails `eitri check` on any `HTTPException` imported from `fastapi` or `starlette` under `src/slices/`. The conversion handler for the framework's own exceptions exists so 404/405 come out right — not as an escape hatch for routes.
+- ✅ **New problem types are URNs** of the form `urn:pfa-api:problem:<kebab-kind>`, declared as constants in `http_common/problems.py` alongside the existing problem types, with a fixed `title`. One `type` ⇒ one `title`; `detail` varies per occurrence.
+- ❌ **`detail` is text and must not leak.** Do not echo request bodies, file paths or stack traces. Structured information goes in an extension member.
+- ✅ **OpenAPI follows.** `install_problem_details` rewrites the document: the `422` response of every operation with a body is `ProblemDetails` as `application/problem+json`, and every operation gets a `default` problem response. You do not add `responses=` to routes for errors.
 
 ## Testing an error
 
@@ -79,6 +88,8 @@ def test_blank_question_is_a_domain_rejection(fake) -> None:
 `tests/api/test_problems.py` covers the shared machinery (validation, 404/405, 500, extensions, OpenAPI) once for the whole service; slice tests only need the slice's own rejections.
 
 ## Checklist
+
+✅ **Verify each item.** Leave boxes unchecked until the corresponding behavior has been confirmed.
 
 - [ ] Route raises `Problem` (or `Problem.domain_rejection`), never `HTTPException` — `eitri check --root .` is green on EIT005.
 - [ ] A new `type` is a `urn:pfa-api:problem:…` constant in `http_common/problems.py` with one fixed `title`.
