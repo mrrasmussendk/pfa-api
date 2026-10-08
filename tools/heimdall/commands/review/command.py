@@ -9,12 +9,13 @@ from collections.abc import Mapping
 from typing import Any, TextIO
 
 from ...model import Finding, MapModel
-from .base import EXIT_ERROR, EXIT_OK, ReviewError
+from ...store import UnreadableMap, append_findings, heimdall_dir, load_map
+from .base import EXIT_ERROR, EXIT_OK, ReviewError, Streams
 from .diff import git_diff, parse_unified_diff
 from .policy import Verdict, decide
 from .questions import questions
 from .report import render_markdown, render_table
-from .state import build_state, wall_findings
+from .state import build_state, function_shape, wall_findings
 from .transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL, Transport, http_transport
 
 USAGE = (
@@ -70,8 +71,6 @@ def _write(path: str, cwd: str, text: str) -> None:
 
 
 def _telemetry(cwd: str, v: Verdict, facts: dict[str, Any], session: str) -> None:
-    heimdall_dir = os.path.join(cwd, ".heimdall")
-    os.makedirs(heimdall_dir, exist_ok=True)
     f = Finding(
         event="review",
         kind=v.outcome,
@@ -81,8 +80,7 @@ def _telemetry(cwd: str, v: Verdict, facts: dict[str, Any], session: str) -> Non
         ts=time.time(),
         session=session,
     )
-    with open(os.path.join(heimdall_dir, "telemetry.jsonl"), "a", encoding="utf-8", newline="\n") as out:
-        out.write(f.to_line() + "\n")
+    append_findings(heimdall_dir(cwd), [f])
 
 
 def _read_diff(opts: dict[str, Any], stdin: TextIO, cwd: str) -> str:
@@ -95,82 +93,54 @@ def _read_diff(opts: dict[str, Any], stdin: TextIO, cwd: str) -> str:
 
 
 def _load_map(cwd: str, stderr: TextIO) -> MapModel | None:
-    map_path = os.path.join(cwd, ".heimdall", "map.json")
-    if not os.path.isfile(map_path):
-        return None
+    """The slice map, or ``None`` after saying why: a review without the map is still a review."""
     try:
-        return MapModel.load(map_path)
-    except (OSError, ValueError, TypeError) as e:
+        return load_map(heimdall_dir(cwd))
+    except UnreadableMap as e:
         stderr.write(f"heimdall review: unreadable .heimdall/map.json ({e}); reviewing without the slice map\n")
         return None
 
 
-def run(
-    args: list[str],
-    stdin: TextIO,
-    stdout: TextIO,
-    stderr: TextIO,
-    cwd: str,
-    transport: Transport | None = None,
-    env: Mapping[str, str] | None = None,
-) -> int:
-    environ: Mapping[str, str] = os.environ if env is None else env
-    try:
-        opts = _parse(args)
-    except ReviewError as e:
-        stderr.write(str(e) + "\n")
-        return 2
-
-    try:
-        diff = _read_diff(opts, stdin, cwd)
-    except (ReviewError, OSError) as e:
-        stderr.write(f"heimdall review: {e}\n")
+def _transport_from_env(opts: dict[str, Any], environ: Mapping[str, str], io: Streams, cwd: str) -> Transport | int:
+    """The real HTTP transport, or the exit code when there is no key: 0 and a "skipped" comment
+    when the run allows it (forks), 3 otherwise."""
+    key = environ.get(API_KEY_ENV, "")
+    if key:
+        return http_transport(key, environ.get(API_URL_ENV, API_URL))
+    msg = f"heimdall review: {API_KEY_ENV} is not set"
+    if not opts["allow_missing_key"]:
+        io.stderr.write(msg + "\n")
         return EXIT_ERROR
+    io.stdout.write(msg + " — skipping the Jev review\n")
+    if opts["markdown"]:
+        _write(opts["markdown"], cwd, _SKIPPED_COMMENT)
+    return EXIT_OK
 
-    files = parse_unified_diff(diff)
-    if not files:
-        stdout.write("heimdall review: nothing to review (empty diff)\n")
-        return EXIT_OK
 
-    state = build_state(files, _load_map(cwd, stderr), opts["task"], wall_findings(cwd, files))
-    qs = questions()
-    payload = {"model": opts["model"], "state": state, "questions": qs}
-
-    if opts["dry_run"]:
-        stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
-        return EXIT_OK
-
-    if transport is None:
-        key = environ.get(API_KEY_ENV, "")
-        if not key:
-            msg = f"heimdall review: {API_KEY_ENV} is not set"
-            if opts["allow_missing_key"]:
-                stdout.write(msg + " — skipping the Jev review\n")
-                if opts["markdown"]:
-                    _write(opts["markdown"], cwd, _SKIPPED_COMMENT)
-                return EXIT_OK
-            stderr.write(msg + "\n")
-            return EXIT_ERROR
-        transport = http_transport(key, environ.get(API_URL_ENV, API_URL))
-
+def _judge(payload: dict[str, Any], transport: Transport, stderr: TextIO) -> dict[str, Any] | None:
+    """One call; ``None`` (after writing why) when the response is not a verdict about the code."""
     try:
         response = transport(payload)
     except ReviewError as e:
         stderr.write(f"heimdall review: {e}\n")
-        return EXIT_ERROR
+        return None
     answers = response.get("answers") if isinstance(response, dict) else None
     if not isinstance(answers, dict):
         stderr.write("heimdall review: malformed response (no `answers`)\n")
-        return EXIT_ERROR
+        return None
+    return response
 
-    verdict = decide(answers, state["facts"], str(response.get("model", opts["model"])), response.get("usage") or {})
-    stdout.write(render_table(verdict, qs, state["facts"]))
+
+def _report(opts: dict[str, Any], verdict: Verdict, state: dict[str, Any], io: Streams, cwd: str) -> None:
+    """The table on stdout, the JSON and Markdown files when asked, and the telemetry line."""
+    qs = questions()
+    io.stdout.write(render_table(verdict, qs, state["facts"]))
     if opts["json"]:
         report = {
             "outcome": verdict.outcome,
             "reasons": verdict.reasons,
             "advice": verdict.advice,
-            "answers": answers,
+            "answers": verdict.answers,
             "facts": state["facts"],
             "model": verdict.model,
             "usage": verdict.usage,
@@ -179,4 +149,44 @@ def run(
     if opts["markdown"]:
         _write(opts["markdown"], cwd, render_markdown(verdict, state, qs))
     _telemetry(cwd, verdict, state["facts"], opts["session"])
+
+
+def _payload(opts: dict[str, Any], io: Streams, cwd: str) -> dict[str, Any] | int:
+    """What one Jev call sees, or the exit code when there is no diff to judge."""
+    try:
+        files = parse_unified_diff(_read_diff(opts, io.stdin, cwd))
+    except (ReviewError, OSError) as e:
+        io.stderr.write(f"heimdall review: {e}\n")
+        return EXIT_ERROR
+    if not files:
+        io.stdout.write("heimdall review: nothing to review (empty diff)\n")
+        return EXIT_OK
+    m = _load_map(cwd, io.stderr)
+    state = build_state(files, m, opts["task"], wall_findings(cwd, files), function_shape(cwd, files, m))
+    return {"model": opts["model"], "state": state, "questions": questions()}
+
+
+def run(args: list[str], io: Streams, cwd: str, transport: Transport | None = None, env: Mapping[str, str] | None = None) -> int:
+    environ: Mapping[str, str] = os.environ if env is None else env
+    try:
+        opts = _parse(args)
+    except ReviewError as e:
+        io.stderr.write(str(e) + "\n")
+        return 2
+    payload = _payload(opts, io, cwd)
+    if isinstance(payload, int):
+        return payload
+    if opts["dry_run"]:
+        io.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        return EXIT_OK
+    if transport is None:
+        found = _transport_from_env(opts, environ, io, cwd)
+        if isinstance(found, int):
+            return found
+        transport = found
+    response = _judge(payload, transport, io.stderr)
+    if response is None:
+        return EXIT_ERROR
+    verdict = decide(response["answers"], payload["state"]["facts"], str(response.get("model", opts["model"])), response.get("usage") or {})
+    _report(opts, verdict, payload["state"], io, cwd)
     return verdict.exit_code

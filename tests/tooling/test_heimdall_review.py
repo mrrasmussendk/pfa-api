@@ -8,8 +8,9 @@ import json
 from typing import Any
 
 import pytest
-from conftest import TempProject, TempRepo
+from conftest import SHAPED_SOURCE, TempProject, TempRepo
 
+from brokkr import estimate
 from heimdall.commands import review
 from heimdall.commands.review import (
     EXIT_ERROR,
@@ -19,6 +20,7 @@ from heimdall.commands.review import (
     ReviewError,
     build_state,
     decide,
+    function_shape,
     parse_unified_diff,
     questions,
     render_markdown,
@@ -109,11 +111,22 @@ def _answers(**over: Any) -> dict[str, Any]:
         },
         "clean_code": {
             "type": "score",
-            "score": 2.1,
+            "score": 2.9,
             "legend": {"0": "Hard to follow", "1": "Acceptable", "2": "Clean", "3": "Exemplary"},
-            "probabilities": {"0": 0.0, "1": 0.1, "2": 0.7, "3": 0.2},
+            "probabilities": {"0": 0.0, "1": 0.0, "2": 0.1, "3": 0.9},
+            "confidence": 0.8,
+        },
+        "clean_code_limit": {"type": "choice", "choice": "none", "probabilities": {"none": 0.9, "comments": 0.1}, "confidence": 0.8},
+        "readability": {
+            "type": "score",
+            "score": 2.8,
+            "legend": {"0": "Hard to follow", "1": "Readable with effort", "2": "Readable", "3": "Reads like prose"},
+            "probabilities": {"0": 0.0, "1": 0.0, "2": 0.2, "3": 0.8},
             "confidence": 0.7,
         },
+        "readability_limit": {"type": "choice", "choice": "none", "probabilities": {"none": 0.8, "names": 0.2}, "confidence": 0.7},
+        "single_purpose": {"type": "noul", "noul": 0.9},
+        "lean_signatures": {"type": "noul", "noul": 0.9},
         "blast_radius": {
             "type": "score",
             "score": 1.0,
@@ -146,7 +159,8 @@ def _transport(answers: dict[str, Any], seen: list[dict[str, Any]] | None = None
 
 def _run(repo: TempRepo, *args: str, transport=None, env: dict[str, str] | None = None, stdin: str = "") -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
-    code = review.run(list(args), io.StringIO(stdin), out, err, str(repo.root), transport=transport, env=env if env is not None else {})
+    streams = review.Streams(io.StringIO(stdin), out, err)
+    code = review.run(list(args), streams, str(repo.root), transport=transport, env=env if env is not None else {})
     return code, out.getvalue(), err.getvalue()
 
 
@@ -173,6 +187,9 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
     assert facts["slices_touched"] == ["kvad", "rune"] and facts["cross_slice_change"] is True
     assert facts["contracts_touched"] == {"rune": {"fan_in": 12, "frozen": True}}
     assert facts["routes_changed"] is True and facts["source_changed"] is True and facts["docs_changed"] is True
+    assert facts["code_changed"] is True  # the application's Python changed: the craft targets apply
+    assert facts["state_tokens"] == facts["diff_tokens"] > 0 and facts["files_truncated"] == []  # small enough to be seen whole
+    assert facts["state_budget_tokens"] == 28_000 and facts["judge_window_tokens"] == 32_000
     assert facts["tests_changed"] == ["tests/api/test_kvad.py"]
     areas = {e["path"]: e["area"] for e in state["files"]}
     assert areas["src/pfa/api/routes/kvad.py"] == "slice:kvad"
@@ -184,11 +201,29 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
 
 
 def test_oversized_files_are_truncated_and_named(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(review.state, "MAX_FILE_CHARS", 120)
+    monkeypatch.setattr(review.state, "MAX_FILE_TOKENS", 10)
     state = build_state(parse_unified_diff(DIFF), _map(), None)
     assert "src/pfa/api/routes/kvad.py" in state["facts"]["files_truncated"]
     big = next(e for e in state["files"] if e["path"].endswith("routes/kvad.py"))
     assert "more diff lines not shown" in big["diff"]
+    assert state["facts"]["state_tokens"] < state["facts"]["diff_tokens"]  # the comment says how much the judge saw
+    md = render_markdown(decide(_answers(), state["facts"], "m", {}), state, questions())
+    assert "tokens sent of a 28,000 budget (Jev reads 32,000 with the questions); the whole diff is ~" in md
+    assert "file(s) were cut and the craft scores rate what the judge saw" in md
+
+
+def test_the_craft_floor_is_about_the_application_not_the_tooling() -> None:
+    tooling = parse_unified_diff(
+        "diff --git a/tools/heimdall/x.py b/tools/heimdall/x.py\n--- a/tools/heimdall/x.py\n+++ b/tools/heimdall/x.py\n"
+        "@@ -1 +1 @@\n-a = 1\n+a = 2\n"
+    )
+    facts = build_state(tooling, _map(), None)["facts"]
+    assert facts["code_changed"] is False and facts["source_changed"] is False
+    readable = {"type": "score", "score": 2.0, "confidence": 0.7}
+    assert decide(_answers(readability=readable, clean_code=readable), facts, "m", {}).outcome == "approve"
+    # a low safety score over a tooling diff with only craft doubts behind it needs a person, not a prose edit
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, readability=readable), facts, "m", {})
+    assert v.outcome == "escalate" and "rates readability" not in v.advice[0]
 
 
 def test_the_features_package_init_is_the_application_not_a_slice() -> None:
@@ -205,7 +240,7 @@ def test_the_budget_is_spent_on_the_source_before_tests_and_docs(monkeypatch: py
     files = parse_unified_diff(DIFF)
     files.reverse()  # git lists the docs first; the judge must still see the code
     source = [f for f in files if f.path.startswith("src/")]
-    monkeypatch.setattr(review.state, "MAX_STATE_CHARS", sum(len(f.text) for f in source))
+    monkeypatch.setattr(review.state, "MAX_STATE_TOKENS", sum(estimate(f.text) for f in source))
     state = build_state(files, _map(), None)
     assert [e["area"] for e in state["files"]] == ["slice:kvad", "contract:rune", "tests", "docs"]
     assert not any(p.startswith("src/") for p in state["facts"]["files_truncated"])
@@ -223,6 +258,8 @@ def test_questions_are_valid_system_one_requests() -> None:
         else:
             assert isinstance(q["criteria"], dict) and 1 < len(q["criteria"]) <= 255, key
     assert {"safe_to_merge", "needs_human_review", "has_security_concern", "clean_code", "correctness"} <= set(qs)
+    assert {"readability", "single_purpose", "lean_signatures"} <= set(qs)  # function size, parameters, single purpose, readability
+    assert {"readability_limit", "clean_code_limit"} <= set(qs)  # what limits each score, so the advice names the fix
 
 
 # ---------------------------------------------------------------- the policy
@@ -253,11 +290,10 @@ def test_policy_escalates_when_a_human_is_wanted_or_the_model_is_on_the_fence() 
     assert decide(_answers(safe_to_merge={"type": "noul", "noul": 0.55}), facts, "m", {}).outcome == "escalate"
 
 
-def test_policy_comments_when_tests_are_doubtful_or_code_is_merely_acceptable() -> None:
+def test_policy_comments_when_tests_are_doubtful() -> None:
     facts = {"source_changed": True}
     v = decide(_answers(tests_cover_change={"type": "noul", "noul": 0.3}), facts, "m", {})
     assert v.outcome == "comment" and any("tests" in r for r in v.reasons)
-    assert decide(_answers(clean_code={"type": "score", "score": 0.9, "confidence": 0.7}), facts, "m", {}).outcome == "comment"
     # docs-only change: tests are not required
     assert decide(_answers(tests_cover_change={"type": "noul", "noul": 0.1}), {"source_changed": False}, "m", {}).outcome == "approve"
 
@@ -558,8 +594,9 @@ def test_wall_findings_are_empty_without_a_slice_tree(repo: TempRepo) -> None:
     assert wall_findings(str(repo.root), parse_unified_diff(DIFF)) == []
 
 
-def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None:
-    facts = {
+def _facts(**over: Any) -> dict[str, Any]:
+    """The facts of a one-file change inside kvad, as ``build_state`` would state them."""
+    return {
         "files_changed": 1,
         "lines_added": 10,
         "lines_removed": 0,
@@ -571,16 +608,20 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
         "tests_changed": [],
         "docs_changed": False,
         "files_truncated": [],
-        "wall_violations": [
-            {
-                "path": "src/pfa/features/kvad/internal/leak.py",
-                "line": 3,
-                "rule": "EIT001",
-                "message": "imports rune internals",
-                "fix": "use the contract",
-            }
-        ],
+        "wall_violations": [],
+        **over,
     }
+
+
+def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None:
+    leak = {
+        "path": "src/pfa/features/kvad/internal/leak.py",
+        "line": 3,
+        "rule": "EIT001",
+        "message": "imports rune internals",
+        "fix": "use the contract",
+    }
+    facts = _facts(wall_violations=[leak])
     v = decide(_disguised_wall_break(), facts, "jev-1", {})
     md = render_markdown(v, {"facts": facts}, questions())
     assert "### What went wrong" in md
@@ -591,6 +632,9 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
     assert md.index("What went wrong") < md.index("| question | answer |")  # the explanation comes before the numbers
     table = render_table(v, questions(), facts)
     assert "leak.py:3 — EIT001" in table
+    # the Stop hook relays this table, so every reason must carry the advice that names the fix
+    assert "  not safe to merge p(safe)=0.30: The judge does not consider the change mergeable as-is." in table
+    assert table.index("mergeable as-is") < table.index("question".ljust(28))  # advice first, numbers after
 
     v = decide(_answers(needs_human_review={"type": "noul", "noul": 0.7}), facts | {"wall_violations": []}, "jev-1", {})
     md = render_markdown(v, {"facts": facts | {"wall_violations": []}}, questions())
@@ -600,3 +644,112 @@ def test_the_comment_says_what_went_wrong_and_what_to_do(repo: TempRepo) -> None
         decide(_answers(), facts | {"wall_violations": []}, "jev-1", {}), {"facts": facts | {"wall_violations": []}}, questions()
     )
     assert "What went wrong" not in md and "What the judge wants" not in md
+
+
+# ---------------------------------------------------------------- function shape: facts for the judge, named in the advice
+
+_KVAD_ENGINE = "src/pfa/features/kvad/internal/kvad_engine.py"
+_LONG_ONE = {"path": _KVAD_ENGINE, "line": 1, "name": "long_one", "lines": 46, "params": 0, "over": ["lines"]}
+_WIDE = {"path": _KVAD_ENGINE, "line": 60, "name": "wide", "lines": 2, "params": 7, "over": ["params"]}
+
+
+def _shape_diff(path: str, new_line: int, text: str) -> str:
+    return f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -{new_line},1 +{new_line},2 @@\n {text}\n+    pass\n"
+
+
+def test_function_shape_names_only_the_changed_functions_over_the_limits(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    repo.write_file(_KVAD_ENGINE, SHAPED_SOURCE)
+    m = MapModel.load(str(repo.root / ".heimdall" / "map.json"))
+    touched_long = function_shape(str(repo.root), parse_unified_diff(_shape_diff(_KVAD_ENGINE, 10, "x8 = 8")), m)
+    assert touched_long == [_LONG_ONE]
+    assert function_shape(str(repo.root), parse_unified_diff(_shape_diff(_KVAD_ENGINE, 50, "return a + b")), m) == []
+    # tests, deleted files and files that are not on disk contribute nothing
+    repo.write_file("tests/api/test_long.py", SHAPED_SOURCE)
+    assert function_shape(str(repo.root), parse_unified_diff(_shape_diff("tests/api/test_long.py", 10, "x8 = 8")), m) == []
+    gone = parse_unified_diff(_shape_diff("src/pfa/kernel/gone.py", 10, "x8 = 8"))
+    assert function_shape(str(repo.root), gone, m) == []
+    state = build_state(gone, m, None, None, touched_long)
+    assert state["facts"]["function_shape"] == touched_long and state["facts"]["function_limits"] == {"lines": 40, "params": 5}
+
+
+def _shape_facts(**over: Any) -> dict[str, Any]:
+    """The AST's facts about a change that touched one long and one wide function."""
+    return {
+        "source_changed": True,
+        "code_changed": True,
+        "function_shape": [_LONG_ONE, _WIDE],
+        "function_limits": {"lines": 40, "params": 5},
+        **over,
+    }
+
+
+def test_shape_facts_block_only_when_the_judge_agrees_and_then_name_the_function() -> None:
+    no = {"type": "noul", "noul": 0.2}
+    v = decide(_answers(single_purpose=no), _shape_facts(), "m", {})
+    assert v.outcome == "request_changes" and v.reasons == ["functions do more than one thing p(single)=0.20"]
+    assert "kvad_engine.py:1 long_one (46 lines, 0 params)" in v.advice[0] and "within 40 lines" in v.advice[0]
+    assert "wide (2 lines, 7 params)" not in v.advice[0]  # the line limit names long functions, not wide ones
+    v = decide(_answers(lean_signatures=no), _shape_facts(), "m", {})
+    assert v.outcome == "request_changes" and v.reasons == ["signatures too wide p(lean)=0.20"]
+    assert "kvad_engine.py:60 wide (2 lines, 7 params)" in v.advice[0] and "at most 5 parameters" in v.advice[0]
+    # the judge's No without a function named by the AST is a note, not a block: nothing to point at
+    v = decide(_answers(single_purpose=no), {"source_changed": True}, "m", {})
+    assert v.outcome == "comment" and "functions may not be single-purpose p=0.20" in v.reasons
+    # the AST's list without the judge's No is a fact in the comment, not a verdict: a flat table may stay whole
+    assert decide(_answers(), _shape_facts(), "m", {}).outcome == "approve"
+
+
+def test_readability_and_clean_code_below_target_send_the_agent_back_naming_the_limit() -> None:
+    """The user's floor (2026-10-08): readability and clean code 2.7 on 0–3, 90%, not to be lowered. Below it the check fails so the
+    agent is retriggered, and the advice says what the judge found limiting and where to start."""
+    readable = {"type": "score", "score": 2.07, "confidence": 0.7}
+    nesting = {"type": "choice", "choice": "nesting", "probabilities": {"nesting": 0.62, "names": 0.3}, "confidence": 0.6}
+    v = decide(_answers(readability=readable, readability_limit=nesting), _shape_facts(), "m", {})
+    assert v.outcome == "request_changes" and v.reasons == ["readability 2.07/3 below the target 2.7"]
+    assert (
+        "the target is 2.7. In its answer, its most probable limit: nesting (0.62): flatten the nesting with early returns" in v.advice[0]
+    )
+    assert "— start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)." in v.advice[0]
+    clean = {"type": "score", "score": 2.28, "confidence": 0.7}
+    dup = {"type": "choice", "choice": "duplication", "probabilities": {"duplication": 0.7}, "confidence": 0.7}
+    v = decide(_answers(clean_code=clean, clean_code_limit=dup), _shape_facts(), "m", {})
+    assert v.outcome == "request_changes" and v.reasons == ["clean code 2.28/3 below the target 2.7"]
+    assert "its most probable limit: duplication (0.70): extract the logic written twice into one function" in v.advice[0]
+    # `none` wins the choice under a short score (PR #9: none at 0.40): the runner-up in the judge's probabilities is the fix
+    none_first = {"type": "choice", "choice": "none", "probabilities": {"none": 0.40, "names": 0.25, "nesting": 0.2}, "confidence": 0.3}
+    v = decide(_answers(readability=readable, readability_limit=none_first), _shape_facts(), "m", {})
+    assert "its most probable limit: names (0.25): rename what the judge could not follow" in v.advice[0]
+    # no actionable label at all: every fix is listed, so a code change is still named
+    v = decide(_answers(clean_code=clean, clean_code_limit={"type": "choice", "choice": "none"}), _shape_facts(), "m", {})
+    assert "the judge named no single limit, so: extract the logic written twice" in v.advice[0] and "never swallow one" in v.advice[0]
+    # the targets are about code: a change with no Python outside tests is not sent back for prose
+    assert decide(_answers(readability=readable, clean_code=clean), {"source_changed": False}, "m", {}).outcome == "approve"
+    # exactly on target passes
+    on = {"type": "score", "score": 2.7, "confidence": 0.7}
+    assert decide(_answers(readability=on), _shape_facts(), "m", {}).outcome == "approve"
+
+
+def test_readability_doubt_behind_not_safe_names_the_limit_and_where_to_start() -> None:
+    hard = {"type": "score", "score": 1.0, "confidence": 0.8}
+    names = {"type": "choice", "choice": "names", "probabilities": {"names": 0.8}, "confidence": 0.8}
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, readability=hard, readability_limit=names), _shape_facts(), "m", {})
+    assert v.outcome == "request_changes"
+    assert "it rates readability 1.00/3 against the target 2.7: its most probable limit: names (0.80): rename what" in v.advice[0]
+    assert "start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)" in v.advice[0]
+    label = {"type": "choice", "choice": "readability", "probabilities": {"readability": 0.9}, "confidence": 0.9}
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, biggest_risk=label), _shape_facts(), "m", {})
+    assert "it names readability as the one thing to check (0.90): rename what the judge could not follow" in v.advice[0]
+    assert "— start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one" in v.advice[0]
+
+
+def test_the_comment_and_the_table_list_the_functions_over_the_limits() -> None:
+    facts = _facts(**_shape_facts())
+    v = decide(_answers(), facts, "jev-1", {})
+    md = render_markdown(v, {"facts": facts}, questions())
+    assert "- changed functions over 40 lines or 5 parameters:" in md
+    assert "  - `src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)`" in md
+    assert "| `readability` |" in md and "| `single_purpose` |" in md and "| `lean_signatures` |" in md
+    assert "over the limits: src/pfa/features/kvad/internal/kvad_engine.py:60 wide (2 lines, 7 params)" in render_table(
+        v, questions(), facts
+    )

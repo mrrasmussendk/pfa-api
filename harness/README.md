@@ -8,6 +8,7 @@ Start with the root [AGENTS.md](../AGENTS.md), then the owning slice's `AGENTS.m
 |---|---|
 | Add an endpoint | [Adding a route](guides/adding-a-route.md) |
 | Return an API error | [Returning errors](guides/returning-errors.md) |
+| Write or change tests | [Writing tests](guides/writing-tests.md) |
 | Prepare a PR and act on review findings | [PR review with Jev](guides/pr-review.md) |
 | Resolve an architecture violation | [Eitri rule guidance](rules/) |
 

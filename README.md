@@ -84,7 +84,7 @@ For an embeddings task, the intended working set is the embeddings slice, chunki
 
 ### During work: observe and give feedback
 
-**Heimdall** uses the configured Claude Code hooks to record reads and edits against that map. It gives immediate feedback when an agent edits a second slice in one session or changes a contract with ten or more consumers, where changes must be additive. Reads are recorded without interruption.
+**Heimdall** uses the configured Claude Code hooks to record reads and edits against that map. It gives immediate feedback when an agent edits a second slice in one session, changes a contract with ten or more consumers, where changes must be additive, or leaves a function it touched over 40 lines or 5 parameters. Reads are recorded without interruption.
 
 Afterwards, `heimdall drift` reports how much reading fell outside the intended working set. If work on one slice repeatedly needs other slices' internals, that is evidence to reconsider the boundary. Sustained out-of-bounds reads above 20% are the project's rule of thumb for investigating it.
 
@@ -174,6 +174,7 @@ Read [docs/](docs/) to understand the project. Use [harness/](harness/) for inst
 | Understand checks, token budgets, agent hooks, and CI | [Development tooling](docs/tooling.md) |
 | Add an endpoint | [Adding a route](harness/guides/adding-a-route.md) |
 | Return an API error | [Returning errors](harness/guides/returning-errors.md) |
+| Write or change tests | [Writing tests](harness/guides/writing-tests.md) |
 | Run or understand the PR review | [PR review with Jev](harness/guides/pr-review.md) |
 | Investigate an architecture violation | [Eitri rule reference](harness/rules/) |
 | Check the token estimator | [Calibration](docs/calibration.md) |
