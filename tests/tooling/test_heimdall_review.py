@@ -497,6 +497,20 @@ def test_not_safe_with_nothing_to_change_in_code_requires_a_human() -> None:
     assert lonely.outcome == "escalate" and "no other answer explains the doubt" in lonely.advice[0]
 
 
+def test_a_named_risk_other_than_architecture_is_always_a_code_fix() -> None:
+    """Jev's real answers on the logging PR (2026-10-08): p(safe)=0.12, correctness named at 0.82 while the
+    correctness score said "probably correct". A label is about the diff, so it blocks with a code path."""
+    answers = _answers(
+        safe_to_merge={"type": "noul", "noul": 0.12},
+        needs_human_review={"type": "noul", "noul": 0.88},
+        biggest_risk={"type": "choice", "choice": "correctness", "probabilities": {"correctness": 0.82}, "confidence": 0.78},
+    )
+    v = decide(answers, {"source_changed": True, "files_changed": 12}, "m", {})
+    assert v.outcome == "request_changes"
+    assert "To fix in code: it names correctness as the one thing to check (0.82): walk the new branches" in v.advice[0]
+    assert "For a reviewer to weigh: it wants a person to look (needs_human_review 0.88)" in v.advice[0]
+
+
 def test_policy_blocks_on_eitri_findings_whatever_the_judge_says() -> None:
     facts = {
         "source_changed": True,

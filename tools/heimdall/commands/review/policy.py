@@ -70,6 +70,17 @@ def _choice(answers: dict[str, Any], key: str) -> tuple[str, float]:
     return c, float(p) if isinstance(p, (int, float)) else 0.0
 
 
+# What answers each top-risk label in code. A label the judge chooses is always about the diff,
+# so it always has a code path; only "architecture" needs Eitri's facts to say which one.
+_RISK_FIXES = {
+    "correctness": "walk the new branches with empty input, None, boundaries and the error path; add a failing test for each",
+    "security": "find the trust boundary the judge means (input reaching a shell, a path, a log, a client) and close it with a test",
+    "tests": "add a test per changed behaviour that fails without the change",
+    "readability": "rename what the judge could not follow and split the function it hides in",
+    "docs": "update the guide, AGENTS.md note or reference the behaviour change left stale",
+}
+
+
 def _doubts(answers: dict[str, Any], facts: dict[str, Any]) -> list[tuple[str, bool]]:
     """What drives a low ``safe_to_merge``: every other answer below its own bar, as ``(sentence, fixable)``.
     A fixable doubt names the code change that answers it; the rest is for a reviewer to weigh. The
@@ -131,8 +142,8 @@ def _doubts(answers: dict[str, Any], facts: dict[str, Any]) -> list[tuple[str, b
                     True,
                 )
             )
-    elif risk not in ("none", "?", "architecture"):
-        out.append((f"it names {risk} as the one thing to check ({risk_p:.2f})", False))
+    elif risk in _RISK_FIXES:
+        out.append((f"it names {risk} as the one thing to check ({risk_p:.2f}): {_RISK_FIXES[risk]}", True))
     if human >= T["human_escalate"]:
         out.append((f"it wants a person to look (needs_human_review {human:.2f})", False))
     if blast >= T["wide_refactor_escalate"]:
