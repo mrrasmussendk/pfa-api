@@ -2,6 +2,16 @@
 
 Read this before touching code. It is the feedforward half of the harness: the map of what exists and the rules for moving inside it. The feedback half (Heimdall's hooks and `eitri check`) will tell you when you drift — but it is cheaper to not drift.
 
+**Reading key:** ✅ **Do** — the expected action. ❌ **Don't** — a prohibited shortcut. ⚠️ **Check** — a condition that needs attention. These markers describe instructions, not completed checks.
+
+| ✅ Do | ❌ Don't |
+|---|---|
+| Read the relevant guide and work within the owning slice. | Open another slice's implementation to bypass its contract. |
+| Declare dependencies and dispatch contract messages through the bus. | Call another slice's handlers or engines directly. |
+| Keep contracts framework-free and the kernel small. | Put FastAPI, pydantic, or application wiring in the kernel. |
+| Raise `Problem` at the HTTP edge. | Raise `HTTPException` inside a slice. |
+| Run the checks and fix the findings. | Disable rules or raise the token budget to make a change pass. |
+
 ## What this repo is
 
 - `src/` is the **PFA API**, a FastAPI service built as vertical slices. This is what gets deployed.
@@ -11,16 +21,11 @@ Read this before touching code. It is the feedforward half of the harness: the m
 
 ## The dependency direction
 
-Imports only go **down** this arrow. Never up, never sideways into another slice's `internal/`.
+✅ Follow arrows from the importing package to its dependency. ❌ Never import upwards or sideways into another slice's `internal/`.
 
-```
-pfa_api  ──▶  slices/*  ──▶  shared_kernel
-(composition   (features:     (primitives: knows nothing
- root: knows    know their     about slices or HTTP)
- every slice)   own code +
-                deps' contracts
-                + kernel)
-```
+![Allowed imports: arrows point from importer to dependency](docs/diagrams/dependencies.svg)
+
+[Mermaid source](docs/diagrams/dependencies.mmd)
 
 - **`pfa_api` is NOT part of the kernel and never goes there.** It imports every slice's `internal/module.py`; the kernel must import nothing. Putting the app in the kernel creates a cycle and lets FastAPI into every contract.
 - **`shared_kernel` is paid for by every slice** (EIT100) and importable from every contract (EIT003). Only tiny, framework-free, stable primitives belong there. When in doubt, it does not go in the kernel.
@@ -38,17 +43,21 @@ kernel: `shared_kernel` · slices: `src/slices` · budget: 15000 tokens per slic
 | embeddings | chunking | 0 | `src/slices/embeddings/contract/` | `POST /embeddings/query`<br>`POST /embeddings/passages`<br>`POST /embeddings/similarity` |
 <!--/heimdall:map-->
 
-Each slice's own `AGENTS.md` (in `src/slices/<name>/`) carries its generated `depends on:` and `routes:` lines plus a few hand-written notes on what the slice is for. The table above and those lines are regenerated from `slice.json` and `internal/routes.py` by `heimdall map --root .` — never edit them by hand.
+Each slice's own `AGENTS.md` (in `src/slices/<name>/`) carries its generated `depends on:` and `routes:` lines plus a few hand-written notes on what the slice is for.
+
+✅ Regenerate the table and marked lines from `slice.json` and `internal/routes.py` with `heimdall map --root .`. ❌ Do not edit generated content by hand. Hand-written guidance outside the markers remains editable.
 
 ## Guides
 
+Task guides and rule instructions live in [harness/](harness/). Explanatory reference material lives in [docs/](docs/). This file and the slice-level `AGENTS.md` files remain the feedforward entry points.
+
 Read the guide for the kind of change before loading any code; each one names the exact working set.
 
-- **Adding a route** (new endpoint on an existing slice, with or without a contract change): `docs/guides/adding-a-route.md`.
-- **Returning an error** (what a route raises, what the client receives, how to add a problem type): `docs/guides/returning-errors.md`.
-- **What the PR check judges** (Jev's typed questions, the policy, how to run it locally): `docs/guides/pr-review.md`.
-- **Adding a slice** (a new feature with its own data and rules): the section below.
-- **Changing a contract**: the section below, and the fan-in column in the slice map.
+- **Adding a route** (new endpoint on an existing slice, with or without a contract change): [Adding a route](harness/guides/adding-a-route.md).
+- **Returning an error** (what a route raises, what the client receives, how to add a problem type): [Returning errors](harness/guides/returning-errors.md).
+- **What the PR check judges** (Jev's typed questions, the policy, how to run it locally): [PR review with Jev](harness/guides/pr-review.md).
+- **Adding a slice** (a new feature with its own data and rules): [Adding a slice](#adding-a-slice).
+- **Changing a contract**: [Changing a contract](#changing-a-contract), and the fan-in column in the slice map.
 
 ## The working set for a task
 
@@ -61,16 +70,18 @@ A task lives in **one slice**. Load, in this order, and nothing more:
 5. `src/shared_kernel/` — the primitives every slice shares.
 6. `src/http_common/` — only when the task touches a route's error path (`Problem`); declared shared in `[tool.heimdall]`, so reading it is never drift.
 
-That is the whole context. If you feel you need another slice's `internal/`, the seam is cut wrong: say so instead of reading it.
+⚠️ If the task appears to require another slice's `internal/`, explain the missing contract capability before proceeding. ❌ Do not expand the working set by reading that implementation.
 
 ## The walls (Eitri enforces these; `eitri check --root .` must pass before you finish)
 
-- **EIT001** — never import `slices.<other>.internal...` from a slice. Another slice's public surface is its `contract/` package. The one exemption is `internal/module.py`, which only the composition root imports.
-- **EIT002** — no `importlib.import_module`, `__import__`, `sys.path` edits, `sys.modules` writes, or `from x import *` inside `src/slices/`. Coupling must be greppable.
-- **EIT003** — `contract/` modules import only the standard library, `shared_kernel`, and their own contract. FastAPI and pydantic belong in `internal/routes.py`, not in a contract.
-- **EIT004** — importing `slices.<x>.contract` requires `"x"` in your slice's `slice.json`. Declare first, then import.
-- **EIT005** — no `HTTPException` (from `fastapi` or `starlette`) inside `src/slices/`. Every error is an RFC 9457 problem document: `raise Problem.domain_rejection(result.error)` or `raise Problem(status, detail, type=..., ...)` from `http_common`.
-- **EIT100** — each slice's agent working set (own source + dependency contract stubs + kernel) must stay under the token budget in `[tool.eitri]`. If you blow it, split the slice or slim the contract; do not raise the budget.
+| Rule | ✅ Do | ❌ Don't |
+|---|---|---|
+| **EIT001 — boundaries** | Consume another slice through its `contract/`. Only the composition root imports its `internal/module.py`. | Import `slices.<other>.internal...` from a slice. |
+| **EIT002 — visible coupling** | Use explicit, searchable imports inside `src/slices/`. | Use `importlib.import_module`, `__import__`, `sys.path` edits, `sys.modules` writes, or `from x import *`. |
+| **EIT003 — pure contracts** | Import only stdlib, `shared_kernel`, and the slice's own contract in `contract/`. Keep FastAPI and pydantic in `internal/routes.py`. | Import frameworks or implementation code into a contract. |
+| **EIT004 — declared dependencies** | Add `"x"` to `slice.json` before importing `slices.x.contract`. | Introduce an undeclared slice dependency. |
+| **EIT005 — error shape** | At the HTTP edge, raise `Problem.domain_rejection(result.error)` or `Problem(status, detail, type=..., ...)` from `http_common`. | Raise FastAPI or Starlette `HTTPException` inside a slice. |
+| **EIT100 — context budget** | Keep own source + dependency contract stubs + kernel within `[tool.eitri]`'s budget. Split the slice or slim its contract when needed. | Raise the budget to accommodate an oversized slice. |
 
 ## Adding a slice
 
@@ -87,7 +98,10 @@ A slice's contract is its **messages** (frozen `Query`/`Command` dataclasses in 
 
 ## Changing a contract
 
-A contract with high fan-in is **frozen**: additive changes only. Breaking changes need an expand-contract fan-out (add the new member, migrate every consumer, remove the old one). Heimdall warns in-loop when you edit a contract whose fan-in is 10 or more.
+⚠️ A contract with fan-in **10 or more** is frozen; Heimdall warns when you edit it.
+
+- ✅ Make additive changes. For a breaking change, add the replacement, migrate every consumer, then remove the old member in a coordinated expand-contract migration.
+- ❌ Do not change or remove an existing member while consumers still rely on it.
 
 ## Commands
 
@@ -105,6 +119,10 @@ python -m pfa_api                    # run the service
 
 ## What Heimdall will do while you work
 
-Every Read/Grep/Glob/Edit/Write you make is classified against the slice map and logged to `.heimdall/telemetry.jsonl`. You will be interrupted (hook exit 2, message on stderr) in exactly two cases: editing a second slice in one session, and editing a frozen high fan-in contract. Reads are never interrupted, only recorded; `heimdall drift` shows afterwards whether a session's reads stayed inside the architecture's promise. Sustained out-of-bounds reads above 20% on a slice mean the seam, not the agent, is wrong.
+With the Claude Code hooks configured and `.heimdall/map.json` present, supported Read/Grep/Glob/Edit/Write events are classified against the map and logged to `.heimdall/telemetry.jsonl`.
+
+- ⚠️ **Immediate feedback:** hook exit 2 flags edits to a second slice in one session or to a frozen high fan-in contract. Check the dependency boundary or migration plan before continuing.
+- ✅ **After work:** use `heimdall drift` to inspect recorded reads. Reads are never interrupted; sustained out-of-bounds reads above 20% suggest the slice boundary needs investigation.
+- ❌ **Do not assume complete coverage:** shell-based reads are invisible to the hook, and a missing map disables observation. Eitri remains the enforcement check.
 
 Before you open a PR, `heimdall review --base origin/main --task "<what you set out to do>"` runs the same Jev judgment the PR check will: correctness, clean code, tests covering the change, scope, the walls, Problem Details on error paths. `request_changes` fails the PR check; `escalate` asks for a human. Fix what it names rather than arguing with the probability.

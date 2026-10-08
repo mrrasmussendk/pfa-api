@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-HELP_BASE = "docs/rules/"  # relative to the repo root
+HELP_BASE = "harness/rules/"  # relative to the repo root
 
 
 class Severity(str, Enum):

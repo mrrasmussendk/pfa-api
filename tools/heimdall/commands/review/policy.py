@@ -134,7 +134,7 @@ def decide(answers: dict[str, Any], facts: dict[str, Any], model: str, usage: di
         flag(
             f"errors bypass Problem Details p(ok)={errors_ok:.2f}",
             "A changed route answers an error without the shared `Problem` type. Every error must leave as an "
-            "RFC 9457 problem document; see docs/guides/returning-errors.md.",
+            "RFC 9457 problem document; see harness/guides/returning-errors.md.",
         )
     if reasons:
         return Verdict("request_changes", reasons, answers, model, usage, advice)

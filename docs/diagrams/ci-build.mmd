@@ -1,0 +1,18 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Arial, sans-serif", "fontSize": "14px", "lineColor": "#64748b", "edgeLabelBackground": "#ffffff", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1"}, "htmlLabels": false, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 30, "rankSpacing": 35, "padding": 12, "wrappingWidth": 260}}}%%
+flowchart TB
+    accTitle: CI build and publication
+    trigger["Push to main, tag or pull request"]:::input
+    checks["Enforce<br/>Ruff, mypy, tests and Eitri<br/>Canaries, smoke test and map freshness"]:::process
+    wheel["Build wheel<br/>Verify tooling is excluded"]:::process
+    image["Build and boot image<br/>Verify health, OpenAPI and tooling exclusion"]:::process
+    publish{"Main branch or tag?"}:::decision
+    registry["Publish image to GHCR"]:::output
+    verified["PR image verified<br/>No registry push"]:::output
+    trigger --> checks -->|Pass| wheel -->|Pass| image
+    image -->|Pass| publish
+    publish -->|Yes| registry
+    publish -->|No| verified
+    classDef input fill:#eff6ff,stroke:#2563eb,color:#172554
+    classDef process fill:#f0fdfa,stroke:#0f766e,color:#134e4a
+    classDef decision fill:#fffbeb,stroke:#b45309,color:#78350f
+    classDef output fill:#f0fdf4,stroke:#15803d,color:#14532d

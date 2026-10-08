@@ -1,5 +1,14 @@
 # Adding a route
 
+✅ **Do** marks the expected approach. ❌ **Don't** marks a prohibited shortcut. ⚠️ **Check** marks a condition to resolve before continuing.
+
+| ✅ Do | ❌ Don't |
+|---|---|
+| Put the route in the slice that owns the use case. | Put feature logic in the composition root. |
+| Validate the HTTP request, dispatch a contract message, and map the result. | Call handlers or engines directly from the route. |
+| Declare another slice as a dependency and use its contract. | Import or inspect its private implementation. |
+| Test through fake components registered on the bus. | Download or load the real model in ordinary route tests. |
+
 A route is the HTTP edge of a slice. It lives **inside the slice** that owns the use case, in `src/slices/<slice>/internal/routes.py`, and is mounted by the composition root through the slice's `module.py`. Service-level routes that belong to no slice (health, metadata) live in `src/pfa_api/routes/`.
 
 A route never does work itself. It converts the HTTP request into a **message** from the slice's contract, dispatches it on the kernel `Bus`, and converts the `Result` back into HTTP. The handler behind the message is what knows the domain. Before you start, decide which of the three cases you are in. They have different working sets.
@@ -10,7 +19,7 @@ A route never does work itself. It converts the HTTP request into a **message** 
 | **B. The message does not exist yet** | first a contract change, then a handler, then the route | A + `contract/queries.py` (or `commands.py`), `contract/results.py`, `internal/handlers.py`, `internal/module.py` |
 | **C. The handler needs another slice's capability** | that slice's **contract** and a declared dependency | A or B + `slices/<dep>/contract/`, `slice.json` |
 
-If none fits — the use case is a new concept with its own data and rules — you are adding a **slice**, not a route. See "Adding a slice" in the root `AGENTS.md`.
+⚠️ If none fits — the use case is a new concept with its own data and rules — follow [Adding a slice](../../AGENTS.md#adding-a-slice).
 
 ## The shape every route follows
 
@@ -43,12 +52,12 @@ def <verb>(body: <Verb><Noun>Request, request: Request) -> <Noun>Out:
 
 The rules this encodes:
 
-- **One router per slice**, `prefix="/<slice>"`, `tags=["<slice>"]`. The prefix is the slice name; the path is the verb or noun of the use case.
-- **Dispatch, never call.** The route builds a message from the contract and hands it to `request.app.state.bus`. It never imports a handler, an engine or anything from `internal/` of another slice (EIT001). `grep <Message>` therefore finds every caller of that use case.
-- **Validate shape at the edge, meaning in the handler.** Request models subclass `StrictRequest` (unknown fields are rejected), text fields use `text(max)` (length bounds, no control characters), and a list of texts gets a `check_total_chars` model validator so one call cannot ask for unbounded work. Whether the *content* makes sense — a blank question, an empty passage — is the handler's `Result.failure`, not a pydantic rule. A validation failure names the field; a domain rejection names the reason.
-- **Convert at the edge.** Pydantic models are the HTTP representation and stay in `routes.py`. Messages and result types are frozen dataclasses from `contract/`; tuples in, lists out. The route is the only place that knows both.
-- **Status codes are decided here, not in the handler.** `Result.ok=False` maps to `Problem.domain_rejection(result.error)`: a `422` RFC 9457 problem document with the handler's reason as `detail`. A missing entity would be `Problem(404, ...)`. Request-body validation failures are FastAPI's own `422`, converted to the same shape. The handler never raises for domain reasons; the route never raises `HTTPException` (EIT005). Everything about errors is in `returning-errors.md`.
-- **`response_model` is always set.** It is the contract of the route for OpenAPI consumers, the same way `contract/` is the contract of the slice for code consumers.
+- ✅ **One router per slice**, `prefix="/<slice>"`, `tags=["<slice>"]`. The prefix is the slice name; the path is the verb or noun of the use case.
+- ✅ **Dispatch, never call.** The route builds a message from the contract and hands it to `request.app.state.bus`. It never imports a handler, an engine or anything from `internal/` of another slice (EIT001). `grep <Message>` therefore finds every caller of that use case.
+- ✅ **Validate shape at the edge, meaning in the handler.** Request models subclass `StrictRequest` (unknown fields are rejected), text fields use `text(max)` (length bounds, no control characters), and a list of texts gets a `check_total_chars` model validator so one call cannot ask for unbounded work. Whether the *content* makes sense — a blank question, an empty passage — is the handler's `Result.failure`, not a pydantic rule. A validation failure names the field; a domain rejection names the reason.
+- ✅ **Convert at the edge.** Pydantic models are the HTTP representation and stay in `routes.py`. Messages and result types are frozen dataclasses from `contract/`; tuples in, lists out. The route is the only place that knows both.
+- ✅ **Status codes are decided here, not in the handler.** `Result.ok=False` maps to `Problem.domain_rejection(result.error)`: a `422` RFC 9457 problem document with the handler's reason as `detail`. A missing entity would be `Problem(404, ...)`. Request-body validation failures are FastAPI's own `422`, converted to the same shape. The handler never raises for domain reasons; the route never raises `HTTPException` (EIT005). See [Returning errors](returning-errors.md) for the error rules.
+- ✅ **`response_model` is always set.** It is the contract of the route for OpenAPI consumers, the same way `contract/` is the contract of the slice for code consumers.
 
 ## Case A — worked example: `POST /chunking/count`
 
@@ -86,7 +95,7 @@ Then: `pytest tests/api`, `eitri check --root .`, `heimdall map --root .` (so th
 
 ## Case B — worked example: `POST /embeddings/similarity`, a message the contract lacks
 
-Say the API should score how close a question is to each of a handful of candidate texts, without the caller handling vectors. No message in the embeddings contract does that, so the **contract changes first, additively**.
+⚠️ This is a worked example of how the existing similarity use case was added. `RankCandidates` and `/embeddings/similarity` already exist; do not add duplicates. For a genuinely new capability, change the **contract first, additively**, following the same sequence.
 
 1. **Check the fan-in** of the contract in the root `AGENTS.md` slice table. Below 10: add freely. 10 or more: the contract is frozen — additive only, and Heimdall will warn you in-loop when you edit it. Never change or remove an existing member of a frozen contract; add the new one and leave the old.
 
@@ -145,6 +154,8 @@ This is how `embeddings` uses `chunking` today: a passage longer than the model'
 Health, readiness, build info and similar cross-cutting endpoints go in `src/pfa_api/routes/<name>.py` with their own `APIRouter`, mounted in `create_app()`. They may dispatch on the bus but must not import any slice's `internal/` — `tests/api/test_architecture.py` enforces that only `composition.py` does.
 
 ## Checklist before you finish
+
+✅ **Verify each item.** The unchecked boxes below are requirements, not a record of checks already run.
 
 - [ ] Route is in the slice that owns the use case; one `APIRouter` per slice with `prefix="/<slice>"`.
 - [ ] Pydantic models live in `routes.py`, subclass `StrictRequest`, bound every text with `text(max)` and every list with `max_length` + `check_total_chars`; `contract/` still imports nothing from fastapi or pydantic.
