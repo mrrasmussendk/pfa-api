@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 from conftest import TempProject, TempRepo
 
+from brokkr import estimate
 from heimdall.commands import review
 from heimdall.commands.review import (
     EXIT_ERROR,
@@ -187,6 +188,8 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
     assert facts["contracts_touched"] == {"rune": {"fan_in": 12, "frozen": True}}
     assert facts["routes_changed"] is True and facts["source_changed"] is True and facts["docs_changed"] is True
     assert facts["code_changed"] is True  # Python outside tests changed: the craft targets apply
+    assert facts["state_tokens"] == facts["diff_tokens"] > 0 and facts["files_truncated"] == []  # small enough to be seen whole
+    assert facts["state_budget_tokens"] == 28_000 and facts["judge_window_tokens"] == 32_000
     assert facts["tests_changed"] == ["tests/api/test_kvad.py"]
     areas = {e["path"]: e["area"] for e in state["files"]}
     assert areas["src/pfa/api/routes/kvad.py"] == "slice:kvad"
@@ -198,11 +201,15 @@ def test_state_carries_heimdalls_facts_and_the_architecture() -> None:
 
 
 def test_oversized_files_are_truncated_and_named(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(review.state, "MAX_FILE_CHARS", 120)
+    monkeypatch.setattr(review.state, "MAX_FILE_TOKENS", 10)
     state = build_state(parse_unified_diff(DIFF), _map(), None)
     assert "src/pfa/api/routes/kvad.py" in state["facts"]["files_truncated"]
     big = next(e for e in state["files"] if e["path"].endswith("routes/kvad.py"))
     assert "more diff lines not shown" in big["diff"]
+    assert state["facts"]["state_tokens"] < state["facts"]["diff_tokens"]  # the comment says how much the judge saw
+    md = render_markdown(decide(_answers(), state["facts"], "m", {}), state, questions())
+    assert "tokens sent of a 28,000 budget (Jev reads 32,000 with the questions); the whole diff is ~" in md
+    assert "file(s) were cut and the craft scores rate what the judge saw" in md
 
 
 def test_the_features_package_init_is_the_application_not_a_slice() -> None:
@@ -219,7 +226,7 @@ def test_the_budget_is_spent_on_the_source_before_tests_and_docs(monkeypatch: py
     files = parse_unified_diff(DIFF)
     files.reverse()  # git lists the docs first; the judge must still see the code
     source = [f for f in files if f.path.startswith("src/")]
-    monkeypatch.setattr(review.state, "MAX_STATE_CHARS", sum(len(f.text) for f in source))
+    monkeypatch.setattr(review.state, "MAX_STATE_TOKENS", sum(estimate(f.text) for f in source))
     state = build_state(files, _map(), None)
     assert [e["area"] for e in state["files"]] == ["slice:kvad", "contract:rune", "tests", "docs"]
     assert not any(p.startswith("src/") for p in state["facts"]["files_truncated"])
