@@ -26,7 +26,7 @@ PFA-API/
 - [Quick start](#quick-start)
 - **Part I — Using the service:** [Endpoints](#endpoints) · [The model](#the-model) · [Errors are problem documents](#errors-are-problem-documents-rfc-9457) · [Running in production](#running-in-production)
 - **Part II — How the code is organised:** [New to this architecture?](#new-to-this-architecture-start-here) · [The dependency direction](#the-dependency-direction) · [Inside a slice](#inside-a-slice) · [CQRS](#cqrs--how-a-slice-exposes-capability) · [Chunking](#chunking--the-models-512-token-window)
-- **Part III — What keeps it that way:** [Code quality](#code-quality--ruff-mypy-and-warnings-as-errors) · [Eitri](#eitri--the-walls) · [Brokkr](#brokkr--the-canary) · [Heimdall](#heimdall--the-harness-) · [CI/CD](#cicd--the-gate-and-the-judgment)
+- **Part III — What keeps it that way:** [Code quality](#code-quality--ruff-mypy-and-warnings-as-errors) · [Eitri](#eitri--the-walls) · [The token budget](#how-the-token-budget-works) · [Brokkr](#brokkr--the-canary) · [Heimdall](#heimdall--the-harness-) · [CI/CD](#cicd--the-gate-and-the-judgment)
 - [Appendix](#appendix): what changed from the .NET original · the philosophy · license
 
 ## Quick start
@@ -370,6 +370,77 @@ src/slices/search: error EIT100: Slice 'search' worst-case agent working set is 
       (own source 12,981 + dependency contracts 2,672 + kernel 551), over the budget
       of 15,000 — split the slice or slim its contracts
 ```
+
+### How the token budget works
+
+**Why it exists.** An agent has no memory of the codebase between sessions. Everything it knows about the code is what it loaded into context this session, and the quality of what it writes falls off with the size of what it had to read to get there. Past a certain working set the agent stops reading and starts guessing: it re-implements a helper it never saw, calls a function with the signature it assumed, edits the file that looked right. A human compensates with months of familiarity, an IDE, and a colleague to ask. The agent starts cold every time and pays the full price of loading the working set on every task. The size of that working set is therefore the single biggest lever on whether agent output is correct, and the one no test suite measures.
+
+EIT100 puts a ceiling on it. It is a [fitness function](https://www.thoughtworks.com/insights/articles/fitness-function-driven-development): an architectural property turned into a number the build checks, so the property cannot erode quietly. The number is in tokens rather than lines or files because tokens are the unit the agent's context is actually measured in — the gate and the thing it protects use one ruler.
+
+**Why it produces clean code without a rule saying so.** "Separate your concerns" and "keep interfaces thin" are not enforceable: no check can tell a good seam from a bad one. A token ceiling *is* enforceable, and the only ways to stay under it happen to be the things those rules ask for:
+
+- To keep a slice under budget you must split it when it grows past one capability — **cohesion**, because the split that keeps both halves small is the one along the real seam.
+- To keep a dependency cheap you must keep its `contract/` to messages and result types and move everything else to `internal/` — **thin interfaces**, because a consumer pays for every public name you expose.
+- To keep every slice under budget you must keep the kernel tiny — **no god-module**, because the kernel is priced into all of them.
+- And you cannot cheat by reaching into a neighbour's `internal/` for a shortcut, because EIT001–EIT004 fail the build. The walls are what make the pricing honest; the budget is what makes the walls worth having.
+
+Agents optimise for the feedback they get. If the gate is "tests pass", code lands wherever it is easiest to make a test pass. If the gate also says "this slice no longer fits", the agent is told, in the loop, to find the seam — and it does, because that is the only move that turns the check green. That is what makes this part of the harness rather than a linter: `AGENTS.md` says where things go (feedforward), EIT100 says when the map has stopped being true (feedback), and `heimdall drift` closes the loop by showing whether agents actually stayed inside the working set the budget promised. Sustained reads outside it mean the seam is wrong, not the agent.
+
+What the budget does *not* guarantee is that a split is a good one: two slices that always change together are worse than one, and the check will not object. It bounds what must be read. Judgement about where to cut is still yours — or Jev's, on the PR.
+
+`tools/eitri/context_budget.py` computes the number; `tools/eitri/surface.py` builds the stubs; `tools/brokkr/tokenization.py` counts the tokens.
+
+**The formula.** For every slice, on every `eitri check`:
+
+```
+working set  =  own source                      every .py under src/slices/<slice>/ (contract/ + internal/), counted in full
+             +  Σ dependency contract surfaces   for each slice in slice.json: its contract/ as body-less stubs
+             +  kernel surface                   src/shared_kernel/ as body-less stubs — always, every slice may import it
+```
+
+`http_common` is not in the sum: it is declared shared in `[tool.heimdall]`, is only imported from `internal/`, and is not something a slice *consumes* as a dependency. Tests live under `tests/`, outside the slice, and are not counted either.
+
+**What a "surface" is.** A dependency is priced by what you need to *call* it, not by what it does. Eitri parses each contract module into an AST and re-renders it as a `.pyi`-shaped stub: public classes, functions, annotated attributes and constants, with every function body replaced by `...`, private names (`_x`) dropped, dunders kept (an agent needs `__init__` to construct a type), and `__all__` honoured when a module declares one. `eitri surface <slice>` prints exactly what gets priced; `eitri surface shared_kernel` prints the kernel's. This is chunking's whole contract surface today:
+
+```
+# queries.py
+@dataclass(frozen=True)
+class CountTokens(Query):
+    text: str
+@dataclass(frozen=True)
+class SplitText(Query):
+    text: str
+    budget: int
+
+# results.py
+@dataclass(frozen=True)
+class Chunks:
+    tokenizer: str
+    budget: int
+    chunks: tuple[str, ...]
+    token_counts: tuple[int, ...]
+```
+
+That is 82 tokens. Chunking's *implementation* — the tokenizer wrapper, the paragraph/sentence/word fallbacks, the router — costs `embeddings` nothing, which is exactly what the architecture promises: you consume a slice through its contract and never open its `internal/`. The same stub treatment is why the kernel's 686 tokens of source price at 177. A file Eitri cannot parse is charged at its raw text, so the number never under-counts.
+
+**How tokens are counted.** Brokkr's estimator is dependency-free so the gate stays fast and importable from anywhere: identifiers cost one token per ~6 characters, digit runs one per ~3, up to three punctuation characters cost one, whitespace is free. It lands within roughly ±10% of `o200k_base` on typical Python and errs on the high side, so a stricter budget is the failure mode. `heimdall estimate <path>` prints the same estimator's number for any file or directory, so a human and the gate use one ruler. `docs/calibration.md` shows how to re-check it against tiktoken.
+
+**Today's numbers** (`eitri check --root .` always prints them as EIT101 info lines; `--no-info` hides them):
+
+| slice | own source | dependency contracts | kernel | total | of budget |
+|---|---:|---:|---:|---:|---:|
+| chunking | 2,242 | 0 | 177 | 2,419 | 16% |
+| embeddings | 4,796 | 82 (chunking) | 177 | 5,055 | 34% |
+
+**Where the budget comes from.** `[tool.eitri] token_budget` in `pyproject.toml`, 15,000 by default; `eitri check --budget N` overrides it for one run (Brokkr's canary 7 uses `--budget 100` to prove the rule still bites). The number is deliberately far below any model's context window: a slice that fits in 15k tokens leaves most of the window for the task, the guides, the conversation and the diff, and a human can hold it in their head too.
+
+**What it costs to add code.** The formula tells you who pays before you write a line:
+
+- A line in your own `internal/` costs **only your slice**.
+- A public name in your `contract/` costs **you plus every slice that depends on you** — the fan-in column in `AGENTS.md`'s slice map is the multiplier.
+- A public name in `shared_kernel` costs **every slice in the repo**, forever. That is why the kernel is two files — `Result`, and the `Message`/`Query`/`Command`/`Bus` messaging primitives — and why "should this go in the kernel?" is usually answered no.
+
+**When EIT100 fails** the fix is structural, never the number. Split the slice by sub-capability (two slices with a contract between them each fit; one god-slice does not), slim the contract (a consumer should see messages and result types, not helpers — move the rest to `internal/`), or slim the kernel. Raising `token_budget` is a change to the promise, not to the code, and Brokkr will ask you to run the canaries afterwards. `docs/rules/EIT100.md` is the one-page version of this section.
 
 Rules that merely warn get negotiated with. Rules that fail the build get obeyed. In .NET that gate was the compiler; here it is `eitri check` in CI — which is why Brokkr exists. One page per rule under `docs/rules/`.
 
