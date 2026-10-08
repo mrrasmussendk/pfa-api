@@ -12,6 +12,9 @@ always says *why the request made no sense*.
 
 Every failure here is a pydantic ``ValueError`` and therefore a ``validation-error`` problem
 document with the field's location in ``errors``.
+
+``with_example`` is the one documentation helper beside them: every request and response model
+carries one real example, which is what ``/docs`` offers under *Try it out*.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from collections.abc import Iterable
 from typing import Annotated, Any
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, StringConstraints
+from pydantic.json_schema import JsonDict
 
 # C0 controls except TAB, LF, CR; DEL; and the C1 range. NUL is the one that bites in practice
 # (tokenizers and databases both choke on it); the rest are never meaningful in prose.
@@ -32,6 +36,12 @@ class StrictRequest(BaseModel):
     that sends ``questions`` instead of ``question`` learns about it on the first call."""
 
     model_config = ConfigDict(extra="forbid", str_max_length=1_000_000)
+
+
+def with_example(payload: JsonDict) -> ConfigDict:
+    """A model's ``model_config`` carrying the one example ``/docs`` shows: a real exchange, captured
+    once. On a request model it merges with ``StrictRequest``'s config, so unknown fields stay rejected."""
+    return ConfigDict(json_schema_extra={"examples": [payload]})
 
 
 def reject_control_chars(value: str) -> str:
