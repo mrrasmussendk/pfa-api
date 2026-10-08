@@ -4,7 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from pydantic.json_schema import JsonValue
+from pydantic.json_schema import JsonDict, JsonValue
 
 from pfa.api.problems import MODEL_BUSY, Problem, domain_rejections, problem_response
 from pfa.api.validation import StrictRequest, check_total_chars, text
@@ -27,10 +27,27 @@ MAX_TEXT_CHARS = 200_000  # per passage/candidate; the model window is enforced 
 MAX_TEXTS = 256  # per request
 MAX_TOTAL_CHARS = 2_000_000  # per request, all texts together: the work budget one call may ask for
 
-# The examples are a real exchange with the default model (vectors cut to their first four values).
+# The examples are one real exchange with the default model, request beside response
+# (vectors cut to their first four values).
 _MODEL = "intfloat/multilingual-e5-large"
 _QUESTION = "Hvordan nulstiller jeg min adgangskode?"
 _PASSAGES: list[JsonValue] = ["To reset your password, open Settings and choose Security.", "Opening hours: Monday to Friday, 9 to 17."]
+_QUERY_OUT: JsonDict = {"model": _MODEL, "dimensions": 1024, "embedding": [0.0093, 0.0194, -0.0111, -0.0416]}
+_PASSAGES_OUT: JsonDict = {
+    "model": _MODEL,
+    "dimensions": 1024,
+    "chunks": [
+        {"source_index": 0, "chunk_index": 0, "chunk_count": 1, "text": _PASSAGES[0], "embedding": [0.042, -0.0136, -0.0274, -0.0513]},
+        {"source_index": 1, "chunk_index": 0, "chunk_count": 1, "text": _PASSAGES[1], "embedding": [0.0354, -0.0374, -0.0323, -0.0333]},
+    ],
+}
+_SIMILARITY_OUT: JsonDict = {
+    "model": _MODEL,
+    "matches": [
+        {"source_index": 0, "text": _PASSAGES[0], "score": 0.8112, "chunk_index": 0, "chunk_count": 1},
+        {"source_index": 1, "text": _PASSAGES[1], "score": 0.7306, "chunk_index": 0, "chunk_count": 1},
+    ],
+}
 _VECTOR = "Unit-normalised vector of `dimensions` floats (1024 for the default model); the example shows the first four"
 
 
@@ -63,9 +80,7 @@ class QuestionRequest(StrictRequest):
 
 
 class EmbeddingOut(BaseModel):
-    model_config = ConfigDict(
-        json_schema_extra={"examples": [{"model": _MODEL, "dimensions": 1024, "embedding": [0.0093, 0.0194, -0.0111, -0.0416]}]}
-    )
+    model_config = ConfigDict(json_schema_extra={"examples": [_QUERY_OUT]})
 
     model: str = Field(description="The model that embedded")
     dimensions: int = Field(description="Length of `embedding`")
@@ -94,32 +109,7 @@ class PassageEmbeddingOut(BaseModel):
 
 
 class PassagesOut(BaseModel):
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {
-                    "model": _MODEL,
-                    "dimensions": 1024,
-                    "chunks": [
-                        {
-                            "source_index": 0,
-                            "chunk_index": 0,
-                            "chunk_count": 1,
-                            "text": _PASSAGES[0],
-                            "embedding": [0.042, -0.0136, -0.0274, -0.0513],
-                        },
-                        {
-                            "source_index": 1,
-                            "chunk_index": 0,
-                            "chunk_count": 1,
-                            "text": _PASSAGES[1],
-                            "embedding": [0.0354, -0.0374, -0.0323, -0.0333],
-                        },
-                    ],
-                }
-            ]
-        }
-    )
+    model_config = ConfigDict(json_schema_extra={"examples": [_PASSAGES_OUT]})
 
     model: str = Field(description="The model that embedded")
     dimensions: int = Field(description="Length of every `embedding`")
@@ -154,19 +144,7 @@ class MatchOut(BaseModel):
 
 
 class SimilarityOut(BaseModel):
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {
-                    "model": _MODEL,
-                    "matches": [
-                        {"source_index": 0, "text": _PASSAGES[0], "score": 0.8112, "chunk_index": 0, "chunk_count": 1},
-                        {"source_index": 1, "text": _PASSAGES[1], "score": 0.7306, "chunk_index": 0, "chunk_count": 1},
-                    ],
-                }
-            ]
-        }
-    )
+    model_config = ConfigDict(json_schema_extra={"examples": [_SIMILARITY_OUT]})
 
     model: str = Field(description="The model that scored")
     matches: list[MatchOut] = Field(description="Every candidate, best first")
