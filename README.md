@@ -174,6 +174,7 @@ Read [docs/](docs/) to understand the project. Use [harness/](harness/) for inst
 | Understand checks, token budgets, agent hooks, and CI | [Development tooling](docs/tooling.md) |
 | Add an endpoint | [Adding a route](harness/guides/adding-a-route.md) |
 | Return an API error | [Returning errors](harness/guides/returning-errors.md) |
+| Write or change tests | [Writing tests](harness/guides/writing-tests.md) |
 | Run or understand the PR review | [PR review with Jev](harness/guides/pr-review.md) |
 | Investigate an architecture violation | [Eitri rule reference](harness/rules/) |
 | Check the token estimator | [Calibration](docs/calibration.md) |
