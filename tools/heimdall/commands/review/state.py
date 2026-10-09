@@ -21,7 +21,7 @@ from .diff import FileChange
 # is within about 10% of a real tokenizer: the margin below the window pays for that and the questions.
 JUDGE_WINDOW_TOKENS = 32_000
 MAX_STATE_TOKENS = 28_000  # all files together
-MAX_FILE_TOKENS = 6_000  # per file; the rest is summarised as "N more diff lines not shown"
+MAX_FILE_TOKENS = 6_000  # per file; the rest is summarised as "N more lines not shown"
 # The order the budget is spent in: the code the walls are about first, prose last. A wide diff
 # then truncates docs and tooling, never the slice the judge is asked about.
 _AREA_PRIORITY = ("slice:", "contract:", "kernel", "app", "service", "shared:", "tests", "tooling", "ci", "docs", "other")
@@ -29,7 +29,17 @@ _AREA_PRIORITY = ("slice:", "contract:", "kernel", "app", "service", "shared:", 
 _FIX_LINE = re.compile(r"^\*\*Fix[^*]*:\*\*\s*(.+?)\s*$", re.MULTILINE)
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
-__all__ = ["area_of", "build_state", "fix_from_docs", "function_shape", "shape_line", "wall_findings"]
+__all__ = [
+    "area_of",
+    "build_state",
+    "fix_from_docs",
+    "function_shape",
+    "is_application",
+    "shape_line",
+    "touched_lines",
+    "truncate",
+    "wall_findings",
+]
 
 
 def area_of(path: str, m: MapModel | None) -> str:
@@ -59,11 +69,17 @@ def area_of(path: str, m: MapModel | None) -> str:
     return "other"
 
 
+def is_application(area: str) -> bool:
+    """A slice, a contract, the kernel, the application or a shared package: the code the craft floor is about,
+    as opposed to the tests, the tooling, CI and docs."""
+    return area.startswith(("slice:", "contract:", "shared:")) or area in ("kernel", "app", "service")
+
+
 def _priority(area: str) -> int:
     return next((i for i, prefix in enumerate(_AREA_PRIORITY) if area == prefix or area.startswith(prefix)), len(_AREA_PRIORITY))
 
 
-def _truncate(text: str, limit: int) -> tuple[str, bool]:
+def truncate(text: str, limit: int) -> tuple[str, bool]:
     """``text`` cut at a line boundary to about ``limit`` tokens, and whether it was cut."""
     if estimate(text) <= limit:
         return text, False
@@ -75,7 +91,7 @@ def _truncate(text: str, limit: int) -> tuple[str, bool]:
             break
         kept.append(line)
     dropped = len(text.splitlines()) - len(kept)
-    return "\n".join(kept) + f"\n… [{dropped} more diff lines not shown]", True
+    return "\n".join(kept) + f"\n… [{dropped} more lines not shown]", True
 
 
 def fix_from_docs(root: Path, help_link: str) -> str:
@@ -129,7 +145,7 @@ def wall_findings(cwd: str, files: list[FileChange]) -> list[dict[str, Any]]:
     return sorted(out, key=lambda v: (v["path"], v["line"] or 0, v["rule"]))
 
 
-def _touched_lines(f: FileChange) -> set[int]:
+def touched_lines(f: FileChange) -> set[int]:
     """Line numbers in the new file that the diff adds, or that follow a removed line."""
     touched: set[int] = set()
     line = 0
@@ -162,7 +178,7 @@ def function_shape(cwd: str, files: list[FileChange], m: MapModel | None) -> lis
             source = (Path(cwd) / path).read_text(encoding="utf-8")
         except (OSError, ValueError):
             continue
-        out += oversized(path, source, _touched_lines(f))
+        out += oversized(path, source, touched_lines(f))
     return sorted(out, key=lambda v: (v["path"], v["line"]))
 
 
@@ -182,8 +198,7 @@ class _Tally:
     state_tokens: int = 0  # what the judge gets after the caps
 
     def count(self, area: str, f: FileChange, m: MapModel | None) -> None:
-        in_application = area.startswith(("slice:", "contract:", "shared:")) or area in ("kernel", "app", "service")
-        if in_application and f.status != "deleted" and norm(f.path).endswith(".py"):
+        if is_application(area) and f.status != "deleted" and norm(f.path).endswith(".py"):
             self.code_changed = True
         if area.startswith(("slice:", "contract:")):
             name = area.split(":", 1)[1]
@@ -213,7 +228,7 @@ def _entries(files: list[FileChange], m: MapModel | None, tally: _Tally) -> list
             text = "[binary]"
         else:
             tally.diff_tokens += estimate(f.text)
-            text, cut = _truncate(f.text, min(MAX_FILE_TOKENS, max(budget, 100)))
+            text, cut = truncate(f.text, min(MAX_FILE_TOKENS, max(budget, 100)))
             if cut:
                 tally.truncated.append(f.path)
         tally.state_tokens += estimate(text)

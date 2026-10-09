@@ -1,7 +1,9 @@
 """The questions: fixed, typed, greppable. Wording is the whole interface to the model — each
 question names what it judges and the criteria name what each answer means. They are data, grouped
 by what they decide: the gates, the fit against the task and the architecture, the craft of the
-code, the rubrics, and the two labels for the report."""
+code, the rubrics, and the two labels for the report. ``questions()`` is asked once about the diff;
+``file_questions()`` is asked about each edited application file, whole, so clean code is judged on
+the file the change leaves behind and the verdict can name it."""
 
 from __future__ import annotations
 
@@ -101,24 +103,30 @@ _CRAFT: dict[str, dict[str, Any]] = {
             "false": "A changed signature is wide, flag-driven or passes values through",
         },
     },
+}
+
+# Clean code, asked about one file whole (`file.content`): the state of a craft call is the file as the
+# change leaves it, with `facts.changed_lines` marking what this change touched. A diff would show only
+# the lines that moved; the file shows the duplication two hunks apart and the branch left dead.
+_FILE_CRAFT: dict[str, dict[str, Any]] = {
     "clean_code": {
         "type": "score",
         "instructions": (
-            "Rate the craft of the changed code as a whole: no duplication, no dead code, comments that explain why rather than what, "
-            "consistency with the surrounding style, errors handled where they arise. Single purpose and signatures are asked "
-            "separately; do not re-score them here."
+            "Rate the craft of `file.content` as a whole — the file as it now stands, not only the lines in `facts.changed_lines`: "
+            "no duplication, no dead code, comments that explain why rather than what, one consistent style throughout, errors "
+            "handled where they arise. Function length, single purpose and signatures are judged elsewhere; do not re-score them here."
         ),
         "criteria": ["Hard to follow", "Acceptable", "Clean", "Exemplary"],
     },
     "clean_code_limit": {
         "type": "choice",
-        "instructions": "What keeps the changed code from exemplary most? Choose `none` only when nothing would make it cleaner.",
+        "instructions": "What keeps `file.content` from exemplary most? Choose `none` only when nothing would make the file cleaner.",
         "criteria": {
             "none": "Nothing: it is exemplary",
             "duplication": "The same logic written twice",
             "dead_code": "Unused code, parameters or branches",
             "comments": "Comments that say what instead of why, or missing where a why is needed",
-            "style": "Inconsistent with the surrounding code",
+            "style": "Inconsistent with the rest of the file",
             "error_handling": "Errors handled far from where they arise, or swallowed",
         },
     },
@@ -177,5 +185,10 @@ _LABELS: dict[str, dict[str, Any]] = {
 
 
 def questions() -> dict[str, dict[str, Any]]:
-    """Every question in the order the table shows them: gates, fit, craft, rubrics, labels."""
+    """Every question asked about the diff, in the order the table shows them: gates, fit, craft, rubrics, labels."""
     return {**_GATES, **_FIT, **_CRAFT, **_RUBRICS, **_LABELS}
+
+
+def file_questions() -> dict[str, dict[str, Any]]:
+    """The questions asked about each edited application file, whole: clean code and what limits it."""
+    return dict(_FILE_CRAFT)

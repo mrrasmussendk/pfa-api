@@ -33,10 +33,11 @@ T = {
     "security_approve": 0.20,
     "tests_approve": 0.50,
     # 2.7 of 3 is 90%: the floor the author set for the craft of the application's code, and it is not to be lowered.
-    # The tooling under tools/ is judged on correctness and tests, not on prose (facts.code_changed is about the application).
+    # It is judged file by file, each edited application file whole, so a shortfall names the file (the tooling under
+    # tools/ is judged on correctness and tests, not on prose, and is never sent whole).
     # Readability is not scored: across eight runs on application code the judge withheld its top level for the
     # subject, not the craft, naming no limit, so the score could not be acted on (harness/guides/pr-review.md).
-    "clean_target": 2.7,  # expected clean_code on 0..3 below → request_changes when the application's code changed
+    "clean_target": 2.7,  # expected clean_code of one file on 0..3 below → request_changes naming the file
     "purpose_approve": 0.50,  # single_purpose >=
     "signatures_approve": 0.50,  # lean_signatures >=
 }
@@ -79,6 +80,7 @@ class Verdict:
     model: str
     usage: dict[str, Any]
     advice: list[str] = field(default_factory=list)  # one plain sentence per reason
+    files: dict[str, dict[str, Any]] = field(default_factory=dict)  # the clean-code answers per file judged whole, by path
 
     @property
     def exit_code(self) -> int:
@@ -123,9 +125,23 @@ def _limit_fix(answers: dict[str, Any], key: str, fixes: dict[str, str]) -> str:
 
 
 @dataclass(frozen=True)
+class _FileCraft:
+    """One file's clean-code answers: the score and the fix its limit label names."""
+
+    path: str
+    clean: float
+    fix: str
+
+    @classmethod
+    def read(cls, path: str, answers: dict[str, Any]) -> _FileCraft:
+        return cls(path, _score(answers, "clean_code", 4), _limit_fix(answers, "clean_code_limit", _CLEAN_FIXES))
+
+
+@dataclass(frozen=True)
 class _Judgment:
     """The judge's answers read once, with the policy's neutral defaults for anything unanswered:
-    an unanswered gate is on the fence, an unanswered applicability-gated question is a Yes."""
+    an unanswered gate is on the fence, an unanswered applicability-gated question is a Yes. Clean code
+    is read per file judged whole; a file the judge never saw has no score and is not a shortfall."""
 
     safe: float
     human: float
@@ -136,17 +152,16 @@ class _Judgment:
     errors_ok: float
     scope: float
     correctness: float
-    clean: float
-    clean_fix: str
     purpose: float
     signatures: float
     blast: float
     risk: str
     risk_p: float
     kind: str
+    files: tuple[_FileCraft, ...]
 
     @classmethod
-    def read(cls, answers: dict[str, Any]) -> _Judgment:
+    def read(cls, answers: dict[str, Any], files: dict[str, dict[str, Any]] | None = None) -> _Judgment:
         risk, risk_p = _choice(answers, "biggest_risk")
         return cls(
             safe=_noul(answers, "safe_to_merge"),
@@ -158,42 +173,44 @@ class _Judgment:
             errors_ok=_noul(answers, "errors_use_problem_details", 1.0),
             scope=_noul(answers, "stays_in_scope", 1.0),
             correctness=_score(answers, "correctness", 4),
-            clean=_score(answers, "clean_code", 4),
-            clean_fix=_limit_fix(answers, "clean_code_limit", _CLEAN_FIXES),
             purpose=_noul(answers, "single_purpose", 1.0),
             signatures=_noul(answers, "lean_signatures", 1.0),
             blast=_score(answers, "blast_radius", 3),
             risk=risk,
             risk_p=risk_p,
             kind=_choice(answers, "change_kind")[0],
+            files=tuple(_FileCraft.read(path, a) for path, a in (files or {}).items()),
         )
 
+    @property
+    def shortfalls(self) -> list[_FileCraft]:
+        """The files judged whole whose clean code is below the target, lowest first."""
+        return sorted((f for f in self.files if f.clean < T["clean_target"]), key=lambda f: f.clean)
 
-def _over(facts: dict[str, Any], limit: str) -> str:
-    """The changed functions the AST found over one limit (``lines`` or ``params``), named the way the
-    table names them; ``""`` when none."""
-    return "; ".join(shape_line(v) for v in facts.get("function_shape") or [] if limit in v["over"])
+
+def _over(facts: dict[str, Any], limit: str, path: str | None = None) -> str:
+    """The changed functions the AST found over one limit (``lines`` or ``params``), in one file when ``path``
+    is given, named the way the table names them; ``""`` when none."""
+    found = [v for v in facts.get("function_shape") or [] if limit in v["over"] and (path is None or v["path"] == path)]
+    return "; ".join(shape_line(v) for v in found)
 
 
-def _start_with(facts: dict[str, Any], limit: str = "lines") -> str:
+def _start_with(facts: dict[str, Any], limit: str = "lines", path: str | None = None) -> str:
     """`` — start with path:line name (…)`` when the AST named a function, so advice says where to begin."""
-    over = _over(facts, limit)
+    over = _over(facts, limit, path)
     return f" — start with {over}" if over else ""
 
 
-def _craft_shortfalls(j: _Judgment) -> list[tuple[str, float, float, str, str]]:
-    """The craft score below its target, as ``(name, score, target, what 3 means, fix)``; empty when on target."""
-    rubrics = [("clean code", j.clean, T["clean_target"], "3 is exemplary", j.clean_fix)]
-    return [r for r in rubrics if r[1] < r[2]]
-
-
 def _craft_doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
-    """The clean-code answers below their bar, each with the code change that answers it. The AST facts
-    name the function when there is one over the limits; otherwise the advice names the kind of fix. The
-    craft targets are about the application's code: a tooling diff is not sent back for prose."""
+    """The clean-code answers below their bar, each with the code change that answers it: a file below the
+    target is named with its limit label and the functions the AST found over the limits in it; a doubt about
+    purpose or signatures names the function when there is one, otherwise the kind of fix."""
+    target = T["clean_target"]
+    out = [
+        (f"it rates {f.path} {f.clean:.2f}/3 against the target {target}: {f.fix}{_start_with(facts, 'lines', f.path)}", True)
+        for f in j.shortfalls
+    ]
     where = _start_with(facts)
-    shortfalls = _craft_shortfalls(j) if facts.get("code_changed") else []
-    out = [(f"it rates {name} {score:.2f}/3 against the target {target}: {fix}{where}", True) for name, score, target, _, fix in shortfalls]
     if j.purpose < T["purpose_approve"]:
         out.append((f"it doubts every changed function does one thing ({j.purpose:.2f}): {_SPLIT_FIX}{where}", True))
     if j.signatures < T["signatures_approve"]:
@@ -247,11 +264,10 @@ def _risk_doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
     return out
 
 
-def _doubts(answers: dict[str, Any], facts: dict[str, Any]) -> list[tuple[str, bool]]:
+def _doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
     """What drives a low ``safe_to_merge``: every other answer below its own bar, as ``(sentence, fixable)``.
     A fixable doubt names the code change that answers it; the rest is for a reviewer to weigh. The
     comment never says "the other rows say what it doubts most"."""
-    j = _Judgment.read(answers)
     return _fit_doubts(j, facts) + _craft_doubts(j, facts) + _risk_doubts(j, facts)
 
 
@@ -276,12 +292,12 @@ def _walls_clean(j: _Judgment, facts: dict[str, Any]) -> str:
     )
 
 
-def _not_safe(j: _Judgment, answers: dict[str, Any], facts: dict[str, Any], flag: Flag) -> str | None:
+def _not_safe(j: _Judgment, facts: dict[str, Any], flag: Flag) -> str | None:
     """A low ``safe_to_merge`` blocks when a doubt behind it has a code fix (and the advice names it);
     otherwise it returns the sentence for the escalation, since only a person can clear it."""
     if j.safe > T["safe_block"]:
         return None
-    doubts = _doubts(answers, facts)
+    doubts = _doubts(j, facts)
     fixable = [text for text, can_fix in doubts if can_fix]
     weigh = [text for text, can_fix in doubts if not can_fix]
     if fixable:
@@ -384,27 +400,27 @@ def _shape_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
 
 
 def _craft_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
-    """Clean code below its target sends the agent back, when the application's code changed
-    (``facts.code_changed``; the tooling is judged on correctness and tests, not on prose). The target is
-    deliberately above "good enough": the advice names what the judge says limits the score, and the
-    functions the AST found over the limits, so the agent knows where to start."""
-    if not facts.get("code_changed"):
-        return
-    where = _start_with(facts)
-    cut = facts.get("files_truncated") or []
-    if cut:
-        where += f". The judge saw a cut diff ({len(cut)} file(s) over the token budget), so the score rates what it saw"
-    for name, score, target, top, fix in _craft_shortfalls(j):
+    """A file whose clean code is below the target sends the agent back to that file. Each edited application
+    file was judged whole, so the reason names the path, and the advice what the judge says limits it and the
+    functions the AST found over the limits in that file: the agent knows which file and where in it to start.
+    The target is deliberately above "good enough"; the tooling is never judged whole, so it never lands here."""
+    target = T["clean_target"]
+    cut = facts.get("craft_truncated") or []
+    for f in j.shortfalls:
+        where = _start_with(facts, "lines", f.path)
+        if f.path in cut:
+            where += ". The judge saw the file cut at the token budget, so the score rates what it saw"
         flag(
-            f"{name} {score:.2f}/3 below the target {target}",
-            f"The judge rates the changed code's {name} {score:.2f} on 0–3 ({top}); the target is {target}. In its answer, {fix}{where}.",
+            f"clean code {f.clean:.2f}/3 in {f.path} below the target {target}",
+            f"The judge rates the whole file {f.path}, not only this change's lines, {f.clean:.2f} on 0–3 (3 is exemplary); "
+            f"the target is {target}. In its answer, {f.fix}{where}.",
         )
 
 
-def _blocks(j: _Judgment, answers: dict[str, Any], facts: dict[str, Any], flag: Flag) -> str | None:
+def _blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> str | None:
     """Every ``request_changes`` reason, facts first. Returns the not-safe sentence that needs a human instead."""
     _safety_blocks(j, facts, flag)
-    not_safe_needs_human = _not_safe(j, answers, facts, flag)
+    not_safe_needs_human = _not_safe(j, facts, flag)
     _architecture_blocks(j, facts, flag)
     _behaviour_blocks(j, facts, flag)
     _shape_blocks(j, facts, flag)
@@ -436,9 +452,19 @@ def _escalations(j: _Judgment, facts: dict[str, Any], not_safe_needs_human: str 
         )
 
 
+def _clean_note(j: _Judgment) -> str:
+    """The lowest clean-code score among the files judged whole, for the approval line; ``""`` when none was."""
+    if not j.files:
+        return ""
+    lowest = min(j.files, key=lambda f: f.clean)
+    if len(j.files) == 1:
+        return f" clean={lowest.clean:.2f}/3 ({lowest.path})"
+    return f" clean>={lowest.clean:.2f}/3 ({lowest.path} lowest of {len(j.files)} files)"
+
+
 def _approval(j: _Judgment, facts: dict[str, Any]) -> tuple[str, list[str]]:
-    """``approve`` when every bar is met, else ``comment`` with the bars that were not. Readability and clean
-    code have no bar here: below their target they already blocked in ``_craft_blocks``."""
+    """``approve`` when every bar is met, else ``comment`` with the bars that were not. Clean code has no bar
+    here: a file below the target already blocked in ``_craft_blocks``."""
     tests_needed = bool(facts.get("source_changed"))
     bars = [
         (j.safe >= T["safe_approve"], ""),
@@ -449,13 +475,21 @@ def _approval(j: _Judgment, facts: dict[str, Any]) -> tuple[str, list[str]]:
         (j.signatures >= T["signatures_approve"], f"signatures may be wide p={j.signatures:.2f}"),
     ]
     if all(met for met, _ in bars):
-        return "approve", [f"p(safe)={j.safe:.2f} p(human)={j.human:.2f} clean={j.clean:.2f}/3"]
+        return "approve", [f"p(safe)={j.safe:.2f} p(human)={j.human:.2f}{_clean_note(j)}"]
     notes = [f"p(safe)={j.safe:.2f}", f"p(human)={j.human:.2f}"] + [note for met, note in bars if not met and note]
     return "comment", notes
 
 
-def decide(answers: dict[str, Any], facts: dict[str, Any], model: str, usage: dict[str, Any]) -> Verdict:
-    j = _Judgment.read(answers)
+def decide(
+    answers: dict[str, Any],
+    facts: dict[str, Any],
+    model: str,
+    usage: dict[str, Any],
+    files: dict[str, dict[str, Any]] | None = None,
+) -> Verdict:
+    """The outcome from the diff's answers and, per file judged whole, the clean-code answers in ``files``."""
+    files = files or {}
+    j = _Judgment.read(answers, files)
     reasons: list[str] = []
     advice: list[str] = []
 
@@ -463,11 +497,11 @@ def decide(answers: dict[str, Any], facts: dict[str, Any], model: str, usage: di
         reasons.append(reason)
         advice.append(why)
 
-    not_safe_needs_human = _blocks(j, answers, facts, flag)
+    not_safe_needs_human = _blocks(j, facts, flag)
     if reasons:
-        return Verdict("request_changes", reasons, answers, model, usage, advice)
+        return Verdict("request_changes", reasons, answers, model, usage, advice, files)
     _escalations(j, facts, not_safe_needs_human, flag)
     if reasons:
-        return Verdict("escalate", reasons, answers, model, usage, advice)
+        return Verdict("escalate", reasons, answers, model, usage, advice, files)
     outcome, notes = _approval(j, facts)
-    return Verdict(outcome, notes, answers, model, usage)
+    return Verdict(outcome, notes, answers, model, usage, files=files)

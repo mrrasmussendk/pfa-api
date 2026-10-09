@@ -1,5 +1,6 @@
-"""``heimdall review``: diff -> bounded state -> one Jev call -> policy -> outcome.
-The network is replaced by a fake transport; the policy and the state are what is tested."""
+"""``heimdall review``: diff -> bounded state -> one Jev call about the diff and one per edited application
+file, whole -> policy -> outcome. The network is replaced by a fake transport; the policy and the state are
+what is tested."""
 
 from __future__ import annotations
 
@@ -19,7 +20,10 @@ from heimdall.commands.review import (
     EXIT_REQUEST_CHANGES,
     ReviewError,
     build_state,
+    craft_files,
+    craft_state,
     decide,
+    file_questions,
     function_shape,
     parse_unified_diff,
     questions,
@@ -109,14 +113,6 @@ def _answers(**over: Any) -> dict[str, Any]:
             "probabilities": {"0": 0.0, "1": 0.05, "2": 0.2, "3": 0.75},
             "confidence": 0.8,
         },
-        "clean_code": {
-            "type": "score",
-            "score": 2.9,
-            "legend": {"0": "Hard to follow", "1": "Acceptable", "2": "Clean", "3": "Exemplary"},
-            "probabilities": {"0": 0.0, "1": 0.0, "2": 0.1, "3": 0.9},
-            "confidence": 0.8,
-        },
-        "clean_code_limit": {"type": "choice", "choice": "none", "probabilities": {"none": 0.9, "comments": 0.1}, "confidence": 0.8},
         "single_purpose": {"type": "noul", "noul": 0.9},
         "lean_signatures": {"type": "noul", "noul": 0.9},
         "blast_radius": {
@@ -140,11 +136,30 @@ def _answers(**over: Any) -> dict[str, Any]:
     return base
 
 
-def _transport(answers: dict[str, Any], seen: list[dict[str, Any]] | None = None):
+def _file_answers(score: float = 2.9, limit: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One file's clean-code answers, as the craft pass gets them: exemplary unless told otherwise."""
+    return {
+        "clean_code": {
+            "type": "score",
+            "score": score,
+            "legend": {"0": "Hard to follow", "1": "Acceptable", "2": "Clean", "3": "Exemplary"},
+            "probabilities": {"0": 0.0, "1": 0.0, "2": 0.1, "3": 0.9},
+            "confidence": 0.8,
+        },
+        "clean_code_limit": limit
+        or {"type": "choice", "choice": "none", "probabilities": {"none": 0.9, "comments": 0.1}, "confidence": 0.8},
+    }
+
+
+def _transport(answers: dict[str, Any], seen: list[dict[str, Any]] | None = None, files: dict[str, dict[str, Any]] | None = None):
+    """A fake Jev: ``answers`` for the diff call, ``files[path]`` (or exemplary) for each file judged whole."""
+
     def call(payload: dict[str, Any]) -> dict[str, Any]:
         if seen is not None:
             seen.append(payload)
-        return {"model": "jev-1.13.0", "answers": answers, "usage": {"input_tokens": 1234, "output_tokens": 15}}
+        state = payload["state"]
+        reply = (files or {}).get(state["file"]["path"], _file_answers()) if "file" in state else answers
+        return {"model": "jev-1.13.0", "answers": reply, "usage": {"input_tokens": 1234, "output_tokens": 15}}
 
     return call
 
@@ -197,25 +212,26 @@ def test_oversized_files_are_truncated_and_named(monkeypatch: pytest.MonkeyPatch
     state = build_state(parse_unified_diff(DIFF), _map(), None)
     assert "src/pfa/api/routes/kvad.py" in state["facts"]["files_truncated"]
     big = next(e for e in state["files"] if e["path"].endswith("routes/kvad.py"))
-    assert "more diff lines not shown" in big["diff"]
+    assert "more lines not shown" in big["diff"]
     assert state["facts"]["state_tokens"] < state["facts"]["diff_tokens"]  # the comment says how much the judge saw
     md = render_markdown(decide(_answers(), state["facts"], "m", {}), state, questions())
     assert "tokens sent of a 28,000 budget (Jev reads 32,000 with the questions); the whole diff is ~" in md
     assert "file(s) were cut and the craft scores rate what the judge saw" in md
 
 
-def test_the_craft_floor_is_about_the_application_not_the_tooling() -> None:
+def test_the_craft_floor_is_about_the_application_not_the_tooling(repo: TempRepo) -> None:
+    repo.write_file("tools/heimdall/x.py", "a = 2\n")
     tooling = parse_unified_diff(
         "diff --git a/tools/heimdall/x.py b/tools/heimdall/x.py\n--- a/tools/heimdall/x.py\n+++ b/tools/heimdall/x.py\n"
         "@@ -1 +1 @@\n-a = 1\n+a = 2\n"
     )
     facts = build_state(tooling, _map(), None)["facts"]
     assert facts["code_changed"] is False and facts["source_changed"] is False
-    clean = {"type": "score", "score": 2.0, "confidence": 0.7}
-    assert decide(_answers(clean_code=clean), facts, "m", {}).outcome == "approve"
-    # a low safety score over a tooling diff with only craft doubts behind it needs a person, not a prose edit
-    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, clean_code=clean), facts, "m", {})
-    assert v.outcome == "escalate" and "rates clean code" not in v.advice[0]
+    assert craft_files(str(repo.root), tooling, _map()) == []  # the tooling is never judged whole
+    # with no file judged there is no clean-code score, so nothing to send back for prose
+    assert decide(_answers(), facts, "m", {}).outcome == "approve"
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}), facts, "m", {})
+    assert v.outcome == "escalate" and "against the target" not in v.advice[0]
 
 
 def test_the_features_package_init_is_the_application_not_a_slice() -> None:
@@ -239,8 +255,8 @@ def test_the_budget_is_spent_on_the_source_before_tests_and_docs(monkeypatch: py
 
 
 def test_questions_are_valid_system_one_requests() -> None:
-    qs = questions()
-    for key, q in qs.items():
+    qs, fq = questions(), file_questions()
+    for key, q in {**qs, **fq}.items():
         assert q["type"] in ("noul", "choice", "score"), key
         assert q["instructions"], key
         if q["type"] == "noul":
@@ -249,9 +265,11 @@ def test_questions_are_valid_system_one_requests() -> None:
             assert isinstance(q["criteria"], list) and 2 <= len(q["criteria"]) <= 10, key
         else:
             assert isinstance(q["criteria"], dict) and 1 < len(q["criteria"]) <= 255, key
-    assert {"safe_to_merge", "needs_human_review", "has_security_concern", "clean_code", "correctness"} <= set(qs)
+    assert {"safe_to_merge", "needs_human_review", "has_security_concern", "correctness"} <= set(qs)
     assert {"single_purpose", "lean_signatures"} <= set(qs)  # function size, parameters, single purpose
-    assert "clean_code_limit" in qs  # what limits the score, so the advice names the fix
+    # clean code is asked about each edited application file whole, never about the diff
+    assert set(fq) == {"clean_code", "clean_code_limit"} and not set(fq) & set(qs)
+    assert "`file.content`" in fq["clean_code"]["instructions"] and "`facts.changed_lines`" in fq["clean_code"]["instructions"]
 
 
 # ---------------------------------------------------------------- the policy
@@ -316,16 +334,79 @@ def test_review_end_to_end_writes_reports_and_telemetry(repo: TempRepo) -> None:
     )
     assert code == EXIT_OK and err == ""
     assert out.startswith("outcome: approve")
-    assert "clean_code" in out and "model: jev-1.13.0" in out
+    assert "correctness" in out and "model: jev-1.13.0" in out
+    assert len(seen) == 1  # none of the diff's files is on disk, so nothing is judged whole
     payload = seen[0]
     assert payload["model"] == "jev-latest" and set(payload["questions"]) == set(questions())
-    assert payload["state"]["facts"]["slices_touched"] == ["kvad", "rune"]
+    assert payload["state"]["facts"]["slices_touched"] == ["kvad", "rune"] and payload["state"]["facts"]["craft_files"] == []
     report = json.loads(repo.read_file("out/r.json"))
     assert report["outcome"] == "approve" and report["model"] == "jev-1.13.0" and report["usage"]["input_tokens"] == 1234
+    assert report["files"] == {}
     md = repo.read_file("out/r.md")
     assert md.startswith("<!-- heimdall-review -->") and "**approve**" in md and "cross-slice" in md and "fan-in 1" in md
     line = json.loads(repo.telemetry.splitlines()[-1])
     assert line["event"] == "review" and line["kind"] == "approve" and line["slice"] == "kvad,rune" and line["sensor"] == "jev"
+
+
+_ROUTE_SOURCE = "from fastapi import APIRouter\nfrom pfa.api.problems import Problem\nrouter = APIRouter(prefix='/kvad')\n"
+
+
+def test_each_edited_application_file_is_judged_whole_in_its_own_call(repo: TempRepo) -> None:
+    """The user's call (2026-10-09): clean code is judged on each edited file whole, not on the diff, so the
+    verdict can say which file the judge deems wrong and the judge sees the full picture."""
+    repo.write_sample_map()
+    repo.write_file("change.diff", DIFF)
+    repo.write_file("src/pfa/api/routes/kvad.py", _ROUTE_SOURCE)
+    repo.write_file("tests/api/test_kvad.py", "def test_it():\n    assert True\n")  # tests are never judged whole
+    seen: list[dict[str, Any]] = []
+    dup = {"type": "choice", "choice": "duplication", "probabilities": {"duplication": 0.7, "none": 0.3}, "confidence": 0.7}
+    low = {"src/pfa/api/routes/kvad.py": _file_answers(2.31, dup)}
+    code, out, _ = _run(
+        repo, "--diff", "change.diff", "--json", "out/r.json", "--markdown", "out/r.md", transport=_transport(_answers(), seen, low)
+    )
+    assert code == EXIT_REQUEST_CHANGES
+    assert [("file" in p["state"]) for p in seen] == [False, True]  # the diff first, then the one file on disk
+    craft = seen[1]
+    assert craft["questions"] == file_questions() and craft["state"]["file"] == {
+        "path": "src/pfa/api/routes/kvad.py",
+        "area": "slice:kvad",
+        "content": _ROUTE_SOURCE,
+    }
+    assert craft["state"]["facts"]["changed_lines"] == [2, 4] and craft["state"]["facts"]["truncated"] is False
+    assert seen[0]["state"]["facts"]["craft_files"] == ["src/pfa/api/routes/kvad.py"]
+    # the verdict names the file, and the advice says the whole file was rated and what limits it
+    assert out.startswith("outcome: request_changes  (clean code 2.31/3 in src/pfa/api/routes/kvad.py below the target 2.7)")
+    assert "The judge rates the whole file src/pfa/api/routes/kvad.py, not only this change's lines, 2.31 on 0–3" in out
+    assert "its most probable limit: duplication (0.70): extract the logic written twice into one function" in out
+    assert (
+        "file (judged whole)" in out
+        and "src/pfa/api/routes/kvad.py".ljust(56) + "Exemplary · 2.31/3 · conf 0.80".ljust(32) + "duplication · 0.70 · conf 0.70" in out
+    )
+    report = json.loads(repo.read_file("out/r.json"))
+    assert report["files"] == low and report["usage"] == {"input_tokens": 2468, "output_tokens": 30}  # both calls added up
+    md = repo.read_file("out/r.md")
+    assert "**Clean code, file by file** (each file judged whole, not only its hunks):" in md
+    assert "| `src/pfa/api/routes/kvad.py` | Exemplary · 2.31/3 · conf 0.80 | duplication · 0.70 · conf 0.70 |" in md
+    assert "- judged whole for clean code, one call each: src/pfa/api/routes/kvad.py" in md
+    # a file on target passes, and the approval line says how clean the lowest file is
+    code, out, _ = _run(
+        repo, "--diff", "change.diff", transport=_transport(_answers(), files={"src/pfa/api/routes/kvad.py": _file_answers(2.8)})
+    )
+    assert code == EXIT_OK and out.startswith("outcome: approve  (p(safe)=0.90 p(human)=0.10 clean=2.80/3 (src/pfa/api/routes/kvad.py))")
+
+
+def test_a_failed_file_call_is_exit_3_not_a_verdict(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    repo.write_file("change.diff", DIFF)
+    repo.write_file("src/pfa/api/routes/kvad.py", _ROUTE_SOURCE)
+
+    def diff_only(payload: dict[str, Any]) -> dict[str, Any]:
+        if "file" in payload["state"]:
+            raise ReviewError("TypeSafe API unreachable: boom")
+        return {"model": "jev-1", "answers": _answers(), "usage": {}}
+
+    code, _, err = _run(repo, "--diff", "change.diff", transport=diff_only)
+    assert code == EXIT_ERROR and "unreachable" in err
 
 
 def test_review_exit_codes_follow_the_outcome(repo: TempRepo) -> None:
@@ -348,10 +429,14 @@ def test_dry_run_prints_the_payload_and_makes_no_call(repo: TempRepo) -> None:
     def boom(_: dict[str, Any]) -> dict[str, Any]:
         raise AssertionError("must not be called")
 
+    repo.write_file("src/pfa/api/routes/kvad.py", _ROUTE_SOURCE)
     code, out, _ = _run(repo, "--diff", "change.diff", "--dry-run", transport=boom)
     assert code == EXIT_OK
-    payload = json.loads(out)
-    assert payload["model"] == "jev-latest" and "safe_to_merge" in payload["questions"] and payload["state"]["facts"]["files_changed"] == 4
+    calls = json.loads(out)
+    diff = calls["diff"]
+    assert diff["model"] == "jev-latest" and "safe_to_merge" in diff["questions"] and diff["state"]["facts"]["files_changed"] == 4
+    assert [c["state"]["file"]["path"] for c in calls["files"]] == ["src/pfa/api/routes/kvad.py"]
+    assert set(calls["files"][0]["questions"]) == {"clean_code", "clean_code_limit"}
     assert not repo.has_file(".heimdall/telemetry.jsonl")
 
 
@@ -430,7 +515,7 @@ def test_http_transport_401_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> N
 def test_review_is_reachable_through_the_heimdall_cli(repo: TempRepo) -> None:
     repo.write_file("change.diff", DIFF)
     code, out, _ = repo.run("", "review", "--diff", "change.diff", "--dry-run")
-    assert code == 0 and '"safe_to_merge"' in out
+    assert code == 0 and '"safe_to_merge"' in out and '"files": []' in out
 
 
 # ---------------------------------------------------------------- the walls are facts, not judgments
@@ -444,7 +529,6 @@ def _disguised_wall_break() -> dict[str, Any]:
         needs_human_review={"type": "noul", "noul": 0.71},
         tests_cover_change={"type": "noul", "noul": 0.14},
         respects_slice_walls={"type": "noul", "noul": 0.62},
-        clean_code={"type": "score", "score": 2.5, "confidence": 0.5},
         biggest_risk={
             "type": "choice",
             "choice": "architecture",
@@ -692,27 +776,37 @@ def test_shape_facts_block_only_when_the_judge_agrees_and_then_name_the_function
     assert decide(_answers(), _shape_facts(), "m", {}).outcome == "approve"
 
 
-def test_clean_code_below_target_sends_the_agent_back_naming_the_limit() -> None:
-    """The user's floor (2026-10-08): clean code 2.7 on 0–3, 90%, not to be lowered. Below it the check fails so the
-    agent is retriggered, and the advice says what the judge found limiting and where to start."""
-    clean = {"type": "score", "score": 2.28, "confidence": 0.7}
+def test_clean_code_below_target_sends_the_agent_back_to_the_file_naming_the_limit() -> None:
+    """The user's floor (2026-10-08): clean code 2.7 on 0–3, 90%, not to be lowered. Judged per file, whole
+    (2026-10-09): below it the check fails naming the file, so the agent is retriggered and sent to a path, and
+    the advice says what the judge found limiting and which function in that file to start with."""
     dup = {"type": "choice", "choice": "duplication", "probabilities": {"duplication": 0.7}, "confidence": 0.7}
-    v = decide(_answers(clean_code=clean, clean_code_limit=dup), _shape_facts(), "m", {})
-    assert v.outcome == "request_changes" and v.reasons == ["clean code 2.28/3 below the target 2.7"]
+    other = "src/pfa/features/kvad/internal/other.py"
+    files = {other: _file_answers(2.9), _KVAD_ENGINE: _file_answers(2.28, dup)}
+    v = decide(_answers(), _shape_facts(), "m", {}, files)
+    assert v.outcome == "request_changes" and v.reasons == [f"clean code 2.28/3 in {_KVAD_ENGINE} below the target 2.7"]
+    assert f"The judge rates the whole file {_KVAD_ENGINE}, not only this change's lines, 2.28 on 0–3 (3 is exemplary)" in v.advice[0]
     assert "the target is 2.7. In its answer, its most probable limit: duplication (0.70): extract the logic written twice" in v.advice[0]
     assert "— start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)." in v.advice[0]
+    assert v.files == files
+    # a second file below the target is its own reason, lowest first, and the AST's functions are named per file
+    files[other] = _file_answers(2.1, dup)
+    v = decide(_answers(), _shape_facts(), "m", {}, files)
+    assert v.reasons == [f"clean code 2.10/3 in {other} below the target 2.7", f"clean code 2.28/3 in {_KVAD_ENGINE} below the target 2.7"]
+    assert "start with" not in v.advice[0] and "start with" in v.advice[1]
     # `none` wins the choice under a short score (PR #9: none at 0.40): the runner-up in the judge's probabilities is the fix
     none_first = {"type": "choice", "choice": "none", "probabilities": {"none": 0.40, "comments": 0.25, "style": 0.2}, "confidence": 0.3}
-    v = decide(_answers(clean_code=clean, clean_code_limit=none_first), _shape_facts(), "m", {})
+    v = decide(_answers(), _shape_facts(), "m", {}, {_KVAD_ENGINE: _file_answers(2.28, none_first)})
     assert "its most probable limit: comments (0.25): replace what-comments with why-comments" in v.advice[0]
     # no actionable label at all: every fix is listed, so a code change is still named
-    v = decide(_answers(clean_code=clean, clean_code_limit={"type": "choice", "choice": "none"}), _shape_facts(), "m", {})
+    v = decide(_answers(), _shape_facts(), "m", {}, {_KVAD_ENGINE: _file_answers(2.28, {"type": "choice", "choice": "none"})})
     assert "the judge named no single limit, so: extract the logic written twice" in v.advice[0] and "never swallow one" in v.advice[0]
-    # the target is about code: a change with no Python outside tests is not sent back for prose
-    assert decide(_answers(clean_code=clean), {"source_changed": False}, "m", {}).outcome == "approve"
-    # exactly on target passes
-    on = {"type": "score", "score": 2.7, "confidence": 0.7}
-    assert decide(_answers(clean_code=on), _shape_facts(), "m", {}).outcome == "approve"
+    # a file the judge saw cut is said so
+    v = decide(_answers(), _shape_facts(craft_truncated=[_KVAD_ENGINE]), "m", {}, {_KVAD_ENGINE: _file_answers(2.28, dup)})
+    assert "The judge saw the file cut at the token budget, so the score rates what it saw" in v.advice[0]
+    # exactly on target passes, and the approval line names the lowest of the files judged
+    v = decide(_answers(), _shape_facts(), "m", {}, {_KVAD_ENGINE: _file_answers(2.7), other: _file_answers(2.9)})
+    assert v.outcome == "approve" and v.reasons == [f"p(safe)=0.90 p(human)=0.10 clean>=2.70/3 ({_KVAD_ENGINE} lowest of 2 files)"]
 
 
 def test_readability_is_not_scored() -> None:
@@ -724,12 +818,11 @@ def test_readability_is_not_scored() -> None:
     assert decide(_answers(readability=hard), _shape_facts(), "m", {}).outcome == "approve"
 
 
-def test_craft_doubt_behind_not_safe_names_the_limit_and_where_to_start() -> None:
-    hard = {"type": "score", "score": 1.0, "confidence": 0.8}
+def test_craft_doubt_behind_not_safe_names_the_file_the_limit_and_where_to_start() -> None:
     dup = {"type": "choice", "choice": "duplication", "probabilities": {"duplication": 0.8}, "confidence": 0.8}
-    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, clean_code=hard, clean_code_limit=dup), _shape_facts(), "m", {})
+    v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}), _shape_facts(), "m", {}, {_KVAD_ENGINE: _file_answers(1.0, dup)})
     assert v.outcome == "request_changes"
-    assert "it rates clean code 1.00/3 against the target 2.7: its most probable limit: duplication (0.80): extract the" in v.advice[0]
+    assert f"it rates {_KVAD_ENGINE} 1.00/3 against the target 2.7: its most probable limit: duplication (0.80): extract the" in v.advice[0]
     assert "start with src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)" in v.advice[0]
     label = {"type": "choice", "choice": "readability", "probabilities": {"readability": 0.9}, "confidence": 0.9}
     v = decide(_answers(safe_to_merge={"type": "noul", "noul": 0.3}, biggest_risk=label), _shape_facts(), "m", {})
@@ -739,11 +832,51 @@ def test_craft_doubt_behind_not_safe_names_the_limit_and_where_to_start() -> Non
 
 def test_the_comment_and_the_table_list_the_functions_over_the_limits() -> None:
     facts = _facts(**_shape_facts())
-    v = decide(_answers(), facts, "jev-1", {})
+    v = decide(_answers(), facts, "jev-1", {}, {_KVAD_ENGINE: _file_answers(2.9)})
     md = render_markdown(v, {"facts": facts}, questions())
     assert "- changed functions over 40 lines or 5 parameters:" in md
     assert "  - `src/pfa/features/kvad/internal/kvad_engine.py:1 long_one (46 lines, 0 params)`" in md
-    assert "| `clean_code` |" in md and "| `single_purpose` |" in md and "| `lean_signatures` |" in md
+    assert "| `clean_code` |" not in md and "| `single_purpose` |" in md and "| `lean_signatures` |" in md
+    assert (
+        f"| `{_KVAD_ENGINE}` | Exemplary · 2.90/3 · conf 0.80 | none · 0.90 · conf 0.80 |" in md
+    )  # clean code is a row per file, not a question
     assert "over the limits: src/pfa/features/kvad/internal/kvad_engine.py:60 wide (2 lines, 7 params)" in render_table(
         v, questions(), facts
     )
+
+
+# ---------------------------------------------------------------- the craft pass: each edited application file, whole
+
+
+def test_craft_files_are_the_applications_python_read_whole_with_the_lines_the_change_touched(repo: TempRepo) -> None:
+    repo.write_file("src/pfa/api/routes/kvad.py", _ROUTE_SOURCE)
+    repo.write_file("src/pfa/features/rune/contract/rune_service.py", "class RuneService:\n    def new_member(self): ...\n    pass\n")
+    repo.write_file("tests/api/test_kvad.py", "def test_it():\n    assert True\n")
+    repo.write_file("harness/guides/x.md", "new\n")
+    found = craft_files(str(repo.root), parse_unified_diff(DIFF), _map())
+    assert [(f.path, f.area, f.changed_lines) for f in found] == [
+        ("src/pfa/api/routes/kvad.py", "slice:kvad", [2, 4]),
+        ("src/pfa/features/rune/contract/rune_service.py", "contract:rune", [2]),
+    ]
+    assert found[0].content == _ROUTE_SOURCE
+    # a deleted file and one not on disk contribute nothing
+    gone = "diff --git a/src/pfa/kernel/gone.py b/src/pfa/kernel/gone.py\ndeleted file mode 100644\n--- a/src/pfa/kernel/gone.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-x = 1\n"
+    repo.write_file("src/pfa/kernel/gone.py", "x = 1\n")
+    assert craft_files(str(repo.root), parse_unified_diff(gone), _map()) == []
+    assert craft_files(str(repo.root), parse_unified_diff(_shape_diff("src/pfa/kernel/missing.py", 1, "x = 1")), _map()) == []
+
+
+def test_craft_state_is_the_file_whole_with_its_own_shape_facts(monkeypatch: pytest.MonkeyPatch) -> None:
+    from heimdall.commands.review import craft
+
+    f = craft.CraftFile(_KVAD_ENGINE, "slice:kvad", SHAPED_SOURCE, [10])
+    state = craft_state(f, "a task", [_LONG_ONE, {**_WIDE, "path": "src/pfa/features/kvad/internal/other.py"}])
+    assert state["task"] == "a task" and state["file"] == {"path": _KVAD_ENGINE, "area": "slice:kvad", "content": SHAPED_SOURCE}
+    facts = state["facts"]
+    assert facts["changed_lines"] == [10] and facts["function_shape"] == [_LONG_ONE]  # only this file's functions
+    assert facts["function_limits"] == {"lines": 40, "params": 5} and facts["truncated"] is False
+    assert facts["file_tokens"] == facts["state_tokens"] == estimate(SHAPED_SOURCE)
+    monkeypatch.setattr(craft, "MAX_CRAFT_FILE_TOKENS", 10)
+    cut = craft_state(f, None, [])
+    assert cut["facts"]["truncated"] is True and cut["facts"]["state_tokens"] < cut["facts"]["file_tokens"]
+    assert cut["file"]["content"].endswith("more lines not shown]") and cut["task"] == "(no task statement given)"
