@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+from typing import NamedTuple, TextIO
+
 EXIT_OK, EXIT_REQUEST_CHANGES, EXIT_ESCALATE, EXIT_ERROR = 0, 1, 2, 3
 OUTCOMES = ("approve", "comment", "request_changes", "escalate")
+
+
+class Streams(NamedTuple):
+    """The console as one value: the diff may arrive on stdin, the table leaves on stdout, errors on stderr."""
+
+    stdin: TextIO
+    stdout: TextIO
+    stderr: TextIO
 
 
 class ReviewError(Exception):

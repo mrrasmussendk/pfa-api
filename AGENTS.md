@@ -2,92 +2,129 @@
 
 Read this before touching code. It is the feedforward half of the harness: the map of what exists and the rules for moving inside it. The feedback half (Heimdall's hooks and `eitri check`) will tell you when you drift — but it is cheaper to not drift.
 
+**Reading key:** ✅ **Do** — the expected action. ❌ **Don't** — a prohibited shortcut. ⚠️ **Check** — a condition that needs attention. These markers describe instructions, not completed checks.
+
+| ✅ Do | ❌ Don't |
+|---|---|
+| Read the relevant guide and work within the owning feature. | Open another feature's implementation to bypass its contract. |
+| Declare dependencies and dispatch contract messages through the bus. | Call another feature's handlers or engines directly. |
+| Keep features framework-free and the kernel small. | Put FastAPI, pydantic, or application wiring in a feature or the kernel. |
+| Put a feature's HTTP edge in `src/pfa/api/routes/<feature>.py` and raise `Problem` there. | Raise `HTTPException` anywhere, or import the application or FastAPI inside a feature. |
+| Run the checks and fix the findings. | Disable rules or raise the token budget to make a change pass. |
+
 ## What this repo is
 
-- `src/` is the **PFA API**, a FastAPI service built as vertical slices. This is what gets deployed.
-  - `src/http_common/` is the HTTP-edge helper package (RFC 9457 problem details). FastAPI-aware, so it is **not** the kernel; only `internal/routes.py` and the composition root import it.
+`src/pfa/` is **the application**. The tree reads top-down:
+
+```
+src/pfa/
+  application.py     builds the application: every feature registered on one bus. No HTTP.
+  features/<name>/   one feature each — messages in, Result out, no framework
+    contract/        its public surface: messages, result types, infrastructure errors
+    internal/        its implementation: engine, handlers
+    module.py        its plug: register(bus), ready(), warmup()
+    feature.json     which other features it may use
+  kernel/            Result, Bus, Query, Command — the primitives every feature shares
+  api/               the main entry point: HTTP
+    app.py           create_app(): wraps the application in FastAPI
+    routes/<name>.py one module per feature: pydantic models, APIRouter, Problem on error
+    problems.py      RFC 9457 problem details
+    validation.py    request hygiene
+```
+
+A feature is built as a **vertical slice**: everything it is, in one folder, consumed by everyone else only through its `contract/`. The tooling still says "slice" in its diagnostics; it means a feature folder.
+
 - `tools/` is **development-only tooling** (Eitri, Heimdall, Brokkr). It is never deployed and never imported by `src/`.
-- `tests/api` tests the service; `tests/tooling` tests the tooling.
+- `tests/api` tests the application; `tests/tooling` tests the tooling.
 
 ## The dependency direction
 
-Imports only go **down** this arrow. Never up, never sideways into another slice's `internal/`.
+✅ Follow arrows from the importing package to its dependency. ❌ Never import upwards: a feature never imports the application, the API, or another feature's `internal/`.
 
-```
-pfa_api  ──▶  slices/*  ──▶  shared_kernel
-(composition   (features:     (primitives: knows nothing
- root: knows    know their     about slices or HTTP)
- every slice)   own code +
-                deps' contracts
-                + kernel)
-```
+![Allowed imports: arrows point from importer to dependency](docs/diagrams/dependencies.svg)
 
-- **`pfa_api` is NOT part of the kernel and never goes there.** It imports every slice's `internal/module.py`; the kernel must import nothing. Putting the app in the kernel creates a cycle and lets FastAPI into every contract.
-- **`shared_kernel` is paid for by every slice** (EIT100) and importable from every contract (EIT003). Only tiny, framework-free, stable primitives belong there. When in doubt, it does not go in the kernel.
-- **Shared FastAPI/pydantic helpers** go in `src/http_common/`, which only `internal/` and `pfa_api` import — never the kernel, never a contract. Today it holds the RFC 9457 error machinery (`Problem`, `install_problem_details`).
-- **Nothing imports `pfa_api`.** It is the top of the arrow.
+[Mermaid source](docs/diagrams/dependencies.mmd)
 
-## Slice map
+- **The application owns the features.** `pfa/application.py` is the one module that imports a feature's `module.py`. It knows every feature; no feature knows it.
+- **The API is one door into the application.** `pfa/api` imports `pfa.application` and the features' `contract/` packages — its routes dispatch messages exactly as another feature would. It never imports `internal/` or `module.py`. Nothing imports `pfa.api`. A second entry point (a CLI, a worker) would sit beside it and call the same `build_bus()`.
+- **A feature has two public doors and one private room.** `contract/` is for every consumer. `module.py` is for `application.py` only. `internal/` is for the feature alone.
+- **`pfa.kernel` is paid for by every feature** (EIT100) and importable from every contract (EIT003). Only tiny, framework-free, stable primitives belong there. When in doubt, it does not go in the kernel.
+- **FastAPI and pydantic live in `pfa/api` and nowhere else** (EIT006). Shared HTTP-edge helpers go in `pfa/api/problems.py` or `pfa/api/validation.py` — never in a feature, never in the kernel.
+
+## Feature map
 
 <!--heimdall:map-->
-kernel: `shared_kernel` · slices: `src/slices` · budget: 15000 tokens per slice · regenerate with `heimdall map --root .`
+features: `src/pfa/features` · kernel: `src/pfa/kernel` · routes: `src/pfa/api/routes/<feature>.py` · budget: 15000 tokens per feature · regenerate with `heimdall map --root .`
 
-| slice | depends on | fan-in | contract | routes |
+| feature | depends on | fan-in | contract | routes |
 |---|---|---|---|---|
-| chunking | (none) | 1 | `src/slices/chunking/contract/` | `POST /chunking/split` |
-| embeddings | chunking | 0 | `src/slices/embeddings/contract/` | `POST /embeddings/query`<br>`POST /embeddings/passages`<br>`POST /embeddings/similarity` |
+| chunking | (none) | 1 | `src/pfa/features/chunking/contract/` | `POST /chunking/split` |
+| embeddings | chunking | 0 | `src/pfa/features/embeddings/contract/` | `POST /embeddings/query`<br>`POST /embeddings/passages`<br>`POST /embeddings/similarity` |
 <!--/heimdall:map-->
 
-Each slice's own `AGENTS.md` (in `src/slices/<name>/`) carries its generated `depends on:` and `routes:` lines plus a few hand-written notes on what the slice is for. The table above and those lines are regenerated from `slice.json` and `internal/routes.py` by `heimdall map --root .` — never edit them by hand.
+Each feature's own `AGENTS.md` (in `src/pfa/features/<name>/`) carries its generated `depends on:` and `routes:` lines plus a few hand-written notes on what the feature is for.
+
+✅ Regenerate the table and marked lines from `feature.json` and `src/pfa/api/routes/<feature>.py` with `heimdall map --root .`. ❌ Do not edit generated content by hand. Hand-written guidance outside the markers remains editable.
 
 ## Guides
 
+Task guides and rule instructions live in [harness/](harness/). Explanatory reference material lives in [docs/](docs/). This file and the feature-level `AGENTS.md` files remain the feedforward entry points.
+
 Read the guide for the kind of change before loading any code; each one names the exact working set.
 
-- **Adding a route** (new endpoint on an existing slice, with or without a contract change): `docs/guides/adding-a-route.md`.
-- **Returning an error** (what a route raises, what the client receives, how to add a problem type): `docs/guides/returning-errors.md`.
-- **What the PR check judges** (Jev's typed questions, the policy, how to run it locally): `docs/guides/pr-review.md`.
-- **Adding a slice** (a new feature with its own data and rules): the section below.
-- **Changing a contract**: the section below, and the fan-in column in the slice map.
+- **Adding a route** (new endpoint for an existing feature, with or without a contract change): [Adding a route](harness/guides/adding-a-route.md).
+- **Returning an error** (what a route raises, what the client receives, how to add a problem type): [Returning errors](harness/guides/returning-errors.md).
+- **Writing tests** (test first, Arrange/Act/Assert, one concept per test, fakes on the bus, F.I.R.S.T.): [Writing tests](harness/guides/writing-tests.md).
+- **What the PR check judges** (Jev's typed questions, the policy, how to run it locally): [PR review with Jev](harness/guides/pr-review.md).
+- **Adding a feature** (a new capability with its own data and rules): [Adding a feature](#adding-a-feature).
+- **Changing a contract**: [Changing a contract](#changing-a-contract), and the fan-in column in the feature map.
 
 ## The working set for a task
 
-A task lives in **one slice**. Load, in this order, and nothing more:
+A task lives in **one feature**. Load, in this order, and nothing more:
 
-1. `src/slices/<slice>/AGENTS.md` — the slice's declared dependencies.
-2. `src/slices/<slice>/contract/` — its public surface.
-3. `src/slices/<slice>/internal/` — its implementation and router.
-4. `src/slices/<dep>/contract/` for each declared dependency — **only the contract**, never `internal/`.
-5. `src/shared_kernel/` — the primitives every slice shares.
-6. `src/http_common/` — only when the task touches a route's error path (`Problem`); declared shared in `[tool.heimdall]`, so reading it is never drift.
+1. `src/pfa/features/<feature>/AGENTS.md` — the feature's declared dependencies.
+2. `src/pfa/features/<feature>/contract/` — its public surface.
+3. `src/pfa/features/<feature>/internal/` and `module.py` — its implementation and its plug into the application.
+4. `src/pfa/api/routes/<feature>.py` — its HTTP edge, only when the task has one. Heimdall counts edits there as edits to the feature.
+5. `src/pfa/features/<dep>/contract/` for each declared dependency — **only the contract**, never `internal/`.
+6. `src/pfa/kernel/` — the primitives every feature shares.
+7. `src/pfa/api/problems.py` and `src/pfa/api/validation.py` — only when the task touches a route's error path or request validation. Reads anywhere in `src/pfa/` outside the features are never drift.
 
-That is the whole context. If you feel you need another slice's `internal/`, the seam is cut wrong: say so instead of reading it.
+⚠️ If the task appears to require another feature's `internal/`, explain the missing contract capability before proceeding. ❌ Do not expand the working set by reading that implementation.
 
 ## The walls (Eitri enforces these; `eitri check --root .` must pass before you finish)
 
-- **EIT001** — never import `slices.<other>.internal...` from a slice. Another slice's public surface is its `contract/` package. The one exemption is `internal/module.py`, which only the composition root imports.
-- **EIT002** — no `importlib.import_module`, `__import__`, `sys.path` edits, `sys.modules` writes, or `from x import *` inside `src/slices/`. Coupling must be greppable.
-- **EIT003** — `contract/` modules import only the standard library, `shared_kernel`, and their own contract. FastAPI and pydantic belong in `internal/routes.py`, not in a contract.
-- **EIT004** — importing `slices.<x>.contract` requires `"x"` in your slice's `slice.json`. Declare first, then import.
-- **EIT005** — no `HTTPException` (from `fastapi` or `starlette`) inside `src/slices/`. Every error is an RFC 9457 problem document: `raise Problem.domain_rejection(result.error)` or `raise Problem(status, detail, type=..., ...)` from `http_common`.
-- **EIT100** — each slice's agent working set (own source + dependency contract stubs + kernel) must stay under the token budget in `[tool.eitri]`. If you blow it, split the slice or slim the contract; do not raise the budget.
+| Rule | ✅ Do | ❌ Don't |
+|---|---|---|
+| **EIT001 — boundaries** | Consume another feature through its `contract/`. Only `pfa/application.py` imports a feature's `module.py`. | Import `pfa.features.<other>.internal...` or `.module` from a feature, or `.internal...` from anywhere in the application. |
+| **EIT002 — visible coupling** | Use explicit, searchable imports inside `src/pfa/features/`. | Use `importlib.import_module`, `__import__`, `sys.path` edits, `sys.modules` writes, or `from x import *`. |
+| **EIT003 — pure contracts** | Import only stdlib, `pfa.kernel`, and the feature's own contract in `contract/`. | Import frameworks or implementation code into a contract. |
+| **EIT004 — declared dependencies** | Add `"x"` to `feature.json` before importing `pfa.features.x.contract`. | Introduce an undeclared feature dependency. |
+| **EIT005 — error shape** | In `pfa/api`, raise `Problem.domain_rejection(result.error)` or `Problem(status, detail, type=..., ...)` from `pfa.api.problems`. | Raise FastAPI or Starlette `HTTPException`. |
+| **EIT006 — features depend downward** | Keep routes, request models and status codes in `src/pfa/api/routes/<feature>.py`. Signal an infrastructure failure with a plain exception declared in `contract/`. | Import `fastapi`, `starlette`, `pfa.application` or `pfa.api` anywhere under `src/pfa/features/`. |
+| **EIT100 — context budget** | Keep own source + dependency contract stubs + kernel within `[tool.eitri]`'s budget. Split the feature or slim its contract when needed. | Raise the budget to accommodate an oversized feature. |
 
-## Adding a slice
+## Adding a feature
 
-1. Copy `src/slices/embeddings/` to `src/slices/<name>/`. Rename the files; one concept = one name everywhere.
-2. Put dependencies (slice names only; the kernel is implicit) in `slice.json`.
-3. Messages (`Query`/`Command` dataclasses) and result types go in `contract/`; engine, one handler per message, FastAPI router and `module.py` (`register(bus)` + `router`) go in `internal/`.
-4. Add the module to `MODULES` in `src/pfa_api/composition.py`.
-5. Run `heimdall map --root .` so this file, the slice's `AGENTS.md` and `.heimdall/map.json` learn the new seam. Then write a few hand-written lines under the generated ones in the slice's `AGENTS.md`: what it is for, and its working set.
-6. Run `eitri check --root .` and `pytest`.
+1. Copy `src/pfa/features/embeddings/` to `src/pfa/features/<name>/`. Rename the files; one concept = one name everywhere.
+2. Put dependencies (feature names only; the kernel is implicit) in `feature.json`.
+3. Messages (`Query`/`Command` dataclasses), result types and any infrastructure exception the edge must map go in `contract/`; engine and one handler per message go in `internal/`; `module.py` at the feature root does `register(bus)` plus `ready()` / `warmup()`.
+4. Add the module to `FEATURES` in `src/pfa/application.py`.
+5. Write the HTTP edge in `src/pfa/api/routes/<name>.py` — pydantic models, one `APIRouter(prefix="/<name>")`, dispatch on the bus, `Problem` on error — and add its router to `ROUTERS` in `src/pfa/api/routes/__init__.py`.
+6. Run `heimdall map --root .` so this file, the feature's `AGENTS.md` and `.heimdall/map.json` learn the new seam. Then write a few hand-written lines under the generated ones in the feature's `AGENTS.md`: what it is for, and its working set.
+7. Run `eitri check --root .` and `pytest`.
 
 ## CQRS in one paragraph
 
-A slice's contract is its **messages** (frozen `Query`/`Command` dataclasses in `contract/queries.py` / `commands.py`) and **result types** (`contract/results.py`). Each message has exactly one handler in `internal/handlers.py`, registered on the kernel `Bus` by `module.py`. Routes and other slices never call handlers; they `bus.dispatch(message)` and get a `Result`. A route turns `Result.ok=False` into `Problem.domain_rejection(result.error)` — a 422 problem document (RFC 9457), never a bare `HTTPException`. New use case = message + result + handler + one `bus.register` line (+ a route if it has an HTTP edge). Tests replace a handler with `bus.register(..., replace=True)`.
+A feature's contract is its **messages** (frozen `Query`/`Command` dataclasses in `contract/queries.py` / `commands.py`) and **result types** (`contract/results.py`). Each message has exactly one handler in `internal/handlers.py`, registered on the kernel `Bus` by the feature's `module.py`. Nothing calls a handler: routes in `pfa/api/routes/<feature>.py` and handlers in other features `bus.dispatch(message)` and get a `Result`. A route turns `Result.ok=False` into `Problem.domain_rejection(result.error)` — a 422 problem document (RFC 9457), never a bare `HTTPException`. New use case = message + result + handler + one `bus.register` line (+ a route in `pfa/api` if it has an HTTP edge). Tests replace a handler with `bus.register(..., replace=True)`.
 
 ## Changing a contract
 
-A contract with high fan-in is **frozen**: additive changes only. Breaking changes need an expand-contract fan-out (add the new member, migrate every consumer, remove the old one). Heimdall warns in-loop when you edit a contract whose fan-in is 10 or more.
+⚠️ A contract with fan-in **10 or more** is frozen; Heimdall warns when you edit it.
+
+- ✅ Make additive changes. For a breaking change, add the replacement, migrate every consumer, then remove the old member in a coordinated expand-contract migration.
+- ❌ Do not change or remove an existing member while consumers still rely on it.
 
 ## Commands
 
@@ -96,15 +133,20 @@ pip install -e ".[dev]" -e ./tools   # once, in a dev environment
 ruff check . && ruff format --check . && mypy   # lint, format, types — CI runs these first; `ruff check --fix . && ruff format .` repairs most of it
 pytest                               # tests/api + tests/tooling (warnings are errors)
 eitri check --root .                 # the walls + the budget — must be green
-eitri surface <slice>                # what a consumer of <slice> actually loads
-heimdall map --root .                # regenerate the maps after changing slices, slice.json or [tool.heimdall] shared
+eitri surface <feature>              # what a consumer of <feature> actually loads
+heimdall map --root .                # regenerate the maps after changing features, feature.json, routes or [tool.heimdall]
 heimdall drift                       # how far recent agent sessions wandered from the map
 heimdall review --base origin/main   # Jev judges the diff (needs TYPESAFE_API_KEY); what the PR check runs
-python -m pfa_api                    # run the service
+python -m pfa.api                    # run the service
 ```
 
 ## What Heimdall will do while you work
 
-Every Read/Grep/Glob/Edit/Write you make is classified against the slice map and logged to `.heimdall/telemetry.jsonl`. You will be interrupted (hook exit 2, message on stderr) in exactly two cases: editing a second slice in one session, and editing a frozen high fan-in contract. Reads are never interrupted, only recorded; `heimdall drift` shows afterwards whether a session's reads stayed inside the architecture's promise. Sustained out-of-bounds reads above 20% on a slice mean the seam, not the agent, is wrong.
+With the Claude Code hooks configured and `.heimdall/map.json` present, supported Read/Grep/Glob/Edit/Write events are classified against the map and logged to `.heimdall/telemetry.jsonl`. A feature's route module in `pfa/api/routes/` counts as the feature; everything else in `src/pfa/` outside the features is always in-bounds.
 
-Before you open a PR, `heimdall review --base origin/main --task "<what you set out to do>"` runs the same Jev judgment the PR check will: correctness, clean code, tests covering the change, scope, the walls, Problem Details on error paths. `request_changes` fails the PR check; `escalate` asks for a human. Fix what it names rather than arguing with the probability.
+- ⚠️ **Immediate feedback:** hook exit 2 flags edits to a second feature in one session, to a frozen high fan-in contract, or that leave a function over the shape limit (40 lines or 5 parameters). Check the dependency boundary or migration plan, or split the function, before continuing; the shape feedback must be answered, not raised.
+- ⚠️ **Before you finish:** the `Stop` hook (`.claude/hooks/finish.py`) runs `pytest` and then `heimdall review --base origin/main` whenever the tree differs from `origin/main`. A failing suite or a `request_changes` verdict blocks the stop and hands you the output; `escalate`, or a review that could not run because `TYPESAFE_API_KEY` is unset, is reported to the user instead. The review judges committed work only, so commit before you stop.
+- ✅ **After work:** use `heimdall drift` to inspect recorded reads. Reads are never interrupted; sustained out-of-bounds reads above 20% suggest the feature boundary needs investigation.
+- ❌ **Do not assume complete coverage:** shell-based reads are invisible to the hook, and a missing map disables observation. Eitri remains the enforcement check.
+
+Before you open a PR, `heimdall review --base origin/main --task "<what you set out to do>"` runs the same Jev judgment the PR check will: correctness, clean code (single purpose, lean signatures, asked about the functions the hook already flagged), tests covering the change, scope, the walls, Problem Details on error paths. `request_changes` fails the PR check; `escalate` asks for a human. Clean code is judged file by file: each edited application file is sent to the judge whole, and a file below 2.7 (90% of the 0–3 rubric, the floor) fails it naming that file — the tooling under `tools/` is judged on correctness and tests, not on prose: the comment names the file, what the judge found limiting in it and which function to start with. Fix what it names rather than arguing with the probability.

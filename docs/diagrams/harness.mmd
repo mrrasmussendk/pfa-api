@@ -1,0 +1,20 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Arial, sans-serif", "fontSize": "14px", "lineColor": "#64748b", "edgeLabelBackground": "#ffffff", "clusterBkg": "#f8fafc", "clusterBorder": "#cbd5e1"}, "htmlLabels": false, "flowchart": {"htmlLabels": false, "curve": "linear", "nodeSpacing": 30, "rankSpacing": 35, "padding": 12, "wrappingWidth": 260}}}%%
+flowchart TB
+    accTitle: The agent harness
+    accDescr: Preparation guides the agent; observation feeds back into the work and the map. Finished changes pass deterministic checks and receive a separate Jev review.
+    map["1. Prepare<br/>AGENTS.md, feature map and guides"]:::input
+    work["2. Work<br/>Agent reads and edits one feature"]:::process
+    observe["3. Observe<br/>Heimdall records tool activity"]:::process
+    feedback["4. Give feedback<br/>Boundary warnings and drift report"]:::decision
+    checks["5. Verify<br/>Tests, Eitri and Brokkr canaries"]:::process
+    review["6. Review<br/>Jev answers typed questions<br/>Policy determines the outcome"]:::output
+    map --> work
+    work --> observe --> feedback
+    feedback -.->|Adjust the next action| work
+    feedback -.->|Persistent drift: reconsider boundaries| map
+    work -->|Finished change| checks
+    checks -->|Checks pass| review
+    classDef input fill:#eff6ff,stroke:#2563eb,color:#172554
+    classDef process fill:#f0fdfa,stroke:#0f766e,color:#134e4a
+    classDef decision fill:#fffbeb,stroke:#b45309,color:#78350f
+    classDef output fill:#f0fdf4,stroke:#15803d,color:#14532d

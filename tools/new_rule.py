@@ -23,7 +23,7 @@ def main(argv: list[str]) -> int:
         print(f"{rule_id} exists")
         return 1
 
-    doc = REPO / "docs" / "rules" / f"{rule_id}.md"
+    doc = REPO / "harness" / "rules" / f"{rule_id}.md"
     doc.write_text(f"# {rule_id} — {title}\nTODO: rationale + fix guidance.\n", encoding="utf-8")
 
     changelog = REPO / "CHANGELOG.md"
@@ -36,7 +36,7 @@ def main(argv: list[str]) -> int:
     changelog.write_text(text, encoding="utf-8")
 
     print(
-        f"scaffolded docs/rules/{rule_id}.md and a changelog line. Now:\n"
+        f"scaffolded harness/rules/{rule_id}.md and a changelog line. Now:\n"
         f"  1. add descriptor '{rule_id}' in tools/eitri/core.py (and ALL_DESCRIPTORS)\n"
         f"  2. implement it in tools/eitri/walls.py (or a new module wired into analyzer.py)\n"
         f"  3. add a unit test in tests/tooling/test_rules.py\n"
