@@ -236,8 +236,7 @@ def install_problem_details(app: FastAPI) -> None:
 
 _REF = {"$ref": "#/components/schemas/ProblemDetails"}
 _REJECTION_DESCRIPTION = (
-    "Validation error (the body does not fit the model: `errors` names each field) "
-    "or domain rejection (it fits, but made no sense to the handler: `detail` says why)"
+    "The body does not fit the model (`errors` names each field), or it fits and the handler rejected it (`detail` says why)"
 )
 
 
