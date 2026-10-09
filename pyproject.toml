@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "PFA API — a FastAPI service built as vertical slices, with the architecture enforced by Eitri and watched by Heimdall."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
 authors = [{ name = "Marc Rasmussen" }]
 dependencies = [
     "fastapi>=0.110",
