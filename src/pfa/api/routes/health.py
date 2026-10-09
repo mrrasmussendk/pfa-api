@@ -10,27 +10,20 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from pfa.api.problems import NOT_READY, Problem, problem_response
-from pfa.api.validation import with_example
+from pfa.api.validation import response_example
 
 TAG = {
     "name": "service",
-    "description": (
-        "Probes for the orchestrator. `/health` says the process answers; `/ready` says every heavy component is in "
-        "memory. Route traffic on `/ready`, restart on `/health`."
-    ),
+    "description": "Probes for the orchestrator: route traffic on `/ready`, restart on `/health`.",
 }
 router = APIRouter(tags=["service"])
 
 
 class HealthOut(BaseModel):
-    model_config = with_example({"status": "ok"})
-
     status: str = Field(description="Always `ok`: the process answers")
 
 
 class ReadyOut(BaseModel):
-    model_config = with_example({"status": "ready", "components": {"tokenizer": True, "embedding_model": True}})
-
     status: str = Field(description="`ready` once every component is loaded")
     components: dict[str, bool] = Field(description="Each heavy component and whether it is in memory")
 
@@ -56,7 +49,12 @@ NOT_READY_RESPONSE = problem_response(
 )
 
 
-@router.get("/health", summary="Liveness", response_model=HealthOut, response_description="The process answers")
+@router.get(
+    "/health",
+    summary="Liveness",
+    response_model=HealthOut,
+    responses={200: response_example("The process answers", {"status": "ok"})},
+)
 async def health() -> HealthOut:
     """Liveness: the process answers. Says nothing about the model."""
     return HealthOut(status="ok")
@@ -66,8 +64,13 @@ async def health() -> HealthOut:
     "/ready",
     summary="Readiness",
     response_model=ReadyOut,
-    response_description="Every heavy component is in memory; a request is served without a cold start",
-    responses={503: NOT_READY_RESPONSE},
+    responses={
+        200: response_example(
+            "Every heavy component is in memory; a request is served without a cold start",
+            {"status": "ready", "components": {"tokenizer": True, "embedding_model": True}},
+        ),
+        503: NOT_READY_RESPONSE,
+    },
 )
 async def ready(request: Request) -> ReadyOut:
     """Readiness: every heavy component is loaded, so a request will be served without a

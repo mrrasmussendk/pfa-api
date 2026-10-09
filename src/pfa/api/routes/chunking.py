@@ -5,15 +5,14 @@ from pydantic import BaseModel, Field
 from pydantic.json_schema import JsonDict
 
 from pfa.api.problems import Problem, domain_rejections
-from pfa.api.validation import StrictRequest, text, with_example
+from pfa.api.validation import StrictRequest, request_example, response_example, text
 from pfa.features.chunking.contract import SplitText
 
 TAG = {
     "name": "chunking",
     "description": (
-        "Split text into pieces that fit a model-token budget, cutting on paragraph and sentence boundaries first, "
-        "then words. Counts with the embedding model's own tokenizer, so the budget is a hard limit, not an estimate. "
-        "`POST /embeddings/passages` chunks for you; call this to see or control the cuts."
+        "Split text to a model-token budget on paragraph, sentence and word boundaries, counted with the model's own "
+        "tokenizer. `POST /embeddings/passages` chunks for you; call this to see or control the cuts."
     ),
 }
 router = APIRouter(prefix="/chunking", tags=["chunking"])
@@ -40,8 +39,6 @@ Text = text(MAX_TEXT_CHARS)  # bound outside the model: inside it, ``text`` is t
 
 
 class SplitRequest(StrictRequest):
-    model_config = with_example({"text": _TEXT, "budget": 12})
-
     text: Text = Field(description="The text to split; paragraph and sentence boundaries are the preferred cut points")  # type: ignore[valid-type]
     budget: int = Field(
         default=500, ge=1, le=MAX_BUDGET, description="Max model tokens per chunk; a hard limit, counted with the model's tokenizer"
@@ -49,8 +46,6 @@ class SplitRequest(StrictRequest):
 
 
 class SplitOut(BaseModel):
-    model_config = with_example(_SPLIT_OUT)
-
     tokenizer: str = Field(description="The tokenizer that counted: the embedding model's own")
     budget: int = Field(description="The budget the chunks were cut to")
     chunks: list[str] = Field(description="The pieces in order, each stripped of surrounding whitespace")
@@ -61,8 +56,11 @@ class SplitOut(BaseModel):
     "/split",
     summary="Split text into chunks within a token budget",
     response_model=SplitOut,
-    response_description="The chunks in order, with the token count of each",
-    responses={422: domain_rejections("/chunking/split", "empty text")},
+    openapi_extra=request_example({"text": _TEXT, "budget": 12}),
+    responses={
+        200: response_example("The chunks in order, with the token count of each", _SPLIT_OUT),
+        422: domain_rejections("/chunking/split", "empty text"),
+    },
 )
 def split(body: SplitRequest, request: Request) -> SplitOut:
     """Split text into chunks that each fit the token budget, cutting on sentence boundaries.

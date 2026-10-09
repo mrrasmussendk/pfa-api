@@ -1,7 +1,7 @@
 """The OpenAPI document is the contract for ``/docs`` consumers: every operation is named and
-summarised, every tag is described, every request and response model carries an example the
-model itself accepts, and every error example is what the wire actually sends. Exercised over
-the real app; no model is loaded (an empty body and a blank text are rejected before one is)."""
+summarised, every tag is described, every operation shows one exchange its models accept with
+the fields in written order, and every error example is what the wire actually sends. Exercised
+over the real app; no model is loaded (an empty body and a blank text are rejected before one is)."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from pfa.api.problems import DOMAIN_REJECTION, EXAMPLE_TRACE_ID, MODEL_BUSY, NOT_READY, PROBLEM_MEDIA_TYPE
 from pfa.api.routes import ROUTERS, TAGS
+from pfa.api.validation import JSON
 
 Spec = dict[str, Any]
 
@@ -52,16 +53,23 @@ def _without_trace(problem: Spec) -> Spec:
     return {member: value for member, value in problem.items() if member != "trace_id"}
 
 
-def _route_models() -> list[type[BaseModel]]:
-    """Every request and response model behind a mounted route."""
-    models: list[type[BaseModel]] = []
-    for route in (route for router in ROUTERS for route in router.routes):
-        assert isinstance(route, APIRoute)
-        if route.body_field is not None:
-            models.append(route.body_field.field_info.annotation)
-        if route.response_model is not None:
-            models.append(route.response_model)
-    return models
+def _routes() -> list[APIRoute]:
+    """Every mounted route, with the models behind it."""
+    routes = [route for router in ROUTERS for route in router.routes]
+    assert all(isinstance(route, APIRoute) for route in routes)
+    return routes  # type: ignore[return-value]
+
+
+def _operation(spec: Spec, route: APIRoute) -> Spec:
+    (method,) = route.methods
+    return spec["paths"][route.path][method.lower()]
+
+
+def _assert_example_fits(example: Spec, model: type[BaseModel]) -> None:
+    """The model accepts the example, and the example writes the fields in the model's order:
+    what ``/docs`` shows under *Try it out* reads like the model, not like a sorted dictionary."""
+    model.model_validate(example)
+    assert list(example) == [name for name in model.model_fields if name in example], model.__name__
 
 
 def test_operations_are_named_after_their_route_functions(spec: Spec) -> None:
@@ -90,23 +98,22 @@ def test_the_document_introduces_the_service(spec: Spec) -> None:
     assert info["summary"]
     assert "/embeddings/passages" in info["description"]
     assert "trace_id" in info["description"]
-    assert info["license"] == {"name": "MIT"}
+    assert info["license"] == {"name": "MIT", "url": "https://opensource.org/license/mit"}
+    assert not info["description"].startswith(info["summary"].split(",")[0])  # the description adds to the summary line
 
 
-@pytest.mark.parametrize("model", _route_models(), ids=lambda model: model.__name__)
-def test_every_route_model_carries_an_example_it_accepts(model: type[BaseModel]) -> None:
-    examples = model.model_json_schema().get("examples")
-    assert examples, f"{model.__name__} documents no example"
-    for example in examples:
-        model.model_validate(example)
+@pytest.mark.parametrize("route", _routes(), ids=lambda route: route.name)
+def test_every_operation_shows_an_exchange_its_models_accept(spec: Spec, route: APIRoute) -> None:
+    operation = _operation(spec, route)
+    if route.body_field is not None:
+        _assert_example_fits(operation["requestBody"]["content"][JSON]["example"], route.body_field.field_info.annotation)
+    assert route.response_model is not None
+    _assert_example_fits(operation["responses"]["200"]["content"][JSON]["example"], route.response_model)
 
 
-def test_request_models_still_reject_unknown_fields_with_an_example_configured(spec: Spec) -> None:
-    """A subclass ``model_config`` merges with ``StrictRequest``'s; the example must not loosen it."""
+def test_request_models_reject_unknown_fields(spec: Spec) -> None:
     for name in ("SplitRequest", "QuestionRequest", "PassagesRequest", "SimilarityRequest"):
-        schema = spec["components"]["schemas"][name]
-        assert schema["additionalProperties"] is False, name
-        assert schema["examples"], name
+        assert spec["components"]["schemas"][name]["additionalProperties"] is False, name
 
 
 def test_documented_validation_example_is_what_the_wire_sends(client: TestClient, spec: Spec) -> None:
@@ -157,7 +164,8 @@ def test_every_operation_has_a_default_problem_example(spec: Spec) -> None:
         assert "detail" not in example  # a bug never explains itself to the client
 
 
-def test_swagger_ui_is_served_with_try_it_out_on(client: TestClient) -> None:
+def test_swagger_ui_is_served_with_try_it_out_on_and_the_schema_list_hidden(client: TestClient) -> None:
     page = client.get("/docs")
     assert page.status_code == 200
-    assert "tryItOutEnabled" in page.text
+    assert '"tryItOutEnabled": true' in page.text
+    assert '"defaultModelsExpandDepth": -1' in page.text
