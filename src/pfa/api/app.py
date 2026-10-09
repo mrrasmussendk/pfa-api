@@ -80,7 +80,6 @@ def create_app(*, warmup: bool | None = None) -> FastAPI:
         summary="Multilingual text embeddings, chunking and similarity",
         description=DESCRIPTION,
         version="0.1.0",
-        license_info={"name": "MIT", "url": "https://opensource.org/license/mit"},
         openapi_tags=list(TAGS),
         generate_unique_id_function=_operation_id,
         # Try it out is open from the start; the Schemas list at the foot is hidden, every model

@@ -98,7 +98,7 @@ def test_the_document_introduces_the_service(spec: Spec) -> None:
     assert info["summary"]
     assert "/embeddings/passages" in info["description"]
     assert "trace_id" in info["description"]
-    assert info["license"] == {"name": "MIT", "url": "https://opensource.org/license/mit"}
+    assert "license" not in info  # the repository carries no licence file, so the document must not advertise one
     assert not info["description"].startswith(info["summary"].split(",")[0])  # the description adds to the summary line
 
 
