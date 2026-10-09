@@ -10,14 +10,6 @@
 
 ⚠️ **Check:** the PR judge asks `tests_cover_change` whenever source changed. A change with no changed test is not demonstrated, and `pytest` runs with warnings as errors, so a deprecation anywhere in the suite fails the run.
 
-## Why this matters for an agent
-
-An agent starts every session cold. It cannot remember how the handler behaved yesterday, and it cannot watch a human run the service by hand. The test suite is the only executable statement of what the feature is supposed to do that survives between sessions, so a test is not a chore after the work. It is the work's specification, in the one form a check can run.
-
-Writing the test first has a second effect that no rule says out loud. A test can only be written first for code that is easy to call: a handler that takes a message and returns a `Result`, an engine behind a small protocol a fake can satisfy, a route that dispatches on the bus. Code that reaches into another feature's `internal/`, imports the framework, or does three things in one function is hard to put under a test before it exists. So the discipline pushes the design towards exactly the shape the walls (EIT001, EIT006) and the shape limit (40 lines, 5 parameters) ask for, without those rules being in the loop.
-
-What it does not guarantee: a green suite proves the behaviours someone thought to write down. It does not prove the seam is in the right place or that the contract is thin. Eitri judges the walls and the budget; the review judges single purpose and readability. Tests cover the third thing, behaviour, and only as far as they are written.
-
 ## The three laws
 
 1. **No production code until a unit test fails.** Not "a test exists": one that fails, for the reason you expect. A test that passes before the code is written tests nothing.
