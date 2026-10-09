@@ -1,4 +1,5 @@
-"""The entry point: arguments → diff → state → one call → policy → table, files, telemetry, exit code."""
+"""The entry point: arguments → diff → state → one call about the diff and one per edited application
+file, whole → policy → table, files, telemetry, exit code."""
 
 from __future__ import annotations
 
@@ -11,9 +12,10 @@ from typing import Any, TextIO
 from ...model import Finding, MapModel
 from ...store import UnreadableMap, append_findings, heimdall_dir, load_map
 from .base import EXIT_ERROR, EXIT_OK, ReviewError, Streams
+from .craft import craft_files, craft_state
 from .diff import git_diff, parse_unified_diff
 from .policy import Verdict, decide
-from .questions import questions
+from .questions import file_questions, questions
 from .report import render_markdown, render_table
 from .state import build_state, function_shape, wall_findings
 from .transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL, Transport, http_transport
@@ -131,6 +133,27 @@ def _judge(payload: dict[str, Any], transport: Transport, stderr: TextIO) -> dic
     return response
 
 
+def _judge_files(payloads: list[dict[str, Any]], transport: Transport, stderr: TextIO) -> list[dict[str, Any]] | None:
+    """The craft pass: one call per edited application file, whole. ``None`` when any of them is not a verdict."""
+    responses: list[dict[str, Any]] = []
+    for payload in payloads:
+        response = _judge(payload, transport, stderr)
+        if response is None:
+            return None
+        responses.append(response)
+    return responses
+
+
+def _usage(responses: list[dict[str, Any]]) -> dict[str, Any]:
+    """The token counts of every call added up, so the report says what the whole review cost."""
+    total: dict[str, Any] = {}
+    for r in responses:
+        for key, value in (r.get("usage") or {}).items():
+            if isinstance(value, (int, float)):
+                total[key] = total.get(key, 0) + value
+    return total
+
+
 def _report(opts: dict[str, Any], verdict: Verdict, state: dict[str, Any], io: Streams, cwd: str) -> None:
     """The table on stdout, the JSON and Markdown files when asked, and the telemetry line."""
     qs = questions()
@@ -141,6 +164,7 @@ def _report(opts: dict[str, Any], verdict: Verdict, state: dict[str, Any], io: S
             "reasons": verdict.reasons,
             "advice": verdict.advice,
             "answers": verdict.answers,
+            "files": verdict.files,
             "facts": state["facts"],
             "model": verdict.model,
             "usage": verdict.usage,
@@ -151,8 +175,9 @@ def _report(opts: dict[str, Any], verdict: Verdict, state: dict[str, Any], io: S
     _telemetry(cwd, verdict, state["facts"], opts["session"])
 
 
-def _payload(opts: dict[str, Any], io: Streams, cwd: str) -> dict[str, Any] | int:
-    """What one Jev call sees, or the exit code when there is no diff to judge."""
+def _payloads(opts: dict[str, Any], io: Streams, cwd: str) -> dict[str, Any] | int:
+    """Every call the review makes — ``diff``: the one about the change; ``files``: one per edited application
+    file, whole — or the exit code when there is no diff to judge. The diff's facts name the files judged whole."""
     try:
         files = parse_unified_diff(_read_diff(opts, io.stdin, cwd))
     except (ReviewError, OSError) as e:
@@ -162,8 +187,15 @@ def _payload(opts: dict[str, Any], io: Streams, cwd: str) -> dict[str, Any] | in
         io.stdout.write("heimdall review: nothing to review (empty diff)\n")
         return EXIT_OK
     m = _load_map(cwd, io.stderr)
-    state = build_state(files, m, opts["task"], wall_findings(cwd, files), function_shape(cwd, files, m))
-    return {"model": opts["model"], "state": state, "questions": questions()}
+    shape = function_shape(cwd, files, m)
+    state = build_state(files, m, opts["task"], wall_findings(cwd, files), shape)
+    crafts = [craft_state(f, opts["task"], shape) for f in craft_files(cwd, files, m)]
+    state["facts"]["craft_files"] = [c["file"]["path"] for c in crafts]
+    state["facts"]["craft_truncated"] = [c["file"]["path"] for c in crafts if c["facts"]["truncated"]]
+    return {
+        "diff": {"model": opts["model"], "state": state, "questions": questions()},
+        "files": [{"model": opts["model"], "state": c, "questions": file_questions()} for c in crafts],
+    }
 
 
 def run(args: list[str], io: Streams, cwd: str, transport: Transport | None = None, env: Mapping[str, str] | None = None) -> int:
@@ -173,20 +205,27 @@ def run(args: list[str], io: Streams, cwd: str, transport: Transport | None = No
     except ReviewError as e:
         io.stderr.write(str(e) + "\n")
         return 2
-    payload = _payload(opts, io, cwd)
-    if isinstance(payload, int):
-        return payload
+    payloads = _payloads(opts, io, cwd)
+    if isinstance(payloads, int):
+        return payloads
     if opts["dry_run"]:
-        io.stdout.write(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        io.stdout.write(json.dumps(payloads, indent=2, ensure_ascii=False) + "\n")
         return EXIT_OK
     if transport is None:
         found = _transport_from_env(opts, environ, io, cwd)
         if isinstance(found, int):
             return found
         transport = found
-    response = _judge(payload, transport, io.stderr)
+    response = _judge(payloads["diff"], transport, io.stderr)
     if response is None:
         return EXIT_ERROR
-    verdict = decide(response["answers"], payload["state"]["facts"], str(response.get("model", opts["model"])), response.get("usage") or {})
-    _report(opts, verdict, payload["state"], io, cwd)
+    per_file = _judge_files(payloads["files"], transport, io.stderr)
+    if per_file is None:
+        return EXIT_ERROR
+    state = payloads["diff"]["state"]
+    file_answers = {c["state"]["file"]["path"]: r["answers"] for c, r in zip(payloads["files"], per_file, strict=True)}
+    verdict = decide(
+        response["answers"], state["facts"], str(response.get("model", opts["model"])), _usage([response, *per_file]), file_answers
+    )
+    _report(opts, verdict, state, io, cwd)
     return verdict.exit_code
