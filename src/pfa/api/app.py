@@ -74,22 +74,27 @@ def create_app(*, warmup: bool | None = None) -> FastAPI:
             _warmup_in_background(app)
         yield
 
-    configure_logging()  # RFC 5424 records on stdout; idempotent
+    # Logging first: uvicorn's loggers are redirected here and the lifespan logs the warm-up, so
+    # the one format and the trace id must be in place before either writes a line.
+    configure_logging()
     app = FastAPI(
         title="PFA API",
         summary="Multilingual text embeddings, chunking and similarity",
         description=DESCRIPTION,
         version="0.1.0",
-        license_info={"name": "MIT", "url": "https://opensource.org/license/mit"},
         openapi_tags=list(TAGS),
         generate_unique_id_function=_operation_id,
-        # Try it out is open from the start; the Schemas list at the foot is hidden, every model
-        # being one click away under its operation.
+        # /docs doubles as the demo: a visitor should be able to send the example request without
+        # a setup click, and the Schemas list at the foot only repeats what each operation shows.
         swagger_ui_parameters={"tryItOutEnabled": True, "displayRequestDuration": True, "defaultModelsExpandDepth": -1},
         lifespan=lifespan,
     )
-    install_problem_details(app)  # every error leaves as RFC 9457 application/problem+json
-    app.add_middleware(TraceContext)  # traceparent in and out, one request line per request
+    # Problem details before the routers: a Problem raised by a route needs its handler installed,
+    # and the one wire shape for every error is what lets a client branch on `type`.
+    install_problem_details(app)
+    # The trace middleware is the outermost layer, so the trace id exists before any handler or
+    # error path logs and the response header matches the log lines even on a 500.
+    app.add_middleware(TraceContext)
     app.state.bus = application.build_bus()
     app.state.readiness = application.readiness
     for router in ROUTERS:
