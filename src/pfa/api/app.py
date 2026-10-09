@@ -19,8 +19,8 @@ from .routes import ROUTERS, TAGS
 log = logging.getLogger("pfa.api")
 
 DESCRIPTION = """\
-Multilingual text embeddings and similarity over \
-[intfloat/multilingual-e5-large](https://huggingface.co/intfloat/multilingual-e5-large).
+One model, [intfloat/multilingual-e5-large](https://huggingface.co/intfloat/multilingual-e5-large): 100+ languages,
+1024-dimensional unit-normalised vectors, cross-lingual on meaning rather than shared words.
 
 **The flow.** Embed your documents once with `POST /embeddings/passages` and store the vectors. For each question,
 `POST /embeddings/query` gives the vector to rank them by: dot product, which is cosine since every vector is
@@ -80,10 +80,12 @@ def create_app(*, warmup: bool | None = None) -> FastAPI:
         summary="Multilingual text embeddings, chunking and similarity",
         description=DESCRIPTION,
         version="0.1.0",
-        license_info={"name": "MIT"},
+        license_info={"name": "MIT", "url": "https://opensource.org/license/mit"},
         openapi_tags=list(TAGS),
         generate_unique_id_function=_operation_id,
-        swagger_ui_parameters={"tryItOutEnabled": True, "displayRequestDuration": True},
+        # Try it out is open from the start; the Schemas list at the foot is hidden, every model
+        # being one click away under its operation.
+        swagger_ui_parameters={"tryItOutEnabled": True, "displayRequestDuration": True, "defaultModelsExpandDepth": -1},
         lifespan=lifespan,
     )
     install_problem_details(app)  # every error leaves as RFC 9457 application/problem+json

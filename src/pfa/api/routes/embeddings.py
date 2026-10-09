@@ -7,17 +7,15 @@ from pydantic import BaseModel, Field, model_validator
 from pydantic.json_schema import JsonDict, JsonValue
 
 from pfa.api.problems import MODEL_BUSY, Problem, domain_rejections, problem_response
-from pfa.api.validation import StrictRequest, check_total_chars, text, with_example
+from pfa.api.validation import StrictRequest, check_total_chars, request_example, response_example, text
 from pfa.features.embeddings.contract import EmbedPassages, EmbedQuery, EngineBusy, RankCandidates
 from pfa.kernel import Message, Result
 
 TAG = {
     "name": "embeddings",
     "description": (
-        "Unit-normalised text embeddings in 100+ languages. Embed documents once as *passage* vectors, embed each "
-        "question as a *query* vector and rank by dot product (cosine, since both are normalised), or let "
-        "`/embeddings/similarity` rank in one call. Cross-lingual: a Danish question ranks an English answer on meaning. "
-        "The model embeds; it does not answer."
+        "Passage vectors for documents, query vectors for questions, and the ranking of one against the other. "
+        "Cross-lingual: a Danish question ranks an English answer on meaning. The model embeds; it does not answer."
     ),
 }
 router = APIRouter(prefix="/embeddings", tags=["embeddings"])
@@ -84,22 +82,16 @@ def _dispatch(request: Request, message: Message) -> Result[Any]:
 
 
 class QuestionRequest(StrictRequest):
-    model_config = with_example({"question": _QUESTION})
-
     question: Question  # type: ignore[valid-type]
 
 
 class EmbeddingOut(BaseModel):
-    model_config = with_example(_QUERY_OUT)
-
     model: str = _MODEL_FIELD
     dimensions: int = _DIMENSIONS_FIELD
     embedding: list[float] = Field(description=_VECTOR)
 
 
 class PassagesRequest(StrictRequest):
-    model_config = with_example({"texts": _PASSAGES})
-
     texts: list[text(MAX_TEXT_CHARS)] = Field(  # type: ignore[valid-type]
         min_length=1, max_length=MAX_TEXTS, description="Documents; long ones are chunked on sentence boundaries"
     )
@@ -119,16 +111,12 @@ class PassageEmbeddingOut(BaseModel):
 
 
 class PassagesOut(BaseModel):
-    model_config = with_example(_PASSAGES_OUT)
-
     model: str = _MODEL_FIELD
     dimensions: int = _DIMENSIONS_FIELD
     chunks: list[PassageEmbeddingOut] = Field(description="One entry per chunk: documents in order, each document's chunks in order")
 
 
 class SimilarityRequest(StrictRequest):
-    model_config = with_example({"question": _QUESTION, "candidates": _PASSAGES})
-
     question: Question  # type: ignore[valid-type]
     candidates: list[text(MAX_TEXT_CHARS)] = Field(  # type: ignore[valid-type]
         min_length=1, max_length=MAX_TEXTS, description="Texts to rank against the question, any language"
@@ -154,8 +142,6 @@ class MatchOut(BaseModel):
 
 
 class SimilarityOut(BaseModel):
-    model_config = with_example(_SIMILARITY_OUT)
-
     model: str = Field(description="The model that scored")
     matches: list[MatchOut] = Field(description="Every candidate, best first")
 
@@ -164,8 +150,11 @@ class SimilarityOut(BaseModel):
     "/query",
     summary="Embed a question as a query vector",
     response_model=EmbeddingOut,
-    response_description="The query vector, ready to rank passage vectors against",
-    responses=_errors("/embeddings/query", "empty question"),
+    openapi_extra=request_example({"question": _QUESTION}),
+    responses={
+        200: response_example("The query vector, ready to rank passage vectors against", _QUERY_OUT),
+        **_errors("/embeddings/query", "empty question"),
+    },
 )
 def embed_question(body: QuestionRequest, request: Request) -> EmbeddingOut:
     """Embed a question as a *query* vector (unit-normalised), ready to be ranked against
@@ -181,8 +170,11 @@ def embed_question(body: QuestionRequest, request: Request) -> EmbeddingOut:
     "/passages",
     summary="Embed documents as passage vectors",
     response_model=PassagesOut,
-    response_description="One vector per chunk, tagged with its document and position",
-    responses=_errors("/embeddings/passages", "every passage must be non-empty"),
+    openapi_extra=request_example({"texts": _PASSAGES}),
+    responses={
+        200: response_example("One vector per chunk, tagged with its document and position", _PASSAGES_OUT),
+        **_errors("/embeddings/passages", "every passage must be non-empty"),
+    },
 )
 def embed_passages(body: PassagesRequest, request: Request) -> PassagesOut:
     """Embed documents as *passage* vectors. A document over the model's window comes back
@@ -211,8 +203,11 @@ def embed_passages(body: PassagesRequest, request: Request) -> PassagesOut:
     "/similarity",
     summary="Rank candidate texts against a question",
     response_model=SimilarityOut,
-    response_description="Every candidate scored, best first",
-    responses=_errors("/embeddings/similarity", "empty question", "every candidate must be non-empty"),
+    openapi_extra=request_example({"question": _QUESTION, "candidates": _PASSAGES}),
+    responses={
+        200: response_example("Every candidate scored, best first", _SIMILARITY_OUT),
+        **_errors("/embeddings/similarity", "empty question", "every candidate must be non-empty"),
+    },
 )
 def similarity(body: SimilarityRequest, request: Request) -> SimilarityOut:
     """Rank candidate texts by how well they answer the question, best first. Cross-lingual:
