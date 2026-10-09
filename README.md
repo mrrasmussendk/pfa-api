@@ -179,4 +179,4 @@ Read [docs/](docs/) to understand the project. Use [harness/](harness/) for inst
 | Investigate an architecture violation | [Eitri rule reference](harness/rules/) |
 | Check the token estimator | [Calibration](docs/calibration.md) |
 
-The architecture tooling is a Python port of [brokkr-eitri](https://github.com/mrrasmussendk/brokkr-eitri). Licensed under [MIT](LICENSE).
+The architecture tooling is a Python port of [brokkr-eitri](https://github.com/mrrasmussendk/brokkr-eitri).
