@@ -108,7 +108,7 @@ This creates pressure to keep features focused, contracts small, and shared prim
 
 ### Review the finished change
 
-**Jev**, called through `heimdall review`, evaluates the bounded diff alongside the task, slice map, and computed facts about the change. It answers typed questions about correctness, scope, tests, security, and architectural fit. Policy in code turns those answers into `approve`, `comment`, `request_changes`, or `escalate` for human review.
+**Jev**, called through `heimdall review`, evaluates the bounded diff alongside the task, slice map, and computed facts about the change. It answers typed questions about correctness, scope, tests, security, and architectural fit. It then reads each edited application file whole and scores its clean code, so a shortfall names the file. Policy in code turns those answers into `approve`, `comment`, `request_changes`, or `escalate` for human review.
 
 CI runs the deterministic checks separately: lint, types, tests, Eitri, canaries, and the harness smoke test. The PR review requires `TYPESAFE_API_KEY`; without it, the workflow reports that review was skipped.
 

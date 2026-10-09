@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 from .policy import Verdict
+from .questions import file_questions
 from .state import shape_line
 
 _BADGE = {"approve": "✅", "comment": "💬", "request_changes": "🛑", "escalate": "🙋"}
@@ -44,6 +45,18 @@ def _violation_item(v: dict[str, Any]) -> str:
     return item
 
 
+def _file_rows(v: Verdict) -> list[tuple[str, str, str]]:
+    """One ``(path, clean code, limit)`` row per file judged whole, lowest score first."""
+    fq = file_questions()
+    rows: list[tuple[float, str, str, str]] = []
+    for path, answers in v.files.items():
+        clean, limit = answers.get("clean_code"), answers.get("clean_code_limit")
+        score = _fmt_answer("clean_code", clean, fq) if isinstance(clean, dict) else ("?", "?")
+        label = _fmt_answer("clean_code_limit", limit, fq) if isinstance(limit, dict) else ("?", "?")
+        rows.append((float((clean or {}).get("score", 0.0)), path, f"{score[0]} · {score[1]}", f"{label[0]} · {label[1]}"))
+    return [(path, score, label) for _, path, score, label in sorted(rows)]
+
+
 def render_table(v: Verdict, qs: dict[str, dict[str, Any]], facts: dict[str, Any] | None = None) -> str:
     """The stdout report. The Stop hook hands the agent its tail, so each reason carries its advice: the
     reason alone ("clean code 2.28/3 below the target") names nothing to fix."""
@@ -65,6 +78,11 @@ def render_table(v: Verdict, qs: dict[str, dict[str, Any]], facts: dict[str, Any
         ans, prob = _fmt_answer(key, a, qs)
         rows.append(key.ljust(28) + ans[:43].ljust(44) + prob)
     rows.append("")
+    files = _file_rows(v)
+    if files:
+        rows.append("file (judged whole)".ljust(56) + "clean code".ljust(32) + "limit")
+        rows += [path[:55].ljust(56) + score.ljust(32) + label for path, score, label in files]
+        rows.append("")
     rows.append(f"model: {v.model} · input tokens {v.usage.get('input_tokens', '?')} · output tokens {v.usage.get('output_tokens', '?')}")
     return "\n".join(rows) + "\n"
 
@@ -109,6 +127,29 @@ def _told_the_judge(facts: dict[str, Any]) -> list[str]:
     lines.append(_size_line(facts))
     if facts["files_truncated"]:
         lines.append(f"- truncated for the judge: {', '.join(facts['files_truncated'])}")
+    whole = facts.get("craft_files") or []
+    if whole:
+        lines.append(f"- judged whole for clean code, one call each: {', '.join(whole)}")
+    cut = facts.get("craft_truncated") or []
+    if cut:
+        lines.append(f"- cut at the token budget when judged whole: {', '.join(cut)}")
+    return lines
+
+
+def _clean_code_by_file(v: Verdict) -> list[str]:
+    """The per-file clean-code table: each edited application file was judged whole, so a reader sees
+    which file holds the score down, not only that the change did."""
+    files = _file_rows(v)
+    if not files:
+        return []
+    lines = [
+        "",
+        "**Clean code, file by file** (each file judged whole, not only its hunks):",
+        "",
+        "| file | clean code | limit |",
+        "|---|---|---|",
+    ]
+    lines += [f"| `{path}` | {score} | {label} |" for path, score, label in files]
     return lines
 
 
@@ -142,6 +183,7 @@ def render_markdown(v: Verdict, state: dict[str, Any], qs: dict[str, dict[str, A
         if isinstance(a, dict):
             ans, prob = _fmt_answer(key, a, qs)
             lines.append(f"| `{key}` | {ans} | {prob} |")
+    lines += _clean_code_by_file(v)
     lines += ["", "<details><summary>What Heimdall told the judge</summary>", "", *_told_the_judge(facts), "", "</details>", ""]
     lines.append(
         f"<sub>Jev `{v.model}` via `heimdall review` — typed judgments, policy in code. "

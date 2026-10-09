@@ -1,9 +1,10 @@
 # Jev reviews every pull request: typed judgments over the diff, policy in code, one sticky comment.
 #
 # `heimdall review` turns the PR diff plus the slice map into bounded state, asks TypeSafe's Jev
-# a fixed set of yes/no, choice and score questions (correctness, clean code — single purpose,
-# lean signatures, about the functions the AST found over the shape limits — tests,
-# security, scope, architecture fit), and maps the probabilities to one outcome:
+# a fixed set of yes/no, choice and score questions (correctness, single purpose and lean
+# signatures about the functions the AST found over the shape limits, tests, security, scope,
+# architecture fit), then sends each edited application file whole in a call of its own for its
+# clean code, so a shortfall names the file, and maps the probabilities to one outcome:
 #   approve / comment  -> check passes
 #   request_changes    -> check fails
 #   escalate           -> check passes with a warning; a human is asked for
