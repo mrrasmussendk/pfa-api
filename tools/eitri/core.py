@@ -8,7 +8,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-HELP_BASE = "docs/rules/"  # relative to the repo root
+HELP_BASE = "harness/rules/"  # relative to the repo root
 
 
 class Severity(str, Enum):
@@ -91,12 +91,25 @@ EIT005 = Descriptor(
     id="EIT005",
     title="HTTP error bypasses Problem Details",
     message_format=(
-        "'{0}' uses '{1}' — slices answer errors as RFC 9457 problem documents only; raise "
+        "'{0}' uses '{1}' — the HTTP edge answers errors as RFC 9457 problem documents only; raise "
         "the shared problem type '{2}' so every error on the wire has one shape"
     ),
     category="Eitri.Architecture",
     severity=Severity.ERROR,
     help_link=HELP_BASE + "EIT005.md",
+)
+
+EIT006 = Descriptor(
+    id="EIT006",
+    title="Slice depends upward",
+    message_format=(
+        "'{0}' imports '{1}' — a slice knows nothing above itself: no HTTP framework and nothing from "
+        "the application ('{2}') outside its slices and kernel; routes, request models and status codes "
+        "live in the application's entry point, and the slice answers messages with Result"
+    ),
+    category="Eitri.Architecture",
+    severity=Severity.ERROR,
+    help_link=HELP_BASE + "EIT006.md",
 )
 
 EIT100 = Descriptor(
@@ -120,7 +133,7 @@ EIT101 = Descriptor(
     help_link=HELP_BASE + "EIT100.md",
 )
 
-ALL_DESCRIPTORS: tuple[Descriptor, ...] = (EIT000, EIT001, EIT002, EIT003, EIT004, EIT005, EIT100, EIT101)
+ALL_DESCRIPTORS: tuple[Descriptor, ...] = (EIT000, EIT001, EIT002, EIT003, EIT004, EIT005, EIT006, EIT100, EIT101)
 
 
 @dataclass
@@ -158,13 +171,19 @@ class Diagnostic:
 class EitriConfig:
     """What the walls police. Read from ``[tool.eitri]`` in pyproject.toml, overridable per call."""
 
-    slice_prefix: str = "slices."
-    kernel: str = "shared_kernel"
+    slice_prefix: str = "pfa.features."
+    kernel: str = "pfa.kernel"
     token_budget: int = 15_000
     enabled: bool = True
     contract_allowed_modules: tuple[str, ...] = ()
-    # The one sanctioned way for a slice to answer an error (EIT005 names it as the remedy).
-    problem_helper: str = "http_common.Problem"
+    # The one sanctioned way for the HTTP edge to answer an error (EIT005 names it as the remedy).
+    problem_helper: str = "pfa.api.problems.Problem"
+    # The application package. Everything under it that is not a slice or the kernel (the
+    # composition root, the entry points) is policed: EIT001 against slice internals, EIT005
+    # against HTTPException. Slices never import it (EIT006).
+    app_package: str = "pfa"
+    # The one module that may import a slice's ``module`` (its plug): the composition root.
+    composition_root: str = "pfa.application"
 
     @property
     def slices_package(self) -> str:
@@ -181,10 +200,10 @@ class EitriConfig:
 
     @classmethod
     def _from_values(cls, values: dict[str, Any]) -> EitriConfig:
-        prefix = str(values.get("slice_prefix") or "slices.")
+        prefix = str(values.get("slice_prefix") or cls.slice_prefix)
         if not prefix.endswith("."):
             prefix += "."
-        kernel = str(values.get("kernel") or "shared_kernel")
+        kernel = str(values.get("kernel") or cls.kernel)
         budget_raw = values.get("token_budget", 15_000)
         try:
             budget = int(budget_raw)
@@ -195,8 +214,10 @@ class EitriConfig:
         allowed = values.get("contract_allowed_modules") or ()
         if isinstance(allowed, str):
             allowed = (allowed,)
-        helper = str(values.get("problem_helper") or "http_common.Problem")
-        return cls(prefix, kernel, budget, enabled, tuple(str(a) for a in allowed), helper)
+        helper = str(values.get("problem_helper") or cls.problem_helper)
+        app = str(values.get("app_package") or cls.app_package)
+        composition = str(values.get("composition_root") or cls.composition_root)
+        return cls(prefix, kernel, budget, enabled, tuple(str(a) for a in allowed), helper, app, composition)
 
 
 _SECTION = re.compile(r"^\s*\[([^\]]+)\]\s*$")

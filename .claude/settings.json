@@ -5,6 +5,18 @@
         "matcher": "Read|Grep|Glob|Edit|Write|MultiEdit",
         "hooks": [{ "type": "command", "command": "python -m heimdall hook" }]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python .claude/hooks/finish.py",
+            "timeout": 600,
+            "statusMessage": "Running pytest and heimdall review before finishing"
+          }
+        ]
+      }
     ]
   }
 }

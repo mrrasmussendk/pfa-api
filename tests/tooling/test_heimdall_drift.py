@@ -6,15 +6,15 @@ from conftest import TempRepo
 def _smoke_scenario(repo: TempRepo) -> TempRepo:
     repo.write_sample_map()
     # session s1: edits kvad, reads own internal + declared contract; then creeps into rune
-    repo.hook(TempRepo.ev("s1", "Read", "src/slices/kvad/internal/kvad_engine.py"))
-    repo.hook(TempRepo.ev("s1", "Edit", "src/slices/kvad/internal/kvad_engine.py"))
-    repo.hook(TempRepo.ev("s1", "Read", "src/slices/rune/contract/rune_service.py"))
-    repo.hook(TempRepo.ev("s1", "Read", "src/slices/rune/internal/rune_engine.py"))  # OOB at read time...
-    repo.hook(TempRepo.ev("s1", "Edit", "src/slices/rune/internal/rune_engine.py"))  # ...but session later edits rune
+    repo.hook(TempRepo.ev("s1", "Read", "src/pfa/features/kvad/internal/kvad_engine.py"))
+    repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/features/kvad/internal/kvad_engine.py"))
+    repo.hook(TempRepo.ev("s1", "Read", "src/pfa/features/rune/contract/rune_service.py"))
+    repo.hook(TempRepo.ev("s1", "Read", "src/pfa/features/rune/internal/rune_engine.py"))  # OOB at read time...
+    repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/features/rune/internal/rune_engine.py"))  # ...but session later edits rune
     # session s2: edits kvad only, one clean read + one OOB read
-    repo.hook(TempRepo.ev("s2", "Edit", "src/slices/kvad/internal/kvad_service.py"))
-    repo.hook(TempRepo.ev("s2", "Read", "src/slices/kvad/internal/kvad_engine.py"))
-    repo.hook(TempRepo.ev("s2", "Read", "src/slices/rune/internal/rune_engine.py"))  # OOB
+    repo.hook(TempRepo.ev("s2", "Edit", "src/pfa/features/kvad/internal/kvad_service.py"))
+    repo.hook(TempRepo.ev("s2", "Read", "src/pfa/features/kvad/internal/kvad_engine.py"))
+    repo.hook(TempRepo.ev("s2", "Read", "src/pfa/features/rune/internal/rune_engine.py"))  # OOB
     return repo
 
 
@@ -50,8 +50,8 @@ def test_drift_missing_inputs_exit1(repo: TempRepo) -> None:
 
 def test_drift_skips_malformed_telemetry_lines(repo: TempRepo) -> None:
     repo.write_sample_map()
-    repo.hook(TempRepo.ev("s1", "Edit", "src/slices/kvad/internal/kvad_engine.py"))
-    repo.hook(TempRepo.ev("s1", "Read", "src/slices/kvad/internal/kvad_engine.py"))
+    repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/features/kvad/internal/kvad_engine.py"))
+    repo.hook(TempRepo.ev("s1", "Read", "src/pfa/features/kvad/internal/kvad_engine.py"))
     with open(repo.root / ".heimdall" / "telemetry.jsonl", "a", encoding="utf-8") as f:
         f.write("{garbage\n")
     code, stdout, _ = repo.run("", "drift")
@@ -66,8 +66,23 @@ def test_drift_counts_shared_package_reads_as_in_bounds(repo: TempRepo) -> None:
     m = json.loads(repo.read_file(".heimdall/map.json"))
     m["shared"] = ["http_common"]
     repo.write_file(".heimdall/map.json", json.dumps(m))
-    repo.hook(TempRepo.ev("s1", "Edit", "src/slices/kvad/internal/routes.py"))
+    repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/features/kvad/internal/kvad_engine.py"))
     repo.hook(TempRepo.ev("s1", "Read", "src/http_common/problems.py"))
-    repo.hook(TempRepo.ev("s1", "Read", "src/slices/kvad/internal/routes.py"))
+    repo.hook(TempRepo.ev("s1", "Read", "src/pfa/features/kvad/internal/kvad_engine.py"))
     _, stdout, _ = repo.run("", "drift")
     assert "s1        kvad                            2     0      0%" in stdout
+
+
+def test_drift_treats_a_slices_route_module_as_the_slice_and_the_app_package_as_in_bounds(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    # an "add a route" session: edits kvad's HTTP edge, reads kvad's contract, the problem helper
+    # and the composition root — all in-bounds; a read of rune's internals is not
+    repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/api/routes/kvad.py"))
+    repo.hook(TempRepo.ev("s1", "Read", "src/pfa/features/kvad/contract/kvad_service.py"))
+    repo.hook(TempRepo.ev("s1", "Read", "src/pfa/api/problems.py"))
+    repo.hook(TempRepo.ev("s1", "Read", "src/pfa/api/composition.py"))
+    repo.hook(TempRepo.ev("s1", "Read", "src/pfa/features/rune/internal/rune_engine.py"))
+    _, stdout, _ = repo.run("", "drift")
+    assert "s1        kvad                            4     1     25%" in stdout
+    assert '"kind": "app"' in repo.telemetry and '"kind": "slice:kvad"' not in repo.telemetry
+    assert '"event": "edit", "path": "src/pfa/api/routes/kvad.py", "slice": "kvad"' in repo.telemetry

@@ -6,10 +6,10 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from pfa_api import app as app_module
-from pfa_api import composition
-from pfa_api.app import create_app
-from pfa_api.routes import health
+from pfa import application
+from pfa.api import app as app_module
+from pfa.api.app import create_app
+from pfa.api.routes import health
 
 
 def test_health(client: TestClient) -> None:
@@ -47,7 +47,7 @@ def test_ready_is_200_when_components_report_loaded() -> None:
 
 def test_readiness_reads_flags_without_loading(client: TestClient) -> None:
     client.get("/ready")
-    assert composition.readiness() == {"tokenizer": False, "embedding_model": False}
+    assert application.readiness() == {"tokenizer": False, "embedding_model": False}
 
 
 def test_warmup_runs_on_a_background_thread_at_startup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -58,7 +58,7 @@ def test_warmup_runs_on_a_background_thread_at_startup(monkeypatch: pytest.Monke
         seen.append(threading.current_thread().name)
         done.set()
 
-    monkeypatch.setattr(composition, "warmup_all", fake_warmup_all)
+    monkeypatch.setattr(application, "warmup_all", fake_warmup_all)
     with TestClient(create_app(warmup=True)) as c:
         assert c.get("/health").status_code == 200  # liveness answers while warm-up runs
         assert done.wait(5)
@@ -67,7 +67,7 @@ def test_warmup_runs_on_a_background_thread_at_startup(monkeypatch: pytest.Monke
 
 def test_warmup_is_off_by_default_and_env_driven(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[int] = []
-    monkeypatch.setattr(composition, "warmup_all", lambda: calls.append(1))
+    monkeypatch.setattr(application, "warmup_all", lambda: calls.append(1))
     with TestClient(create_app()):
         pass
     assert calls == []

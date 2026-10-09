@@ -4,18 +4,42 @@ as facts, so the model spends its judgment on what only judgment can decide."""
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from brokkr import estimate
+
 from ...model import MapModel
-from ...pathutil import is_contract_path, norm, shared_of, slice_of
+from ...pathutil import app_of, is_contract_path, is_kernel_path, is_route_path, norm, shared_of, slice_of
 from ...sensors.boundary_edits import FAN_IN_FREEZE
+from ...shape import FUNCTION_LINES, FUNCTION_PARAMETERS, oversized, shape_line
 from .diff import FileChange
 
-MAX_FILE_CHARS = 12_000  # per file; the rest is summarised as "+N/-M more lines"
-MAX_STATE_CHARS = 60_000  # all files together
+# Jev reads one request of 64k tokens, of which the state plus the longest question must fit 32k
+# (docs.typesafe.ai/models). The budget is measured with Brokkr, the ruler Eitri's budget uses, which
+# is within about 10% of a real tokenizer: the margin below the window pays for that and the questions.
+JUDGE_WINDOW_TOKENS = 32_000
+MAX_STATE_TOKENS = 28_000  # all files together
+MAX_FILE_TOKENS = 6_000  # per file; the rest is summarised as "N more lines not shown"
+# The order the budget is spent in: the code the walls are about first, prose last. A wide diff
+# then truncates docs and tooling, never the slice the judge is asked about.
+_AREA_PRIORITY = ("slice:", "contract:", "kernel", "app", "service", "shared:", "tests", "tooling", "ci", "docs", "other")
 
 _FIX_LINE = re.compile(r"^\*\*Fix[^*]*:\*\*\s*(.+?)\s*$", re.MULTILINE)
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+
+__all__ = [
+    "area_of",
+    "build_state",
+    "fix_from_docs",
+    "function_shape",
+    "is_application",
+    "shape_line",
+    "touched_lines",
+    "truncate",
+    "wall_findings",
+]
 
 
 def area_of(path: str, m: MapModel | None) -> str:
@@ -25,11 +49,13 @@ def area_of(path: str, m: MapModel | None) -> str:
         s = slice_of(p, m)
         if s is not None:
             return f"contract:{s}" if is_contract_path(p) else f"slice:{s}"
-        if m.kernel and f"/{m.kernel}/" in f"/{p}":
+        if is_kernel_path(p, m):
             return "kernel"
         sh = shared_of(p, m)
         if sh is not None:
             return f"shared:{sh}"
+        if app_of(p, m) is not None:
+            return "app"
     if p.startswith("tests/"):
         return "tests"
     if p.startswith("tools/"):
@@ -43,17 +69,33 @@ def area_of(path: str, m: MapModel | None) -> str:
     return "other"
 
 
-def _truncate(text: str, limit: int) -> tuple[str, bool]:
-    if len(text) <= limit:
+def is_application(area: str) -> bool:
+    """A slice, a contract, the kernel, the application or a shared package: the code the craft floor is about,
+    as opposed to the tests, the tooling, CI and docs."""
+    return area.startswith(("slice:", "contract:", "shared:")) or area in ("kernel", "app", "service")
+
+
+def _priority(area: str) -> int:
+    return next((i for i, prefix in enumerate(_AREA_PRIORITY) if area == prefix or area.startswith(prefix)), len(_AREA_PRIORITY))
+
+
+def truncate(text: str, limit: int) -> tuple[str, bool]:
+    """``text`` cut at a line boundary to about ``limit`` tokens, and whether it was cut."""
+    if estimate(text) <= limit:
         return text, False
-    cut = text[:limit]
-    cut = cut[: cut.rfind("\n")] if "\n" in cut else cut
-    dropped = text.count("\n") - cut.count("\n")
-    return cut + f"\n… [{dropped} more diff lines not shown]", True
+    kept: list[str] = []
+    used = 0
+    for line in text.splitlines():
+        used += estimate(line)
+        if used > limit:
+            break
+        kept.append(line)
+    dropped = len(text.splitlines()) - len(kept)
+    return "\n".join(kept) + f"\n… [{dropped} more lines not shown]", True
 
 
 def fix_from_docs(root: Path, help_link: str) -> str:
-    """The ``**Fix:**`` line of a rule's page under ``docs/rules/`` — the rule doc is the single
+    """The ``**Fix:**`` line of a rule's page under ``harness/rules/`` — the rule doc is the single
     source of what to do about a wall, so the PR comment never drifts from it."""
     try:
         text = (root / help_link).read_text(encoding="utf-8")
@@ -103,70 +145,151 @@ def wall_findings(cwd: str, files: list[FileChange]) -> list[dict[str, Any]]:
     return sorted(out, key=lambda v: (v["path"], v["line"] or 0, v["rule"]))
 
 
-def build_state(files: list[FileChange], m: MapModel | None, task: str | None, walls: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """The JSON object Jev judges."""
-    slices_touched: set[str] = set()
-    contracts_touched: dict[str, int] = {}
-    routes_changed = False
-    tests_touched: set[str] = set()
-    source_changed = False
-    docs_changed = False
-    truncated: list[str] = []
-    budget = MAX_STATE_CHARS
-    entries: list[dict[str, Any]] = []
+def touched_lines(f: FileChange) -> set[int]:
+    """Line numbers in the new file that the diff adds, or that follow a removed line."""
+    touched: set[int] = set()
+    line = 0
+    for row in f.hunks:
+        m = _HUNK.match(row)
+        if m:
+            line = int(m.group(1))
+        elif row.startswith("+"):
+            touched.add(line)
+            line += 1
+        elif row.startswith("-"):
+            touched.add(line)
+        elif row.startswith(" "):
+            line += 1
+    return touched
+
+
+def function_shape(cwd: str, files: list[FileChange], m: MapModel | None) -> list[dict[str, Any]]:
+    """The changed functions over the shape limits, read from the working tree's AST: facts for the
+    judge, so "single purpose" and "lean signatures" are asked about a named function at a line.
+
+    Tests are left out (a scenario reads top-down however long it is); a file that is deleted, not
+    Python or unparsable contributes nothing, so a review of a bare diff still runs."""
+    out: list[dict[str, Any]] = []
     for f in files:
-        area = area_of(f.path, m)
+        path = norm(f.path)
+        if f.status == "deleted" or f.binary or not path.endswith(".py") or area_of(path, m) == "tests":
+            continue
+        try:
+            source = (Path(cwd) / path).read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            continue
+        out += oversized(path, source, touched_lines(f))
+    return sorted(out, key=lambda v: (v["path"], v["line"]))
+
+
+@dataclass
+class _Tally:
+    """What the classified files add up to: the facts about the change as a whole."""
+
+    slices: set[str] = field(default_factory=set)
+    contracts: dict[str, int] = field(default_factory=dict)
+    routes_changed: bool = False
+    source_changed: bool = False
+    code_changed: bool = False  # Python in the application (a slice, the kernel, the app): the craft floor is about this, not the tooling
+    docs_changed: bool = False
+    tests: set[str] = field(default_factory=set)
+    truncated: list[str] = field(default_factory=list)
+    diff_tokens: int = 0  # the whole diff, Brokkr's estimate
+    state_tokens: int = 0  # what the judge gets after the caps
+
+    def count(self, area: str, f: FileChange, m: MapModel | None) -> None:
+        if is_application(area) and f.status != "deleted" and norm(f.path).endswith(".py"):
+            self.code_changed = True
         if area.startswith(("slice:", "contract:")):
             name = area.split(":", 1)[1]
-            slices_touched.add(name)
-            source_changed = True
+            self.slices.add(name)
+            self.source_changed = True
             if area.startswith("contract:"):
-                contracts_touched[name] = m.slices[name].fan_in if m and name in m.slices else 0
-            if norm(f.path).endswith("/internal/routes.py"):
-                routes_changed = True
-        elif area in ("kernel", "service") or area.startswith("shared:"):
-            source_changed = True
+                self.contracts[name] = m.slices[name].fan_in if m and name in m.slices else 0
+            if m is not None and is_route_path(f.path, m):
+                self.routes_changed = True
+        elif area in ("kernel", "app", "service") or area.startswith("shared:"):
+            self.source_changed = True
         elif area == "tests":
-            tests_touched.add(norm(f.path))
+            self.tests.add(norm(f.path))
         elif area == "docs":
-            docs_changed = True
+            self.docs_changed = True
+
+
+def _entries(files: list[FileChange], m: MapModel | None, tally: _Tally) -> list[dict[str, Any]]:
+    """One entry per file, source first (see ``_AREA_PRIORITY``), git order within an area; the
+    character budget is spent in that order and ``tally`` learns what the files add up to."""
+    budget = MAX_STATE_TOKENS
+    entries: list[dict[str, Any]] = []
+    classified = sorted(((area_of(f.path, m), f) for f in files), key=lambda pair: _priority(pair[0]))
+    for area, f in classified:
+        tally.count(area, f, m)
         if f.binary:
             text = "[binary]"
         else:
-            text, cut = _truncate(f.text, min(MAX_FILE_CHARS, max(budget, 400)))
+            tally.diff_tokens += estimate(f.text)
+            text, cut = truncate(f.text, min(MAX_FILE_TOKENS, max(budget, 100)))
             if cut:
-                truncated.append(f.path)
-        budget -= len(text)
+                tally.truncated.append(f.path)
+        tally.state_tokens += estimate(text)
+        budget -= estimate(text)
         entries.append({"path": norm(f.path), "status": f.status, "area": area, "added": f.added, "removed": f.removed, "diff": text})
+    return entries
 
-    architecture: dict[str, Any] = {}
-    if m is not None:
-        architecture = {
-            "kernel": m.kernel,
-            "shared_packages": list(m.shared),
-            "slices": {name: {"depends_on": info.depends_on, "contract_fan_in": info.fan_in} for name, info in sorted(m.slices.items())},
-            "rules": [
-                "a slice imports another slice only through its contract/ package, never internal/",
-                "contract/ modules import only the standard library, the kernel and their own contract — no FastAPI, no pydantic",
-                "importing slices.<x>.contract requires <x> declared in the slice's slice.json",
-                "no dynamic imports, sys.path edits or wildcard imports inside slices",
-                "errors leave as RFC 9457 problem documents raised through the shared Problem type, never HTTPException",
-                f"a contract with fan-in >= {FAN_IN_FREEZE} is frozen: additive changes only",
-                "handlers return Result and never raise for domain reasons; routes decide status codes",
-            ],
-        }
+
+def _architecture(m: MapModel | None) -> dict[str, Any]:
+    """The map as the architecture's promise, and the walls in one sentence each."""
+    if m is None:
+        return {}
+    return {
+        "kernel": m.kernel_dir or m.kernel,
+        "application": m.app_dir,
+        "http_edge": m.routes_dir,
+        "shared_packages": list(m.shared),
+        "slices": {name: {"depends_on": info.depends_on, "contract_fan_in": info.fan_in} for name, info in sorted(m.slices.items())},
+        "rules": [
+            "a slice imports another slice only through its contract/ package, never internal/ or module.py",
+            "contract/ modules import only the standard library, the kernel and their own contract — no FastAPI, no pydantic",
+            "importing another feature's contract requires that feature declared in feature.json",
+            "no dynamic imports, sys.path edits or wildcard imports inside slices",
+            "a slice (feature) imports nothing above itself: no HTTP framework, nothing from the application or its entry points",
+            "the application consumes a feature through its contract/; only the composition root (application.py) imports a feature's module.py; nothing imports internal/",
+            "errors leave as RFC 9457 problem documents raised through the shared Problem type, never HTTPException",
+            f"a contract with fan-in >= {FAN_IN_FREEZE} is frozen: additive changes only",
+            "handlers return Result and never raise for domain reasons; routes decide status codes",
+        ],
+    }
+
+
+def build_state(
+    files: list[FileChange],
+    m: MapModel | None,
+    task: str | None,
+    walls: list[dict[str, Any]] | None = None,
+    shape: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The JSON object Jev judges: the task, the architecture, the facts and the files."""
+    tally = _Tally()
+    entries = _entries(files, m, tally)
     facts = {
         "files_changed": len(files),
         "lines_added": sum(f.added for f in files),
         "lines_removed": sum(f.removed for f in files),
-        "slices_touched": sorted(slices_touched),
-        "cross_slice_change": len(slices_touched) > 1,
-        "contracts_touched": {k: {"fan_in": v, "frozen": v >= FAN_IN_FREEZE} for k, v in sorted(contracts_touched.items())},
-        "routes_changed": routes_changed,
-        "source_changed": source_changed,
-        "tests_changed": sorted(tests_touched),
-        "docs_changed": docs_changed,
-        "files_truncated": truncated,
+        "slices_touched": sorted(tally.slices),
+        "cross_slice_change": len(tally.slices) > 1,
+        "contracts_touched": {k: {"fan_in": v, "frozen": v >= FAN_IN_FREEZE} for k, v in sorted(tally.contracts.items())},
+        "routes_changed": tally.routes_changed,
+        "source_changed": tally.source_changed,
+        "code_changed": tally.code_changed,
+        "tests_changed": sorted(tally.tests),
+        "docs_changed": tally.docs_changed,
+        "files_truncated": tally.truncated,
+        "diff_tokens": tally.diff_tokens,
+        "state_tokens": tally.state_tokens,
+        "state_budget_tokens": MAX_STATE_TOKENS,
+        "judge_window_tokens": JUDGE_WINDOW_TOKENS,
         "wall_violations": list(walls or []),
+        "function_shape": list(shape or []),
+        "function_limits": {"lines": FUNCTION_LINES, "params": FUNCTION_PARAMETERS},
     }
-    return {"task": task or "(no task statement given)", "architecture": architecture, "facts": facts, "files": entries}
+    return {"task": task or "(no task statement given)", "architecture": _architecture(m), "facts": facts, "files": entries}

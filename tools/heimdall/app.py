@@ -9,7 +9,7 @@ from typing import TextIO
 USAGE = (
     "usage: heimdall <hook|map|drift|estimate|review> [args]\n"
     "  hook                      read a PostToolUse event on stdin, run sensors, exit 2 on feedback\n"
-    "  map --root <dir> [--budget 15000] [--kernel shared_kernel]\n"
+    "  map --root <dir> [--budget 15000] [--kernel <name>]\n"
     "  drift                     telemetry vs map: per-session table, then per-slice aggregate\n"
     "  estimate <file-or-dir>    token estimate (same estimator Eitri checks with)\n"
     "  review [--base <ref>|--diff <file|->] [--task ..] [--json ..] [--markdown ..] [--dry-run]\n"
@@ -39,9 +39,10 @@ def run(args: list[str], stdin: TextIO, stdout: TextIO, stderr: TextIO, root: st
 
         return drift(stdout, stderr, root)
     if cmd == "review":
+        from .commands.review import Streams
         from .commands.review import run as review
 
-        return review(rest, stdin, stdout, stderr, root)
+        return review(rest, Streams(stdin, stdout, stderr), root)
     stderr.write(USAGE + "\n")
     return 2
 

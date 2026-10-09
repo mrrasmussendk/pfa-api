@@ -7,21 +7,13 @@ import time
 from collections.abc import Sequence
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from pfa_api import create_app
-from slices.chunking.contract import CountTokens, SplitText
-from slices.chunking.internal.handlers import CountTokensHandler, SplitTextHandler
-from slices.embeddings.contract import EmbedPassages, EmbedQuery, RankCandidates
-from slices.embeddings.internal.e5_engine import E5Engine, EngineBusy
-from slices.embeddings.internal.handlers import EmbedPassagesHandler, EmbedQueryHandler, RankCandidatesHandler
-
-
-class FakeTokenizer:
-    tokenizer_id = "fake/whitespace"
-
-    def count(self, text: str) -> int:
-        return len(text.split())
+from pfa.api.app import create_app
+from pfa.features.embeddings.contract import EmbedPassages, EmbedQuery, EngineBusy, RankCandidates
+from pfa.features.embeddings.internal.e5_engine import E5Engine
+from pfa.features.embeddings.internal.handlers import EmbedPassagesHandler, EmbedQueryHandler, RankCandidatesHandler
 
 
 class FakeEngine:
@@ -53,14 +45,11 @@ class FakeEngine:
         return [self._vec(t) for t in texts]
 
 
-def _fake_app(max_tokens: int = 500) -> tuple[TestClient, FakeEngine]:
-    """The real handlers of both slices, over a fake tokenizer (whitespace words) and a fake
-    engine. The embeddings handlers still reach chunking through the bus — the seam is real."""
-    app = create_app()
+def _fake_app(app: FastAPI, max_tokens: int = 500) -> tuple[TestClient, FakeEngine]:
+    """The real embeddings handlers over a fake engine, on an app whose chunking is the
+    word-counting fake from ``conftest`` (a token is a word). The handlers still reach chunking
+    through the bus — the seam is real; only chunking's contract is in play."""
     bus = app.state.bus
-    tok = FakeTokenizer()
-    bus.register(CountTokens, CountTokensHandler(tok), replace=True)
-    bus.register(SplitText, SplitTextHandler(tok), replace=True)
     engine = FakeEngine(max_tokens)
     bus.register(EmbedQuery, EmbedQueryHandler(engine, bus), replace=True)
     bus.register(EmbedPassages, EmbedPassagesHandler(engine, bus), replace=True)
@@ -69,8 +58,8 @@ def _fake_app(max_tokens: int = 500) -> tuple[TestClient, FakeEngine]:
 
 
 @pytest.fixture
-def fake() -> tuple[TestClient, FakeEngine]:
-    return _fake_app()
+def fake(words_app: FastAPI) -> tuple[TestClient, FakeEngine]:
+    return _fake_app(words_app)
 
 
 def test_question_is_embedded_as_a_query_vector(fake) -> None:
@@ -104,8 +93,8 @@ def test_passages_get_the_passage_prefix_and_keep_their_order(fake) -> None:
     assert engine.encoded == ["passage: first doc", "passage: second doc"]
 
 
-def test_long_passage_is_chunked_through_the_chunking_slice_within_the_budget() -> None:
-    client, _ = _fake_app(max_tokens=13)  # 13 - "passage:"(1 word) - 2 specials = 10 words per chunk
+def test_long_passage_is_chunked_through_the_chunking_feature_within_the_budget(words_app: FastAPI) -> None:
+    client, _ = _fake_app(words_app, max_tokens=13)  # 13 - "passage:"(1 word) - 2 specials = 10 words per chunk
     text = "One two three four five six. Seven eight nine ten eleven. Twelve thirteen. Fourteen fifteen sixteen seventeen eighteen nineteen twenty twentyone twentytwo twentythree twentyfour."
     r = client.post("/embeddings/passages", json={"texts": [text, "short"]})
     assert r.status_code == 200, r.text
@@ -113,9 +102,7 @@ def test_long_passage_is_chunked_through_the_chunking_slice_within_the_budget() 
     long_chunks = [c for c in chunks if c["source_index"] == 0]
     assert [c["chunk_index"] for c in long_chunks] == list(range(len(long_chunks)))
     assert all(c["chunk_count"] == len(long_chunks) for c in long_chunks)
-    assert all(len(c["text"].split()) <= 10 for c in long_chunks)
-    assert long_chunks[0]["text"] == "One two three four five six."  # the next sentence would not fit in 10
-    assert long_chunks[1]["text"] == "Seven eight nine ten eleven. Twelve thirteen."  # two sentences packed
+    assert [len(c["text"].split()) for c in long_chunks] == [10, 10, 4]  # 24 words at the budget the handler computed
     assert " ".join(c["text"] for c in long_chunks) == text  # nothing lost
     last = chunks[-1]
     assert (last["source_index"], last["chunk_index"], last["chunk_count"], last["text"]) == (1, 0, 1, "short")
@@ -136,8 +123,8 @@ def test_similarity_ranks_candidates_best_first_and_reports_the_best_chunk(fake)
     assert body["matches"][0]["source_index"] == 1 and body["matches"][0]["chunk_count"] == 1
 
 
-def test_similarity_scores_a_long_candidate_by_its_best_chunk() -> None:
-    client, _ = _fake_app(max_tokens=8)  # 5 words per chunk
+def test_similarity_scores_a_long_candidate_by_its_best_chunk(words_app: FastAPI) -> None:
+    client, _ = _fake_app(words_app, max_tokens=8)  # 5 words per chunk
     filler = "lorem ipsum dolor sit amet. " * 4
     needle = "reset the password now."
     r = client.post("/embeddings/similarity", json={"question": "reset my password", "candidates": [filler + needle + " " + filler, "zzz"]})

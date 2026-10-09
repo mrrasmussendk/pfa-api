@@ -10,6 +10,12 @@ import pytest
 from eitri import EitriConfig, analyze
 from heimdall.app import run as heimdall_run
 
+# One sample of each shape the hook's sensor and the review's judge are asked about.
+LONG_FUNCTION = "def long_one():\n" + "\n".join(f"    x{i} = {i}" for i in range(44)) + "\n    return x0\n"  # 46 lines
+SHORT_FUNCTION = "def short_one(a, b):\n    return a + b\n"
+WIDE_FUNCTION = "def wide(a, b, c, d, e, f):\n    return a\n"
+SHAPED_SOURCE = LONG_FUNCTION + "\n\n" + SHORT_FUNCTION
+
 
 class TempRepo:
     """A throwaway repo root that ``heimdall.app.run`` treats as CWD (port of TempRepo.cs)."""
@@ -43,21 +49,31 @@ class TempRepo:
         return code, err
 
     @staticmethod
-    def ev(session: str, tool: str, path: str) -> str:
-        """A PostToolUse event exactly as the smoke test forges them."""
-        return json.dumps({"session_id": session, "tool_name": tool, "tool_input": {"file_path": path}})
+    def ev(session: str, tool: str, path: str, **tool_input: object) -> str:
+        """A PostToolUse event exactly as the smoke test forges them; ``tool_input`` adds an edit's own fields."""
+        return json.dumps({"session_id": session, "tool_name": tool, "tool_input": {"file_path": path, **tool_input}})
 
     def write_sample_map(self, with_frozen_core: bool = False) -> None:
         """The fixture-shaped map: kvad depends on rune; optional frozen high fan-in slice."""
         slices = {
-            "kvad": {"path": "src/slices/kvad", "depends_on": ["rune"], "budget": 15000, "fan_in": 0},
-            "rune": {"path": "src/slices/rune", "depends_on": [], "budget": 15000, "fan_in": 1},
+            "kvad": {"path": "src/pfa/features/kvad", "depends_on": ["rune"], "budget": 15000, "fan_in": 0},
+            "rune": {"path": "src/pfa/features/rune", "depends_on": [], "budget": 15000, "fan_in": 1},
         }
         if with_frozen_core:
-            slices["core"] = {"path": "src/slices/core", "depends_on": [], "budget": 15000, "fan_in": 12}
+            slices["core"] = {"path": "src/pfa/features/core", "depends_on": [], "budget": 15000, "fan_in": 12}
         self.write_file(
             ".heimdall/map.json",
-            json.dumps({"kernel": "shared_kernel", "slices_dir": "src/slices", "slices": slices}, indent=2),
+            json.dumps(
+                {
+                    "kernel": "kernel",
+                    "kernel_dir": "src/pfa/kernel",
+                    "slices_dir": "src/pfa/features",
+                    "app_dir": "src/pfa",
+                    "routes_dir": "src/pfa/api/routes",
+                    "slices": slices,
+                },
+                indent=2,
+            ),
         )
 
 
@@ -67,14 +83,16 @@ def repo(tmp_path: Path) -> TempRepo:
 
 
 class TempProject:
-    """A throwaway slice tree for Eitri: ``<root>/shared_kernel`` + ``<root>/slices/<name>/...``."""
+    """A throwaway application tree for Eitri, laid out like the real one:
+    ``<root>/pfa/kernel`` + ``<root>/pfa/features/<name>/...`` (+ ``<root>/pfa/...`` for the app)."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        (root / "shared_kernel").mkdir(parents=True)
-        (root / "shared_kernel" / "__init__.py").write_text("class StaveId:\n    pass\n\nclass Result:\n    pass\n", encoding="utf-8")
-        (root / "slices").mkdir()
-        (root / "slices" / "__init__.py").write_text("", encoding="utf-8")
+        (root / "pfa" / "kernel").mkdir(parents=True)
+        (root / "pfa" / "__init__.py").write_text("", encoding="utf-8")
+        (root / "pfa" / "kernel" / "__init__.py").write_text("class StaveId:\n    pass\n\nclass Result:\n    pass\n", encoding="utf-8")
+        (root / "pfa" / "features").mkdir()
+        (root / "pfa" / "features" / "__init__.py").write_text("", encoding="utf-8")
 
     def write(self, rel: str, code: str) -> Path:
         p = self.root / rel
@@ -84,11 +102,17 @@ class TempProject:
 
     def slice(self, name: str, depends_on: list[str] | None = None, **files: str) -> None:
         """``files`` maps a path relative to the slice (e.g. ``internal/x.py``) to its code."""
-        base = f"slices/{name}"
-        self.write(f"{base}/slice.json", json.dumps({"depends_on": depends_on or []}))
+        base = f"pfa/features/{name}"
+        self.write(f"{base}/feature.json", json.dumps({"depends_on": depends_on or []}))
         self.write(f"{base}/__init__.py", "")
         for rel, code in files.items():
             self.write(f"{base}/{rel}", code)
+
+    def app(self, **files: str) -> None:
+        """``files`` maps a path relative to the application package ``pfa`` (e.g. ``api/routes/x.py``,
+        ``application.py``) to its code."""
+        for rel, code in files.items():
+            self.write(f"pfa/{rel}", code)
 
     def analyze(self, budget: int = 15_000, **overrides):
         config = EitriConfig(token_budget=budget, **overrides)

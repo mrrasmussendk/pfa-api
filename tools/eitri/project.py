@@ -1,4 +1,4 @@
-"""Slice discovery: the ``slice.json`` manifest declares each slice's seam."""
+"""Slice discovery: the ``feature.json`` manifest declares each slice's seam."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .core import EitriConfig
 
-MANIFEST = "slice.json"
+MANIFEST = "feature.json"
 
 
 class ManifestError(ValueError):
@@ -30,19 +30,31 @@ class Slice:
         return self.path / "contract"
 
 
+def package_path(dotted: str) -> Path:
+    """``pfa.features`` -> ``pfa/features``."""
+    return Path(*dotted.split("."))
+
+
 def find_slices_dir(root: Path, config: EitriConfig) -> Path | None:
-    pkg = config.slices_package
-    for cand in (root / pkg, root / "src" / pkg):
+    rel = package_path(config.slices_package)
+    for cand in (root / rel, root / "src" / rel):
         if cand.is_dir():
             return cand
     return None
 
 
+def import_root_of(slices_dir: Path, config: EitriConfig) -> Path:
+    """The directory ``slices_package`` is imported from: ``src`` for ``src/pfa/features``."""
+    depth = len(config.slices_package.split("."))
+    return slices_dir.parents[depth - 1]
+
+
 def find_kernel_dir(root: Path, config: EitriConfig, slices_dir: Path | None = None) -> Path | None:
+    rel = package_path(config.kernel)
     cands = []
     if slices_dir is not None:
-        cands.append(slices_dir.parent / config.kernel)
-    cands += [root / config.kernel, root / "src" / config.kernel]
+        cands.append(import_root_of(slices_dir, config) / rel)
+    cands += [root / rel, root / "src" / rel]
     for cand in cands:
         if cand.is_dir():
             return cand
@@ -50,7 +62,7 @@ def find_kernel_dir(root: Path, config: EitriConfig, slices_dir: Path | None = N
 
 
 def read_manifest(path: Path) -> tuple[str, ...]:
-    """``depends_on`` from a slice.json; a missing manifest means a leaf slice."""
+    """``depends_on`` from a feature.json; a missing manifest means a leaf slice."""
     if not path.is_file():
         return ()
     try:
@@ -76,7 +88,7 @@ def discover_slices(slices_dir: Path) -> list[Slice]:
 
 
 def module_name(file: Path, import_root: Path) -> str:
-    """``src/slices/kvad/internal/engine.py`` under ``src`` -> ``slices.kvad.internal.engine``."""
+    """``src/pfa/features/kvad/internal/engine.py`` under ``src`` -> ``pfa.features.kvad.internal.engine``."""
     rel = file.relative_to(import_root).with_suffix("")
     parts = list(rel.parts)
     if parts and parts[-1] == "__init__":
