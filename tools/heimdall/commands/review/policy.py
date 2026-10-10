@@ -5,13 +5,16 @@ Every reason carries advice for the human reading the PR comment: the evidence i
 answers, which facts) and the one concrete next action. A reason never says "see the other rows";
 it names them. Every ``request_changes`` reason names a code change that answers it; a doubt no code change
 can answer is never a block — it requires a human (``escalate``). The reason itself is short, for the
-table, telemetry and JSON."""
+table, telemetry and JSON.
+
+A block resting on a fact (Eitri's import graph) stands as it is. A block resting on the judge's answers is a
+doubt: the verdict names it in ``judged`` and carries in ``unblocked`` the outcome without it, so the verifier
+(``verify.settle``) can confirm it with evidence, refute it, or hand it to a person."""
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from .base import EXIT_ESCALATE, EXIT_OK, EXIT_REQUEST_CHANGES
 from .state import shape_line
@@ -81,6 +84,9 @@ class Verdict:
     usage: dict[str, Any]
     advice: list[str] = field(default_factory=list)  # one plain sentence per reason
     files: dict[str, dict[str, Any]] = field(default_factory=dict)  # the clean-code answers per file judged whole, by path
+    judged: list[int] = field(default_factory=list)  # the reasons (by index) that rest on the judge's answers, not on a fact
+    unblocked: Verdict | None = None  # on request_changes: the outcome were every judged reason refuted
+    verification: list[dict[str, Any]] = field(default_factory=list)  # the verifier's ruling on each judged reason
 
     @property
     def exit_code(self) -> int:
@@ -271,7 +277,8 @@ def _doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
     return _fit_doubts(j, facts) + _craft_doubts(j, facts) + _risk_doubts(j, facts)
 
 
-Flag = Callable[[str, str], None]
+class Flag(Protocol):
+    def __call__(self, reason: str, why: str, *, fact: bool = False) -> None: ...
 
 
 def _architecture_label(j: _Judgment, facts: dict[str, Any]) -> bool:
@@ -328,6 +335,7 @@ def _safety_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
             f"Eitri found {len(violations)} wall violation(s) in the changed files",
             "The change crosses a slice wall. Each violation is listed below with the file, the line and the fix; "
             "`eitri check --root .` reproduces it locally.",
+            fact=True,
         )
     if j.security >= T["security_block"]:
         flag(
@@ -480,6 +488,21 @@ def _approval(j: _Judgment, facts: dict[str, Any]) -> tuple[str, list[str]]:
     return "comment", notes
 
 
+@dataclass
+class _Flags:
+    """The reasons flagged, their advice, and which of them rest on the judge's answers rather than a fact."""
+
+    reasons: list[str] = field(default_factory=list)
+    advice: list[str] = field(default_factory=list)
+    judged: list[int] = field(default_factory=list)
+
+    def flag(self, reason: str, why: str, *, fact: bool = False) -> None:
+        if not fact:
+            self.judged.append(len(self.reasons))
+        self.reasons.append(reason)
+        self.advice.append(why)
+
+
 def decide(
     answers: dict[str, Any],
     facts: dict[str, Any],
@@ -490,18 +513,14 @@ def decide(
     """The outcome from the diff's answers and, per file judged whole, the clean-code answers in ``files``."""
     files = files or {}
     j = _Judgment.read(answers, files)
-    reasons: list[str] = []
-    advice: list[str] = []
-
-    def flag(reason: str, why: str) -> None:
-        reasons.append(reason)
-        advice.append(why)
-
-    not_safe_needs_human = _blocks(j, facts, flag)
-    if reasons:
-        return Verdict("request_changes", reasons, answers, model, usage, advice, files)
-    _escalations(j, facts, not_safe_needs_human, flag)
-    if reasons:
-        return Verdict("escalate", reasons, answers, model, usage, advice, files)
-    outcome, notes = _approval(j, facts)
-    return Verdict(outcome, notes, answers, model, usage, files=files)
+    blocks, escalations = _Flags(), _Flags()
+    not_safe_needs_human = _blocks(j, facts, blocks.flag)
+    _escalations(j, facts, not_safe_needs_human, escalations.flag)
+    if escalations.reasons:
+        unblocked = Verdict("escalate", escalations.reasons, answers, model, usage, escalations.advice, files)
+    else:
+        outcome, notes = _approval(j, facts)
+        unblocked = Verdict(outcome, notes, answers, model, usage, files=files)
+    if not blocks.reasons:
+        return unblocked
+    return Verdict("request_changes", blocks.reasons, answers, model, usage, blocks.advice, files, blocks.judged, unblocked)

@@ -1,5 +1,5 @@
 """The entry point: arguments → diff → state → one call about the diff and one per edited application
-file, whole → policy → table, files, telemetry, exit code."""
+file, whole → policy → Claude verifies the judge's doubts → table, files, telemetry, exit code."""
 
 from __future__ import annotations
 
@@ -7,19 +7,22 @@ import json
 import os
 import time
 from collections.abc import Mapping
-from typing import Any, TextIO
+from typing import Any, NamedTuple, TextIO
 
 from ...model import Finding, MapModel
+from ...pathutil import norm
 from ...store import UnreadableMap, append_findings, heimdall_dir, load_map
 from .base import EXIT_ERROR, EXIT_OK, ReviewError, Streams
+from .claude import KEY_ENVS, claude_check
 from .craft import craft_files, craft_state
-from .diff import git_diff, parse_unified_diff
+from .diff import FileChange, git_diff, parse_unified_diff
 from .policy import Verdict, decide
 from .questions import file_questions, questions
 from .report import render_markdown, render_table
 from .state import build_state, function_shape, wall_findings
 from .transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL, Transport, http_transport
 from .vendored import is_vendored, vendored_patterns
+from .verify import Check, Evidence, read_sources, settle
 
 USAGE = (
     "usage: heimdall review [--base <ref> | --diff <file|->] [--task <text>] [--model jev-latest]\n"
@@ -27,6 +30,16 @@ USAGE = (
     "                       [--session <id>]\n"
     "  default diff: `git diff HEAD` (working tree); --base <ref> uses `git diff <ref>...HEAD`"
 )
+
+
+class Seams(NamedTuple):
+    """What a test replaces: Jev's transport, the environment keys are read from, and the verifier. ``check`` left
+    out means Claude when a key is set, and no verifier otherwise."""
+
+    transport: Transport | None = None
+    env: Mapping[str, str] | None = None
+    check: Check | None = None
+
 
 _SKIPPED_COMMENT = (
     "<!-- heimdall-review -->\n## Heimdall review: skipped\n\n"
@@ -169,6 +182,7 @@ def _report(opts: dict[str, Any], verdict: Verdict, state: dict[str, Any], io: S
             "facts": state["facts"],
             "model": verdict.model,
             "usage": verdict.usage,
+            "verification": verdict.verification,
         }
         _write(opts["json"], cwd, json.dumps(report, indent=2))
     if opts["markdown"]:
@@ -199,11 +213,37 @@ def _payloads(opts: dict[str, Any], io: Streams, cwd: str) -> dict[str, Any] | i
     return {
         "diff": {"model": opts["model"], "state": state, "questions": questions()},
         "files": [{"model": opts["model"], "state": c, "questions": file_questions()} for c in crafts],
+        "sources": _source_paths(state, files),
     }
 
 
-def run(args: list[str], io: Streams, cwd: str, transport: Transport | None = None, env: Mapping[str, str] | None = None) -> int:
-    environ: Mapping[str, str] = os.environ if env is None else env
+def _source_paths(state: dict[str, Any], files: list[FileChange]) -> list[str]:
+    """The changed files the verifier reads whole, in the order Jev's budget ranked them; deleted files have none."""
+    shown = [e["path"] for e in state["files"] if e["status"] != "deleted"]
+    return shown + [norm(f.path) for f in files if f.status != "deleted" and norm(f.path) not in shown]
+
+
+def _jev(payloads: dict[str, Any], transport: Transport, opts: dict[str, Any], stderr: TextIO) -> Verdict | None:
+    """Jev's verdict on the diff and on each file judged whole; ``None`` when a call gave no verdict."""
+    response = _judge(payloads["diff"], transport, stderr)
+    per_file = _judge_files(payloads["files"], transport, stderr) if response is not None else None
+    if response is None or per_file is None:
+        return None
+    state = payloads["diff"]["state"]
+    file_answers = {c["state"]["file"]["path"]: r["answers"] for c, r in zip(payloads["files"], per_file, strict=True)}
+    model = str(response.get("model", opts["model"]))
+    return decide(response["answers"], state["facts"], model, _usage([response, *per_file]), file_answers)
+
+
+def _checker(seams: Seams, environ: Mapping[str, str]) -> Check | None:
+    if seams.check is not None:
+        return seams.check
+    return claude_check if any(environ.get(k) for k in KEY_ENVS) else None
+
+
+def run(args: list[str], io: Streams, cwd: str, seams: Seams | None = None) -> int:
+    seams = seams or Seams()
+    environ: Mapping[str, str] = os.environ if seams.env is None else seams.env
     try:
         opts = _parse(args)
     except ReviewError as e:
@@ -215,21 +255,14 @@ def run(args: list[str], io: Streams, cwd: str, transport: Transport | None = No
     if opts["dry_run"]:
         io.stdout.write(json.dumps(payloads, indent=2, ensure_ascii=False) + "\n")
         return EXIT_OK
-    if transport is None:
-        found = _transport_from_env(opts, environ, io, cwd)
-        if isinstance(found, int):
-            return found
-        transport = found
-    response = _judge(payloads["diff"], transport, io.stderr)
-    if response is None:
-        return EXIT_ERROR
-    per_file = _judge_files(payloads["files"], transport, io.stderr)
-    if per_file is None:
+    transport = seams.transport or _transport_from_env(opts, environ, io, cwd)
+    if isinstance(transport, int):
+        return transport
+    verdict = _jev(payloads, transport, opts, io.stderr)
+    if verdict is None:
         return EXIT_ERROR
     state = payloads["diff"]["state"]
-    file_answers = {c["state"]["file"]["path"]: r["answers"] for c, r in zip(payloads["files"], per_file, strict=True)}
-    verdict = decide(
-        response["answers"], state["facts"], str(response.get("model", opts["model"])), _usage([response, *per_file]), file_answers
-    )
+    evidence = Evidence(opts["task"] or "", state["files"], read_sources(cwd, payloads["sources"]))
+    verdict = settle(verdict, _checker(seams, environ), evidence)
     _report(opts, verdict, state, io, cwd)
     return verdict.exit_code

@@ -4,7 +4,8 @@
 # a fixed set of yes/no, choice and score questions (correctness, single purpose and lean
 # signatures about the functions the AST found over the shape limits, tests, security, scope,
 # architecture fit), then sends each edited application file whole in a call of its own for its
-# clean code, so a shortfall names the file, and maps the probabilities to one outcome:
+# clean code, so a shortfall names the file, and maps the probabilities to one outcome. Every block that
+# rests on Jev's answers is then put to Claude, which confirms it with evidence from the code or refutes it:
 #   approve / comment  -> check passes
 #   request_changes    -> check fails
 #   escalate           -> check passes with a warning; a human is asked for
@@ -51,6 +52,8 @@ jobs:
         shell: bash
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          # Claude (Sonnet 5.5) verifies each block that rests on Jev's answers; without it those blocks escalate.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # PR text reaches the command through the environment, never through shell interpolation.
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
