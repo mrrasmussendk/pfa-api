@@ -8,7 +8,7 @@ from typing import Any
 from conftest import SHAPED_SOURCE, TempRepo
 from review_support import KVAD_ENGINE
 
-from heimdall.commands.review import build_state, function_shape, parse_unified_diff, render_markdown, render_table
+from heimdall.commands.review import build_state, function_shape, parse_unified_diff, render_comment, render_table
 from heimdall.commands.review.policy import Judgment, decide
 from heimdall.commands.review.state import Known
 from heimdall.model import MapModel
@@ -50,7 +50,7 @@ def test_the_comment_and_the_table_list_the_functions_over_the_limits() -> None:
     facts = _facts()
     v = decide(Judgment([], {}, {}, "jev-1", {}), facts)
 
-    md, table = render_markdown(v, {"facts": facts}), render_table(v, facts)
+    md, table = render_comment(v, {"facts": facts}), render_table(v, facts)
 
     assert v.outcome == "comment"  # a long function is a fact for the reader, not a verdict
     assert "- changed functions over 40 lines or 5 parameters:" in md

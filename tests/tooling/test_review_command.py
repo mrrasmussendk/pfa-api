@@ -48,7 +48,7 @@ def test_a_clean_review_is_a_comment_with_every_check_asked_per_function(repo: T
     assert checks["state"]["functions"]["f1"]["name"] == "add" and checks["state"]["functions"]["f1"]["route"] is True
     report = json.loads(repo.read_file("out/r.json"))
     assert report["outcome"] == "comment" and any(c["where"] == WHERE for c in report["checks"])
-    assert "**comment**" in repo.read_file("out/r.md")
+    assert "Heimdall review: nothing to fix" in repo.read_file("out/r.md")
     assert json.loads(repo.telemetry.splitlines()[-1])["kind"] == "comment"
 
 

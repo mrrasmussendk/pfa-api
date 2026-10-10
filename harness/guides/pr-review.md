@@ -77,6 +77,10 @@ In the PR pipeline every failing and unsure check is put to Claude (`claude.py`,
 
 ⚠️ **Check:** a key not scoped to a workspace answers 400 "must include the anthropic-workspace-id header": use a workspace-scoped key, or set `ANTHROPIC_WORKSPACE_ID`.
 
+## The comment
+
+It reads top-down (`tools/heimdall/commands/review/comment.py`): a headline that says how many things to fix ("1 to fix before merging", "nothing to fix", "a person should look"), one line of numbers, then each fix as a place, what is wrong there, and the fix. Probabilities stay out of the action. Everything else is folded: the checks Claude cleared with its reason, the unsure checks no one verified, clean code file by file, and what the judge was told. The terminal table the Stop hook hands the agent keeps every reason with its advice.
+
 ## Size
 
 Jev reads one request of 64k tokens, the state and the questions in it ([docs.typesafe.ai/models](https://docs.typesafe.ai/models)); input costs $0.042 per million tokens, so the window is the constraint, not the price. The state is held to 28 000 tokens (`MAX_STATE_TOKENS`, measured with Brokkr): the facts, the functions, then the diff in priority order (source, tests, tooling, CI, docs), each file at most 6 000 tokens; a cut file is listed under `files_truncated`, one the budget no longer reaches under `files_not_shown`. Files `.gitattributes` marks `linguist-vendored` or `linguist-generated` are never sent. Checks that do not fit beside the state in one request (`MAX_REQUEST_TOKENS`, 56 000) go in batches with the same state; Jev answers each question in isolation, so a batch's answers mean what they would in one call. On this branch: about 650 checks on some 110 functions, in two requests, about two seconds.

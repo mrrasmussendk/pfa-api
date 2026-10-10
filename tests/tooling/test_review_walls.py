@@ -8,7 +8,7 @@ from typing import Any
 from conftest import TempProject, TempRepo
 from review_support import DIFF
 
-from heimdall.commands.review import build_state, parse_unified_diff, render_markdown, render_table, wall_findings
+from heimdall.commands.review import build_state, parse_unified_diff, render_comment, render_table, wall_findings
 from heimdall.commands.review.policy import FAIL, Judgment, Row, decide
 from heimdall.commands.review.state import Known
 
@@ -71,22 +71,20 @@ def test_wall_findings_are_empty_without_a_slice_tree(repo: TempRepo) -> None:
     assert wall_findings(str(repo.root), parse_unified_diff(DIFF)) == []
 
 
-def test_the_comment_says_what_went_wrong_and_what_to_do() -> None:
+def test_the_comment_leads_with_each_fix_and_the_terminal_carries_the_advice() -> None:
     facts = _facts(wall_violations=[LEAK])
     failing = Row("f1_swallows_error", "swallows_error", "src/pfa/features/kvad/internal/leak.py:3 load", 0.8, FAIL)
     v = _verdict(facts, failing)
 
-    md, table = render_markdown(v, {"facts": facts}), render_table(v, facts)
+    md, table = render_comment(v, {"facts": facts}), render_table(v, facts)
 
-    assert "### What went wrong" in md and "**Next:** fix what is named above and push" in md
-    assert "**Eitri found 1 wall violation(s) in the changed files.** The change crosses a slice wall." in md
-    assert "- `src/pfa/features/kvad/internal/leak.py:3 — EIT001: imports rune internals` **Fix:** use the contract" in md
-    assert "**src/pfa/features/kvad/internal/leak.py:3 load swallows an error p=0.80.**" in md
-    assert md.index("What went wrong") < md.index("| check | where | p |")  # the explanation comes before the numbers
+    assert "Heimdall review: 2 to fix before merging" in md and "Push the fix; this check reruns on every push." in md
+    assert "1. **`src/pfa/features/kvad/internal/leak.py:3`** — EIT001: imports rune internals\n   **Fix:** use the contract" in md
+    assert "2. **`src/pfa/features/kvad/internal/leak.py:3` · `load`** — swallows an error\n   **Fix:** Handle the exception" in md
     assert "leak.py:3 — EIT001" in table and "load swallows an error p=0.80: Handle the exception" in table
 
 
 def test_a_comment_says_no_check_failed_and_that_a_person_merges() -> None:
-    md = render_markdown(_verdict(_facts()), {"facts": _facts()})
+    md = render_comment(_verdict(_facts()), {"facts": _facts()})
 
-    assert "**comment**" in md and "A person still decides the merge" in md
+    assert "Heimdall review: nothing to fix" in md and "A person still decides the merge" in md

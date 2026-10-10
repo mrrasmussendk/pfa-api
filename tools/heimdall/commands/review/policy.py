@@ -175,14 +175,27 @@ def blast_radius(facts: dict[str, Any]) -> tuple[int, str]:
     return 0, "contained to one feature's internals"
 
 
-def _limit_fix(answers: dict[str, Any]) -> str:
-    """The fix for a file's most probable *actionable* limit label; every fix when it named none."""
+def _limit(answers: dict[str, Any]) -> tuple[str, float] | None:
+    """A file's most probable *actionable* limit label and its probability; ``none`` is not a fix, so its runner-up is."""
     a = answers.get("clean_code_limit") or {}
     probs = {k: float(p) for k, p in (a.get("probabilities") or {}).items() if k in _CLEAN_FIXES and isinstance(p, (int, float))}
     if not probs:
-        return "the judge named no single limit, so: " + "; ".join(_CLEAN_FIXES.values())
+        return None
     label = max(probs, key=lambda k: probs[k])
-    return f"its most probable limit: {label} ({probs[label]:.2f}): {_CLEAN_FIXES[label]}"
+    return label, probs[label]
+
+
+def clean_fix(answers: dict[str, Any]) -> str:
+    """The code change that answers a file's clean-code shortfall: its limit's fix, or every fix when it named none."""
+    limit = _limit(answers)
+    return _CLEAN_FIXES[limit[0]] if limit else "; ".join(_CLEAN_FIXES.values())
+
+
+def _limit_fix(answers: dict[str, Any]) -> str:
+    limit = _limit(answers)
+    if limit is None:
+        return "the judge named no single limit, so: " + clean_fix(answers)
+    return f"its most probable limit: {limit[0]} ({limit[1]:.2f}): {clean_fix(answers)}"
 
 
 def _clean(answers: dict[str, Any]) -> float | None:
@@ -205,11 +218,20 @@ def _fact_blocks(facts: dict[str, Any], flag: Flag) -> None:
         )
 
 
+def fail_reason(r: Row) -> str:
+    """How a failing check is named: the place, what was found there, and how sure Jev was."""
+    return f"{r.where} {LABELS[r.check][0]} p={r.p:.2f}"
+
+
+def unsure_reason(r: Row) -> str:
+    """How an unsure check is named: the place, what it may be, and how sure Jev was."""
+    return f"{r.where} {LABELS[r.check][1]} p={r.p:.2f}"
+
+
 def _check_blocks(rows: list[Row], flag: Flag) -> None:
     for r in rows:
         if r.state == FAIL:
-            found, _, fix = LABELS[r.check]
-            flag(f"{r.where} {found} p={r.p:.2f}", fix)
+            flag(fail_reason(r), LABELS[r.check][2])
 
 
 def _craft_blocks(files: dict[str, dict[str, Any]], facts: dict[str, Any], flag: Flag) -> None:
@@ -244,7 +266,7 @@ class _Flags:
 
 def _unsure(rows: list[Row]) -> list[tuple[str, str]]:
     """``(reason, advice)`` for each unsure row: what it may be, at the place, and the fix if it is."""
-    return [(f"{r.where} {LABELS[r.check][1]} p={r.p:.2f}", LABELS[r.check][2]) for r in rows if r.state == UNSURE]
+    return [(unsure_reason(r), LABELS[r.check][2]) for r in rows if r.state == UNSURE]
 
 
 def _without_blocks(j: Judgment, facts: dict[str, Any]) -> Verdict:

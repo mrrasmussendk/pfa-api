@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from heimdall.commands.review import build_state, render_markdown, render_table
+from heimdall.commands.review import build_state, render_comment, render_table
 from heimdall.commands.review.policy import FAIL, PASS, UNSURE, Judgment, Row, decide
 from heimdall.commands.review.verify import (
     CONFIRMED,
@@ -171,7 +171,7 @@ def test_the_report_says_how_claude_ruled_on_each_check() -> None:
     check, _ = _rules(Ruling(REFUTED, "the boundary is tested"))
     v = settle(_verdict(FAILING), check, EVIDENCE)
 
-    table, md = render_table(v, {}), render_markdown(v, build_state([], None, None))
+    table, md = render_table(v, {}), render_comment(v, build_state([], None, None))
 
-    line = "Claude refuted: a.py:1 split mishandles an edge input p=0.80 — the boundary is tested"
-    assert line in table and f"- {line}" in md
+    assert "Claude refuted: a.py:1 split mishandles an edge input p=0.80 — the boundary is tested" in table
+    assert "1 check Claude cleared" in md and "| `a.py:1` · `split` | may mishandle an edge input | the boundary is tested |" in md
