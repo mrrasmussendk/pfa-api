@@ -32,6 +32,8 @@ from heimdall.commands.review import (
     wall_findings,
 )
 from heimdall.commands.review.state import area_of
+from heimdall.commands.review.vendored import is_vendored
+from heimdall.commands.review.verify import CONFIRMED, Finding, Ruling
 from heimdall.model import MapModel
 
 DIFF = """\
@@ -164,10 +166,12 @@ def _transport(answers: dict[str, Any], seen: list[dict[str, Any]] | None = None
     return call
 
 
-def _run(repo: TempRepo, *args: str, transport=None, env: dict[str, str] | None = None, stdin: str = "") -> tuple[int, str, str]:
+def _run(
+    repo: TempRepo, *args: str, transport=None, env: dict[str, str] | None = None, stdin: str = "", check=None
+) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     streams = review.Streams(io.StringIO(stdin), out, err)
-    code = review.run(list(args), streams, str(repo.root), transport=transport, env=env if env is not None else {})
+    code = review.run(list(args), streams, str(repo.root), review.Seams(transport, env if env is not None else {}, check))
     return code, out.getvalue(), err.getvalue()
 
 
@@ -239,6 +243,55 @@ def test_the_features_package_init_is_the_application_not_a_slice() -> None:
     assert area_of("src/pfa/features/kvad/internal/x.py", _map()) == "slice:kvad"
 
 
+def test_a_feature_s_notes_are_docs_not_the_feature() -> None:
+    assert area_of("src/pfa/features/kvad/AGENTS.md", _map()) == "docs"
+
+
+def _doc_diff(n: int) -> str:
+    return "".join(
+        f"diff --git a/docs/d{i}.md b/docs/d{i}.md\n--- a/docs/d{i}.md\n+++ b/docs/d{i}.md\n@@ -1 +1 @@\n-old\n+new line {i}\n"
+        for i in range(n)
+    )
+
+
+def test_the_whole_state_fits_the_budget_however_many_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(review.state, "MAX_STATE_TOKENS", 3_000)
+
+    state = build_state(parse_unified_diff(DIFF + _doc_diff(300)), _map(), None)
+
+    assert estimate(json.dumps(state, ensure_ascii=False)) <= 3_000
+    assert state["facts"]["files_changed"] == 304 and state["facts"]["files_not_shown"] > 0
+    assert any(e["path"] == "src/pfa/api/routes/kvad.py" for e in state["files"])  # the code is the last to go
+
+
+def test_vendored_files_are_left_out_of_the_review(repo: TempRepo) -> None:
+    repo.write_file(".gitattributes", "* text=auto\npostman/skills/** linguist-vendored\n")
+    vendored = "diff --git a/postman/skills/x/SKILL.md b/postman/skills/x/SKILL.md\n--- a/postman/skills/x/SKILL.md\n+++ b/postman/skills/x/SKILL.md\n@@ -1 +1 @@\n-a\n+b\n"
+    repo.write_file("change.diff", vendored + DIFF)
+
+    code, out, _ = _run(repo, "--diff", "change.diff", "--dry-run")
+
+    facts = json.loads(out)["diff"]["state"]["facts"]
+    assert code == EXIT_OK and facts["files_changed"] == 4 and facts["vendored_files"] == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "pattern", "vendored"),
+    [
+        ("postman/skills/x/SKILL.md", "postman/skills/**", True),
+        ("postman/collections/e2e/a.yaml", "postman/skills/**", False),
+        ("third_party/lib/a.py", "/third_party/", True),
+        (".postman/skills.json", ".postman/skills.json", True),
+        ("web/dist/app.min.js", "*.min.js", True),
+        ("gen/a.py", "**/gen/**", True),
+        ("x/gen/a.py", "**/gen/**", True),
+        ("src/pfa/app.py", "*.min.js", False),
+    ],
+)
+def test_vendored_patterns_match_as_git_does(path: str, pattern: str, vendored: bool) -> None:
+    assert is_vendored(path, [pattern]) is vendored
+
+
 def test_exported_diagrams_are_dropped_from_the_diff() -> None:
     svg = "diff --git a/docs/diagrams/x.svg b/docs/diagrams/x.svg\n--- a/docs/diagrams/x.svg\n+++ b/docs/diagrams/x.svg\n@@ -1 +1 @@\n-<svg/>\n+<svg></svg>\n"
     assert [f.path for f in parse_unified_diff(svg + DIFF)] == [f.path for f in parse_unified_diff(DIFF)]
@@ -248,10 +301,12 @@ def test_the_budget_is_spent_on_the_source_before_tests_and_docs(monkeypatch: py
     files = parse_unified_diff(DIFF)
     files.reverse()  # git lists the docs first; the judge must still see the code
     source = [f for f in files if f.path.startswith("src/")]
-    monkeypatch.setattr(review.state, "MAX_STATE_TOKENS", sum(estimate(f.text) for f in source))
+    room_for_the_source = estimate(json.dumps(build_state(source, _map(), None), ensure_ascii=False)) + 60
+    monkeypatch.setattr(review.state, "MAX_STATE_TOKENS", room_for_the_source)
     state = build_state(files, _map(), None)
-    assert [e["area"] for e in state["files"]] == ["slice:kvad", "contract:rune", "tests", "docs"]
+    assert [e["area"] for e in state["files"]][:2] == ["slice:kvad", "contract:rune"]
     assert not any(p.startswith("src/") for p in state["facts"]["files_truncated"])
+    assert state["facts"]["files_not_shown"] + len(state["files"]) == 4
 
 
 def test_questions_are_valid_system_one_requests() -> None:
@@ -364,7 +419,7 @@ def test_each_edited_application_file_is_judged_whole_in_its_own_call(repo: Temp
     code, out, _ = _run(
         repo, "--diff", "change.diff", "--json", "out/r.json", "--markdown", "out/r.md", transport=_transport(_answers(), seen, low)
     )
-    assert code == EXIT_REQUEST_CHANGES
+    assert code == EXIT_ESCALATE  # no verifier ran, so Jev's block goes to a person
     assert [("file" in p["state"]) for p in seen] == [False, True]  # the diff first, then the one file on disk
     craft = seen[1]
     assert craft["questions"] == file_questions() and craft["state"]["file"] == {
@@ -375,7 +430,7 @@ def test_each_edited_application_file_is_judged_whole_in_its_own_call(repo: Temp
     assert craft["state"]["facts"]["changed_lines"] == [2, 4] and craft["state"]["facts"]["truncated"] is False
     assert seen[0]["state"]["facts"]["craft_files"] == ["src/pfa/api/routes/kvad.py"]
     # the verdict names the file, and the advice says the whole file was rated and what limits it
-    assert out.startswith("outcome: request_changes  (clean code 2.31/3 in src/pfa/api/routes/kvad.py below the target 2.7)")
+    assert out.startswith("outcome: escalate  (unverified: clean code 2.31/3 in src/pfa/api/routes/kvad.py below the target 2.7)")
     assert "The judge rates the whole file src/pfa/api/routes/kvad.py, not only this change's lines, 2.31 on 0–3" in out
     assert "its most probable limit: duplication (0.70): extract the logic written twice into one function" in out
     assert (
@@ -409,11 +464,22 @@ def test_a_failed_file_call_is_exit_3_not_a_verdict(repo: TempRepo) -> None:
     assert code == EXIT_ERROR and "unreachable" in err
 
 
+def _confirm(*evidence: str):
+    """A verifier that confirms every doubt, quoting ``evidence`` from the route module."""
+    finding = Finding("src/pfa/api/routes/kvad.py", "router", 0, "\n".join(evidence), "the prefix is wrong", "fix it")
+    return lambda inquiry: [Ruling(CONFIRMED, "seen", (finding,))] * len(inquiry.doubts)
+
+
 def test_review_exit_codes_follow_the_outcome(repo: TempRepo) -> None:
     repo.write_sample_map()
     repo.write_file("change.diff", DIFF)
-    code, out, _ = _run(repo, "--diff", "change.diff", transport=_transport(_answers(has_security_concern={"type": "noul", "noul": 0.9})))
-    assert code == EXIT_REQUEST_CHANGES and out.startswith("outcome: request_changes")
+    repo.write_file("src/pfa/api/routes/kvad.py", _ROUTE_SOURCE)
+    insecure = _transport(_answers(has_security_concern={"type": "noul", "noul": 0.9}))
+    code, out, _ = _run(repo, "--diff", "change.diff", transport=insecure, check=_confirm("router = APIRouter(prefix='/kvad')"))
+    assert code == EXIT_REQUEST_CHANGES and out.startswith("outcome: request_changes  (confirmed by Claude: security concern")
+    assert "src/pfa/api/routes/kvad.py:3 router: the prefix is wrong. Fix: fix it." in out
+    code, out, _ = _run(repo, "--diff", "change.diff", transport=insecure)
+    assert code == EXIT_ESCALATE and out.startswith("outcome: escalate  (unverified: security concern")
     code, out, _ = _run(repo, "--diff", "change.diff", transport=_transport(_answers(needs_human_review={"type": "noul", "noul": 0.8})))
     assert code == EXIT_ESCALATE and out.startswith("outcome: escalate")
 

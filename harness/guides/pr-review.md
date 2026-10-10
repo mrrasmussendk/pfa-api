@@ -4,7 +4,7 @@
 |---|---|
 | Describe the intended change in the PR title/body or `--task`. | Make the reviewer infer the task from the diff alone. |
 | Run deterministic checks and fix Eitri violations. | Treat a favorable model answer as permission to bypass a rule. |
-| Read the reported reasons and address `request_changes`. | Treat a skipped review as an approval. |
+| Read the reported reasons and address `request_changes`: each one names a place Claude confirmed. | Treat a skipped review as an approval. |
 | Ask for human review when the outcome is `escalate`. | Treat a probability as proof that the change is correct. |
 
 ⚠️ **Check:** a missing API key, truncated diff, or uncertain answer changes what the review can establish. Inspect the report before relying on the result.
@@ -39,7 +39,7 @@ Jev does not write review comments. It answers questions whose answers are **typ
 
 That is the call about the change. **The craft pass** follows: every edited file of the application's Python (a slice, a contract, the kernel, the app or a shared package — not tests, not the tooling, not a deleted file) is read **whole** from the working tree and sent in a call of its own, with the `task`, the lines this change touched (`facts.changed_lines`) and the functions the AST found over the limits in that file, and answers only `clean_code` and `clean_code_limit`. A diff shows the judge the lines that moved; the file shows what they now sit in — the duplication two hunks apart, the branch the change left dead, the style the new code departs from. Two things follow: the verdict names the file the judge deems wrong, and the score rates the full picture rather than a slice of it. `facts.craft_files` in the diff's state lists the files judged whole, so the comment can say so.
 
-Caps, in tokens: Jev reads one request of 64k tokens, of which the state plus the longest question must fit 32k ([docs.typesafe.ai/models](https://docs.typesafe.ai/models)); input costs $0.042 per million tokens and output is free, so the window is the constraint, not the price. Heimdall measures the state with Brokkr, the ruler Eitri's budget uses (within about 10% of a real tokenizer, see `docs/calibration.md`), and spends 28 000 tokens on the files (`MAX_STATE_TOKENS`), at most 6 000 per file (`MAX_FILE_TOKENS`); the margin pays for the questions, the architecture and the estimator's error. The rest is summarised as "N more diff lines not shown", the file is listed under `files_truncated`, and the comment's size line says how many tokens were sent, how many the whole diff is, and that a cut diff's craft scores rate what the judge saw. A PR whose diff is over the window cannot be read whole at any budget: keep it smaller. A craft call carries one file and may spend the whole 28 000 (`MAX_CRAFT_FILE_TOKENS`); a bigger file is cut at a line boundary, listed under `facts.craft_truncated`, and the advice says the score rates what the judge saw. Lock files, minified assets, images and `.heimdall/` are never sent. Missing context produces confident wrong answers, so a truncated review is flagged in the comment.
+Caps, in tokens: Jev reads one request of 64k tokens, of which the state plus the longest question must fit 32k ([docs.typesafe.ai/models](https://docs.typesafe.ai/models)); input costs $0.042 per million tokens and output is free, so the window is the constraint, not the price. Heimdall measures the state with Brokkr, the ruler Eitri's budget uses (within about 10% of a real tokenizer, see `docs/calibration.md`), and holds the whole state, as sent, to 28 000 tokens (`MAX_STATE_TOKENS`): the task, the architecture and the facts first, then the files in priority order (source, tests, tooling, CI, docs), each entry's path and counts included, at most 6 000 per file (`MAX_FILE_TOKENS`); the margin pays for the questions and the estimator's error. A cut file is summarised as "N more diff lines not shown" and listed under `files_truncated`; a file the budget no longer reaches is counted in `files_not_shown` and left out. Files `.gitattributes` marks `linguist-vendored` or `linguist-generated` (the Postman skills, for one) are never sent and are counted in `vendored_files`. The comment's size line says how many tokens were sent, how many the whole diff is, and that a cut diff's craft scores rate what the judge saw. A PR whose diff is over the window cannot be read whole at any budget: keep it smaller. A craft call carries one file and may spend the whole 28 000 (`MAX_CRAFT_FILE_TOKENS`); a bigger file is cut at a line boundary, listed under `facts.craft_truncated`, and the advice says the score rates what the judge saw. Lock files, minified assets, images and `.heimdall/` are never sent. Missing context produces confident wrong answers, so a truncated review is flagged in the comment.
 
 ## The questions
 
@@ -88,6 +88,26 @@ A fifth point (2026-10-08), the first application change under the floor (the Op
 A seventh point, and a change of state (2026-10-09): the per-file probe above had shown that the whole-diff `clean_code_limit` label can be an averaging artifact that appears in no single file, and that a whole-diff score names no file to go to. So clean code is now judged **file by file, on the whole file**: the diff call no longer asks `clean_code`; each edited application file is sent whole in its own call (`tools/heimdall/commands/review/craft.py`), the verdict names the file, the comment carries a per-file table, and the agent is told which file the judge deems wrong rather than that "the changed code" is. The thresholds did not move. The cost is one call per edited application file on top of the diff call. First live run the same day, the OpenAPI branch's six HTTP-edge files judged whole: `routes/chunking.py` 2.37 (limit `none` 0.55, runner-up `comments` 0.32), `routes/embeddings.py` 2.60 (`duplication` 0.20), `app.py` 2.73, `routes/health.py` 2.76, `validation.py` 2.84, `problems.py` 2.85 — the same code had scored 2.75–2.84 as one diff. Two files now carry a reason with a path; the per-file scores spread by half a point where the whole-diff score showed one number.
 
 A third point (2026-10-08), a 101-file move of the whole package layout with no Eitri finding: `p(respects_slice_walls)=0.93`, `change_kind=refactor` at 1.00, `blast_radius` wide at 1.99, and still `biggest_risk = architecture` at `0.98`. Here the label means "review the restructure", not "find the import" — the first comment sent the author hunting for a cross-slice import that did not exist. That is why the label escalates instead of blocking on a wide refactor.
+
+## Claude verifies the judge's doubts
+
+Jev triages; Claude verifies. Jev answers in probabilities and never names a place, so a block resting on its answers alone told the agent to "split each function" without saying which. The agent could only guess, and a guess did not move the score: three rounds of real fixes on the e2e branch left `p(safe)` between 0.22 and 0.27, and `function_shape` was empty throughout.
+
+So every block that rests on Jev's answers is now a **doubt**, and Claude (Sonnet 5.5, `tools/heimdall/commands/review/claude.py`) rules on it. Claude reads the task, the diff as Jev saw it, and the changed files whole, up to 120 000 tokens (`MAX_SOURCE_TOKENS`). It is asked to refute each doubt first.
+
+| Claude rules | Outcome |
+|---|---|
+| **confirmed**, with a file, a function and lines quoted from that file | `request_changes`, naming `file:line function`, the problem and the fix |
+| **refuted** | the doubt falls away; the outcome is the one Jev's other answers give (often `comment` or `escalate`) |
+| **undecided**, or a confirmation whose quoted lines are not in the file | `escalate`: a person decides |
+| not asked: no `ANTHROPIC_API_KEY`, or the call failed | `escalate`, with Jev's advice attached |
+
+- ✅ Act on a confirmed block: it names the place, and its evidence was found in the file by `verify.grounded` before it was believed.
+- ✅ Read the "How Claude ruled" lines on an `escalate`: a refuted doubt says why the code is fine, an undecided one says what was missing.
+- ❌ Don't treat a refuted doubt as a defect to fix, or an unverified one as a block.
+- ⚠️ **Check:** facts never go to Claude. An Eitri wall violation blocks whatever Claude says.
+
+The check costs one Claude call per review that has a doubt, with `fallbacks: "default"`, so a refused request retries server-side. The first live run, on this branch, took 86 seconds. Jev's not-safe block, with nothing to point at, was refuted: "the changed functions are small orchestrators or single-step helpers … I found no concrete input that produces wrong behaviour". The outcome moved from `request_changes` to `escalate` on Jev's `needs_human_review` of 0.69. Claude's rulings are also labels on Jev's answers, which is the calibration data the thresholds in `T` have lacked.
 
 ## Function shape: the same limits while you edit
 

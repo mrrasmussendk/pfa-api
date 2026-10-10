@@ -1,0 +1,9 @@
+{
+  "method": "API",
+  "tools": ["postman"],
+  "scenario": {
+    "given": "a text of three sentences and a budget of 12 tokens",
+    "when": "I send it to POST /chunking/split",
+    "then": "I receive 200 with the text cut into chunks, in order, each counted at or below 12 tokens by the model's tokenizer"
+  }
+}
