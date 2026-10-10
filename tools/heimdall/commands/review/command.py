@@ -52,6 +52,13 @@ _SKIPPED_COMMENT = (
     "<!-- heimdall-review -->\n## Heimdall review: skipped\n\n"
     "_No `TYPESAFE_API_KEY` available to this run (forks do not receive secrets)._\n"
 )
+# Said on the PR so an empty review is not mistaken for a broken one: a PR whose base already has every change
+# (opened the wrong way round, or already merged) has nothing to check.
+_EMPTY_COMMENT = (
+    "<!-- heimdall-review -->\n## Heimdall review: nothing to review\n\n"
+    "_The diff against the base is empty, or holds only vendored files: the base already has every change. "
+    "Check the PR's direction (head into base)._\n"
+)
 
 
 def _parse(args: list[str]) -> dict[str, Any]:
@@ -261,6 +268,8 @@ def _changed(opts: dict[str, Any], io: Streams, cwd: str) -> tuple[list[FileChan
     files = [f for f in changed if not is_vendored(f.path, patterns)]
     if not files:
         io.stdout.write("heimdall review: nothing to review (empty diff)\n")
+        if opts["markdown"]:
+            _write(opts["markdown"], cwd, _EMPTY_COMMENT)
         return EXIT_OK
     return files, len(changed) - len(files)
 

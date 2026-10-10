@@ -204,3 +204,13 @@ def test_checks_too_many_for_one_request_go_in_batches_and_every_answer_counts(r
     batches = [p for p in seen if "file" not in p["state"]]
     assert len(batches) > 1 and sum(len(b["questions"]) for b in batches) == len({k for b in batches for k in b["questions"]})
     assert code == EXIT_REQUEST_CHANGES and "passes unvalidated input" in out
+
+
+def test_an_empty_diff_still_leaves_a_comment_saying_so(repo: TempRepo) -> None:
+    repo.write_file("empty.diff", "")
+
+    code, _, _ = run(repo, "--diff", "empty.diff", "--markdown", "out/r.md", transport=jev())
+
+    md = repo.read_file("out/r.md")
+    assert code == EXIT_OK and md.startswith("<!-- heimdall-review -->") and "nothing to review" in md
+    assert "the base already has every change" in md
