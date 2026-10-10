@@ -4,26 +4,24 @@ never put to the verifier. Claude is replaced by a fake that rules as told."""
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from heimdall.commands.review import build_state, decide, questions, render_markdown, render_table
-from heimdall.commands.review.claude import claude_check, make_client
 from heimdall.commands.review.verify import (
     CONFIRMED,
     REFUTED,
     UNDECIDED,
-    Doubt,
     Evidence,
     Finding,
     Inquiry,
     Ruling,
     VerifyError,
+    anchored,
     grounded,
-    parse_rulings,
     read_sources,
     settle,
 )
@@ -75,7 +73,7 @@ def test_a_confirmed_doubt_blocks_naming_the_file_function_and_fix() -> None:
 
     v = settle(_bad_correctness(), check, EVIDENCE)
 
-    assert v.outcome == "request_changes" and v.reasons[0].startswith("confirmed by Claude: correctness")
+    assert v.outcome == "request_changes" and v.reasons[0].startswith("correctness expected level")
     assert "a.py:2 split: a budget of 0 returns nothing. Fix: raise instead" in v.advice[0]
 
 
@@ -151,21 +149,6 @@ def test_evidence_that_is_empty_or_absent_is_not_grounded(evidence: str) -> None
     assert grounded(_finding(evidence), {"a.py": SOURCE}) is None
 
 
-def test_rulings_are_read_in_the_order_of_the_doubts() -> None:
-    raw = {"rulings": [{"doubt": 1, "verdict": "refuted", "reason": "r", "findings": []}]}
-
-    assert parse_rulings(raw, 1) == [Ruling(REFUTED, "r")]
-
-
-@pytest.mark.parametrize(
-    "raw",
-    [{"rulings": []}, {"rulings": [{"doubt": 1, "verdict": "maybe", "reason": "r", "findings": []}]}, {"nope": 1}],
-)
-def test_rulings_of_the_wrong_shape_are_an_error(raw: dict[str, Any]) -> None:
-    with pytest.raises(VerifyError):
-        parse_rulings(raw, 1)
-
-
 def test_sources_are_read_whole_in_order_within_the_budget(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / "b.py").write_text("y = 2\n" * 400, encoding="utf-8")
@@ -173,39 +156,6 @@ def test_sources_are_read_whole_in_order_within_the_budget(tmp_path: Path) -> No
     sources = read_sources(str(tmp_path), ["a.py", "gone.py", "b.py"], budget=50)
 
     assert sources == {"a.py": "x = 1\n"}
-
-
-# ---------------------------------------------------------------- the Claude call, with a fake client
-
-
-class _FakeClient:
-    """Stands in for ``anthropic.Anthropic()``: records the request and answers with ``text``."""
-
-    def __init__(self, text: str, stop_reason: str = "end_turn") -> None:
-        self.sent: dict[str, Any] = {}
-        reply = SimpleNamespace(stop_reason=stop_reason, content=[SimpleNamespace(type="text", text=text)])
-        create = lambda **kw: self.sent.update(kw) or reply  # noqa: E731
-        self.beta = SimpleNamespace(messages=SimpleNamespace(create=create))
-
-
-INQUIRY = Inquiry("t", (Doubt("correctness expected level 1.00/3", "walk the branches"),), [], {"a.py": SOURCE})
-
-
-def test_claude_is_asked_with_the_doubts_and_the_files_whole() -> None:
-    client = _FakeClient('{"rulings": [{"doubt": 1, "verdict": "refuted", "reason": "r", "findings": []}]}')
-
-    rulings = claude_check(INQUIRY, client)
-
-    assert rulings == [Ruling(REFUTED, "r")]
-    assert client.sent["model"] == "claude-sonnet-5-5" and client.sent["fallbacks"] == "default"
-    user = client.sent["messages"][0]["content"]
-    assert "1. correctness expected level 1.00/3" in user and f'<file path="a.py">\n{SOURCE}' in user
-
-
-@pytest.mark.parametrize(("text", "stop_reason"), [("", "refusal"), ('{"rulings": [', "max_tokens"), ("not json", "end_turn")])
-def test_an_answer_that_is_not_a_ruling_is_a_verify_error(text: str, stop_reason: str) -> None:
-    with pytest.raises(VerifyError):
-        claude_check(INQUIRY, _FakeClient(text, stop_reason))
 
 
 def test_the_report_says_how_claude_ruled_on_each_doubt() -> None:
@@ -218,15 +168,35 @@ def test_the_report_says_how_claude_ruled_on_each_doubt() -> None:
     assert line in table and f"- {line}" in md
 
 
-def test_a_workspace_id_in_the_environment_is_sent_with_every_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_123")
-
-    assert make_client().default_headers["anthropic-workspace-id"] == "wrkspc_123"
+# ---------------------------------------------------------------- Claude's own findings anchor its blocks
 
 
-def test_without_a_workspace_id_no_workspace_header_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+def test_each_judged_block_names_the_answer_it_rests_on() -> None:
+    v = _bad_correctness()
 
-    assert "anthropic-workspace-id" not in make_client().default_headers
+    assert v.keys[v.judged[0]] == "correctness"
+
+
+def test_a_block_stands_on_the_findings_of_the_answer_it_rests_on() -> None:
+    answers = {"correctness": {"type": "score", "score": 1.0, "reason": "zero budget", "findings": [asdict(_finding())]}}
+
+    v = settle(_bad_correctness(), anchored(answers, {}), EVIDENCE)
+
+    assert v.outcome == "request_changes" and "a.py:2 split: a budget of 0 returns nothing" in v.advice[0]
+
+
+def test_an_answer_without_findings_cannot_block() -> None:
+    answers = {"correctness": {"type": "score", "score": 1.0, "reason": "looks off", "findings": []}}
+
+    v = settle(_bad_correctness(), anchored(answers, {}), EVIDENCE)
+
+    assert v.outcome == "escalate" and "looks off" in v.advice[0]
+
+
+def test_a_file_s_clean_code_block_stands_on_that_file_s_findings() -> None:
+    low = {"clean_code": {"type": "score", "score": 1.0, "reason": "dup", "findings": [asdict(_finding())]}}
+    jev = decide(GOOD, {}, "jev", {}, {"a.py": low})
+
+    v = settle(jev, anchored({}, {"a.py": low}), EVIDENCE)
+
+    assert jev.keys == ["file:a.py"] and v.outcome == "request_changes" and "a.py:2 split" in v.advice[0]

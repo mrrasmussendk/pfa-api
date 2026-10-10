@@ -21,7 +21,7 @@ A task lives in one feature. This file says which guide to read for it; the guid
 | Write or change tests | [Writing tests](harness/guides/writing-tests.md) |
 | Write or fix an end-to-end scenario | [End-to-end scenarios](harness/guides/e2e-scenarios.md) |
 | Act on a hook's feedback, or finish a change | [What the hooks tell you](harness/guides/hook-feedback.md) |
-| Prepare a PR, act on review findings | [PR review with Jev](harness/guides/pr-review.md) |
+| Prepare a PR, act on review findings | [PR review](harness/guides/pr-review.md) |
 | Fix an `EIT…` finding | its page in [harness/rules/](harness/rules/) |
 
 ## The working set

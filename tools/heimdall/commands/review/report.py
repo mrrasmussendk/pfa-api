@@ -62,6 +62,46 @@ def _verification_lines(v: Verdict) -> list[str]:
     return [f"Claude {r['verdict']}: {r['doubt']} — {r['reason']}" for r in v.verification]
 
 
+def _cell(key: str, a: Any, qs: dict[str, dict[str, Any]]) -> str:
+    if not isinstance(a, dict):
+        return "—"
+    ans, prob = _fmt_answer(key, a, qs)
+    return f"{ans} {prob}"
+
+
+def _answer_rows(v: Verdict, qs: dict[str, dict[str, Any]]) -> list[str]:
+    """The stdout table: Claude's answer beside Jev's when Claude reviewed; Jev's answer and probability otherwise."""
+    if v.jev is None:
+        rows = ["question".ljust(28) + "answer".ljust(44) + "probability"]
+        for key in qs:
+            a = v.answers.get(key)
+            if isinstance(a, dict):
+                ans, prob = _fmt_answer(key, a, qs)
+                rows.append(key.ljust(28) + ans[:43].ljust(44) + prob)
+        return rows
+    jev = v.jev.answers
+    return ["question".ljust(28) + "Claude".ljust(44) + "Jev"] + [
+        key.ljust(28) + _cell(key, v.answers.get(key), qs)[:43].ljust(44) + _cell(key, jev.get(key), qs) for key in qs
+    ]
+
+
+def _answer_table(v: Verdict, qs: dict[str, dict[str, Any]]) -> list[str]:
+    """The comment's table: with Claude's reason for each answer when Claude reviewed."""
+    if v.jev is None:
+        rows = ["| question | answer | probability |", "|---|---|---|"]
+        for key in qs:
+            a = v.answers.get(key)
+            if isinstance(a, dict):
+                ans, prob = _fmt_answer(key, a, qs)
+                rows.append(f"| `{key}` | {ans} | {prob} |")
+        return rows
+    rows = ["| question | Claude | why (Claude) | Jev |", "|---|---|---|---|"]
+    for key in qs:
+        why = str((v.answers.get(key) or {}).get("reason", "")).replace("|", "/")
+        rows.append(f"| `{key}` | {_cell(key, v.answers.get(key), qs)} | {why} | {_cell(key, v.jev.answers.get(key), qs)} |")
+    return rows
+
+
 def render_table(v: Verdict, qs: dict[str, dict[str, Any]], facts: dict[str, Any] | None = None) -> str:
     """The stdout report. The Stop hook hands the agent its tail, so each reason carries its advice: the
     reason alone ("clean code 2.28/3 below the target") names nothing to fix."""
@@ -77,20 +117,17 @@ def render_table(v: Verdict, qs: dict[str, dict[str, Any]], facts: dict[str, Any
     shape = (facts or {}).get("function_shape") or []
     if shape:
         rows += [f"  over the limits: {shape_line(x)}" for x in shape] + [""]
-    rows.append("question".ljust(28) + "answer".ljust(44) + "probability")
-    for key in qs:
-        a = v.answers.get(key)
-        if not isinstance(a, dict):
-            continue
-        ans, prob = _fmt_answer(key, a, qs)
-        rows.append(key.ljust(28) + ans[:43].ljust(44) + prob)
+    rows += _answer_rows(v, qs)
     rows.append("")
     files = _file_rows(v)
     if files:
         rows.append("file (judged whole)".ljust(56) + "clean code".ljust(32) + "limit")
         rows += [path[:55].ljust(56) + score.ljust(32) + label for path, score, label in files]
         rows.append("")
-    rows.append(f"model: {v.model} · input tokens {v.usage.get('input_tokens', '?')} · output tokens {v.usage.get('output_tokens', '?')}")
+    beside = f" · beside it Jev {v.jev.model} ({v.jev.outcome} on its own)" if v.jev else ""
+    rows.append(
+        f"model: {v.model} · input tokens {v.usage.get('input_tokens', '?')} · output tokens {v.usage.get('output_tokens', '?')}{beside}"
+    )
     return "\n".join(rows) + "\n"
 
 
@@ -183,14 +220,8 @@ def render_markdown(v: Verdict, state: dict[str, Any], qs: dict[str, dict[str, A
         "",
         *_what_went_wrong(v, facts),
         *(["### How Claude ruled on Jev's doubts", "", *(f"- {line}" for line in _verification_lines(v)), ""] if v.verification else []),
-        "| question | answer | probability |",
-        "|---|---|---|",
+        *_answer_table(v, qs),
     ]
-    for key in qs:
-        a = v.answers.get(key)
-        if isinstance(a, dict):
-            ans, prob = _fmt_answer(key, a, qs)
-            lines.append(f"| `{key}` | {ans} | {prob} |")
     lines += _clean_code_by_file(v)
     lines += ["", "<details><summary>What Heimdall told the judge</summary>", "", *_told_the_judge(facts), "", "</details>", ""]
     lines.append(

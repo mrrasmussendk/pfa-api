@@ -85,8 +85,10 @@ class Verdict:
     advice: list[str] = field(default_factory=list)  # one plain sentence per reason
     files: dict[str, dict[str, Any]] = field(default_factory=dict)  # the clean-code answers per file judged whole, by path
     judged: list[int] = field(default_factory=list)  # the reasons (by index) that rest on the judge's answers, not on a fact
+    keys: list[str] = field(default_factory=list)  # per reason, the answer it rests on (a question, or ``file:<path>``)
     unblocked: Verdict | None = None  # on request_changes: the outcome were every judged reason refuted
-    verification: list[dict[str, Any]] = field(default_factory=list)  # the verifier's ruling on each judged reason
+    verification: list[dict[str, Any]] = field(default_factory=list)  # how each judged reason was anchored, or why not
+    jev: Verdict | None = None  # when Claude answered the review: Jev's verdict on the same questions, beside it
 
     @property
     def exit_code(self) -> int:
@@ -278,7 +280,7 @@ def _doubts(j: _Judgment, facts: dict[str, Any]) -> list[tuple[str, bool]]:
 
 
 class Flag(Protocol):
-    def __call__(self, reason: str, why: str, *, fact: bool = False) -> None: ...
+    def __call__(self, reason: str, why: str, *, fact: bool = False, key: str = "") -> None: ...
 
 
 def _architecture_label(j: _Judgment, facts: dict[str, Any]) -> bool:
@@ -314,6 +316,7 @@ def _not_safe(j: _Judgment, facts: dict[str, Any], flag: Flag) -> str | None:
             + "; ".join(fixable)
             + "."
             + (" For a reviewer to weigh: " + "; ".join(weigh) + "." if weigh else ""),
+            key="safe_to_merge",
         )
         return None
     if weigh:
@@ -342,12 +345,14 @@ def _safety_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
             f"security concern p={j.security:.2f}",
             "The judge sees a concrete security weakness (injection, leaked secrets, missing validation at a trust "
             "boundary, weakened auth). Find and remove it before merging.",
+            key="has_security_concern",
         )
     if j.leaks >= 0.5:
         flag(
             f"internals would leak to clients p={j.leaks:.2f}",
             "Something internal (a stack trace, a path, raw exception text) would reach an API client. "
             "Route the error through `Problem` with a client-safe `detail`.",
+            key="leaks_internals",
         )
 
 
@@ -358,6 +363,7 @@ def _architecture_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> Non
             f"slice walls violated p(respects)={j.walls:.2f}",
             "The judge believes a slice wall or the dependency direction is violated: an import of another slice's "
             "`internal/`, code placed in the wrong package, or a frozen contract changed non-additively.",
+            key="respects_slice_walls",
         )
     if _architecture_label(j, facts) and not _wide_refactor(j):
         # the judge's own top-risk label contradicts its Yes on the walls; the label wins (a persuasive docstring
@@ -369,6 +375,7 @@ def _architecture_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> Non
             "code in the wrong package (framework code inside a feature, feature logic in pfa/api), a feature used "
             "without being declared in feature.json, or a contract member changed rather than added. "
             "Fix it, or say in the PR body why the placement is right.",
+            key="biggest_risk",
         )
 
 
@@ -378,12 +385,14 @@ def _behaviour_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
         flag(
             f"correctness expected level {j.correctness:.2f}/3",
             f"The judge expects the changed code not to behave as intended, usually an edge case visible in the diff: {_CORRECTNESS_FIX}.",
+            key="correctness",
         )
     if facts.get("routes_changed") and j.errors_ok <= 0.4:
         flag(
             f"errors bypass Problem Details p(ok)={j.errors_ok:.2f}",
             "A changed route answers an error without the shared `Problem` type. Every error must leave as an "
             "RFC 9457 problem document; see harness/guides/returning-errors.md.",
+            key="errors_use_problem_details",
         )
 
 
@@ -398,12 +407,14 @@ def _shape_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
             f"The judge does not consider the changed functions single-purpose, and the AST names where: {long_fns}. "
             f"{_SPLIT_FIX.capitalize()}, each within {limits.get('lines', '?')} lines; a flat table or literal may stay whole "
             "if the PR body says so.",
+            key="single_purpose",
         )
     if wide and j.signatures <= T["signatures_block"]:
         flag(
             f"signatures too wide p(lean)={j.signatures:.2f}",
             f"The judge does not consider the changed signatures lean, and the AST names where: {wide}. "
             f"{_LEAN_FIX.capitalize()}, so each takes at most {limits.get('params', '?')} parameters.",
+            key="lean_signatures",
         )
 
 
@@ -422,6 +433,7 @@ def _craft_blocks(j: _Judgment, facts: dict[str, Any], flag: Flag) -> None:
             f"clean code {f.clean:.2f}/3 in {f.path} below the target {target}",
             f"The judge rates the whole file {f.path}, not only this change's lines, {f.clean:.2f} on 0–3 (3 is exemplary); "
             f"the target is {target}. In its answer, {f.fix}{where}.",
+            key=f"file:{f.path}",
         )
 
 
@@ -490,13 +502,15 @@ def _approval(j: _Judgment, facts: dict[str, Any]) -> tuple[str, list[str]]:
 
 @dataclass
 class _Flags:
-    """The reasons flagged, their advice, and which of them rest on the judge's answers rather than a fact."""
+    """The reasons flagged, their advice, which of them rest on the judge's answers rather than a fact, and the answer each rests on."""
 
     reasons: list[str] = field(default_factory=list)
     advice: list[str] = field(default_factory=list)
     judged: list[int] = field(default_factory=list)
+    keys: list[str] = field(default_factory=list)
 
-    def flag(self, reason: str, why: str, *, fact: bool = False) -> None:
+    def flag(self, reason: str, why: str, *, fact: bool = False, key: str = "") -> None:
+        self.keys.append(key)
         if not fact:
             self.judged.append(len(self.reasons))
         self.reasons.append(reason)
@@ -523,4 +537,4 @@ def decide(
         unblocked = Verdict(outcome, notes, answers, model, usage, files=files)
     if not blocks.reasons:
         return unblocked
-    return Verdict("request_changes", blocks.reasons, answers, model, usage, blocks.advice, files, blocks.judged, unblocked)
+    return Verdict("request_changes", blocks.reasons, answers, model, usage, blocks.advice, files, blocks.judged, blocks.keys, unblocked)
