@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from heimdall.commands.review import build_state, decide, questions, render_markdown, render_table
-from heimdall.commands.review.claude import claude_check
+from heimdall.commands.review.claude import claude_check, make_client
 from heimdall.commands.review.verify import (
     CONFIRMED,
     REFUTED,
@@ -216,3 +216,17 @@ def test_the_report_says_how_claude_ruled_on_each_doubt() -> None:
 
     line = "Claude refuted: correctness expected level 1.00/3 — the boundary is tested"
     assert line in table and f"- {line}" in md
+
+
+def test_a_workspace_id_in_the_environment_is_sent_with_every_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("ANTHROPIC_WORKSPACE_ID", "wrkspc_123")
+
+    assert make_client().default_headers["anthropic-workspace-id"] == "wrkspc_123"
+
+
+def test_without_a_workspace_id_no_workspace_header_is_sent(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.delenv("ANTHROPIC_WORKSPACE_ID", raising=False)
+
+    assert "anthropic-workspace-id" not in make_client().default_headers
