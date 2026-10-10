@@ -54,6 +54,8 @@ jobs:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           # Claude (Sonnet 5.5) verifies each block that rests on Jev's answers; without it those blocks escalate.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Only for a key not scoped to a workspace: the workspace each request runs in (an ID, not a secret).
+          ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID || secrets.ANTHROPIC_WORKSPACE_ID }}
           # PR text reaches the command through the environment, never through shell interpolation.
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}

@@ -106,6 +106,7 @@ So every block that rests on Jev's answers is now a **doubt**, and Claude (Sonne
 - ✅ Read the "How Claude ruled" lines on an `escalate`: a refuted doubt says why the code is fine, an undecided one says what was missing.
 - ❌ Don't treat a refuted doubt as a defect to fix, or an unverified one as a block.
 - ⚠️ **Check:** facts never go to Claude. An Eitri wall violation blocks whatever Claude says.
+- ⚠️ **Check:** a key that is not scoped to a workspace answers 400 "must include the anthropic-workspace-id header". Set `ANTHROPIC_WORKSPACE_ID` (a repository variable in CI) or use a workspace-scoped key; until then every doubt escalates as unverified.
 
 The check costs one Claude call per review that has a doubt, with `fallbacks: "default"`, so a refused request retries server-side. The first live run, on this branch, took 86 seconds. Jev's not-safe block, with nothing to point at, was refuted: "the changed functions are small orchestrators or single-step helpers … I found no concrete input that produces wrong behaviour". The outcome moved from `request_changes` to `escalate` on Jev's `needs_human_review` of 0.69. Claude's rulings are also labels on Jev's answers, which is the calibration data the thresholds in `T` have lacked.
 
