@@ -65,22 +65,8 @@ def _e2e() -> int | str:
     return out.splitlines()[-1] if out else "heimdall e2e ran."
 
 
-def main() -> int:
-    try:
-        event = json.load(sys.stdin)
-    except (json.JSONDecodeError, OSError):
-        event = {}
-    if event.get("stop_hook_active") or _nothing_changed():
-        return 0
-
-    code, out = _run(TESTS)
-    if code != 0:
-        return _block("Stop hook: pytest failed. Fix the suite before finishing.\n\n" + _tail(out))
-
-    e2e = _e2e()
-    if isinstance(e2e, int):
-        return e2e
-
+def _review(e2e: str) -> int:
+    """Jev's review of the committed diff: a block, or a message for the user that leads with the e2e line."""
     code, out = _run(REVIEW)
     if code == EXIT_REQUEST_CHANGES:
         return _block("Stop hook: heimdall review asked for changes. Fix what it names before finishing.\n\n" + _tail(out))
@@ -89,6 +75,25 @@ def main() -> int:
     if code == EXIT_ERROR:
         return _tell(e2e + "\nheimdall review did not run (" + _tail(out) + "). The PR check will judge the branch once it is pushed.")
     return _tell(e2e + "\npytest green; heimdall review: " + (_tail(out).splitlines()[0] if out else "ran."))
+
+
+def _event() -> dict[str, object]:
+    try:
+        event = json.load(sys.stdin)
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return event if isinstance(event, dict) else {}
+
+
+def main() -> int:
+    """The suite, then the scenarios, then the review; the first that blocks ends the stop."""
+    if _event().get("stop_hook_active") or _nothing_changed():
+        return 0
+    code, out = _run(TESTS)
+    if code != 0:
+        return _block("Stop hook: pytest failed. Fix the suite before finishing.\n\n" + _tail(out))
+    e2e = _e2e()
+    return e2e if isinstance(e2e, int) else _review(e2e)
 
 
 if __name__ == "__main__":
