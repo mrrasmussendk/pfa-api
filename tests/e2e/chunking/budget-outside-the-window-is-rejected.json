@@ -1,0 +1,11 @@
+{
+  "method": "API",
+  "tools": [
+    "postman"
+  ],
+  "scenario": {
+    "given": "a text and a budget of 513 tokens, one above the model's 512-token window",
+    "when": "I send it to POST /chunking/split",
+    "then": "I receive 422 as an application/problem+json validation-error whose errors name body.budget"
+  }
+}

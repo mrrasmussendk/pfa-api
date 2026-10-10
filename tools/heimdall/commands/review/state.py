@@ -45,6 +45,8 @@ __all__ = [
 def area_of(path: str, m: MapModel | None) -> str:
     """Where a path sits in the architecture — the Heimdall half of the state."""
     p = norm(path)
+    if p.endswith(".md"):  # prose, wherever it sits: a feature's AGENTS.md describes the feature, it is not its code
+        return "docs"
     if m is not None:
         s = slice_of(p, m)
         if s is not None:
@@ -62,7 +64,7 @@ def area_of(path: str, m: MapModel | None) -> str:
         return "tooling"
     if p.startswith(".github/"):
         return "ci"
-    if p.startswith("docs/") or p.endswith(".md"):
+    if p.startswith("docs/"):
         return "docs"
     if p.startswith("src/"):
         return "service"
