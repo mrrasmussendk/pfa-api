@@ -1,0 +1,9 @@
+{
+  "method": "API",
+  "tools": ["postman"],
+  "scenario": {
+    "given": "a Danish question and two English candidates, only one of which answers it",
+    "when": "I send them to POST /embeddings/similarity",
+    "then": "I receive 200 with every candidate scored and the answering candidate ranked first"
+  }
+}

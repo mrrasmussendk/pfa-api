@@ -239,6 +239,10 @@ def test_the_features_package_init_is_the_application_not_a_slice() -> None:
     assert area_of("src/pfa/features/kvad/internal/x.py", _map()) == "slice:kvad"
 
 
+def test_a_feature_s_notes_are_docs_not_the_feature() -> None:
+    assert area_of("src/pfa/features/kvad/AGENTS.md", _map()) == "docs"
+
+
 def test_exported_diagrams_are_dropped_from_the_diff() -> None:
     svg = "diff --git a/docs/diagrams/x.svg b/docs/diagrams/x.svg\n--- a/docs/diagrams/x.svg\n+++ b/docs/diagrams/x.svg\n@@ -1 +1 @@\n-<svg/>\n+<svg></svg>\n"
     assert [f.path for f in parse_unified_diff(svg + DIFF)] == [f.path for f in parse_unified_diff(DIFF)]

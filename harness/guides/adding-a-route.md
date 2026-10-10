@@ -19,7 +19,7 @@ A route never does work itself. It converts the HTTP request into a **message** 
 | **B. The message does not exist yet** | first a contract change, then a handler, then the route | A + `contract/queries.py` (or `commands.py`), `contract/results.py`, `internal/handlers.py`, `module.py` |
 | **C. The handler needs another feature's capability** | that feature's **contract** and a declared dependency | A or B + `features/<dep>/contract/`, `feature.json` |
 
-⚠️ If none fits — the use case is a new concept with its own data and rules — follow [Adding a feature](../../AGENTS.md#adding-a-feature).
+⚠️ If none fits — the use case is a new concept with its own data and rules — follow [Adding a feature](adding-a-feature.md).
 
 ## The shape every route follows
 

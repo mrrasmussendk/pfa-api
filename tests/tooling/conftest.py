@@ -9,6 +9,7 @@ import pytest
 
 from eitri import EitriConfig, analyze
 from heimdall.app import run as heimdall_run
+from heimdall.commands.e2e import Scenario
 
 # One sample of each shape the hook's sensor and the review's judge are asked about.
 LONG_FUNCTION = "def long_one():\n" + "\n".join(f"    x{i} = {i}" for i in range(44)) + "\n    return x0\n"  # 46 lines
@@ -128,3 +129,38 @@ class TempProject:
 @pytest.fixture
 def project(tmp_path: Path) -> TempProject:
     return TempProject(tmp_path)
+
+
+# ---------------------------------------------------------------- heimdall e2e
+
+E2E_SCENARIO = {
+    "method": "API",
+    "tools": ["postman"],
+    "scenario": {"given": "I have a valid API key", "when": "I send a request to the API", "then": "I receive a response"},
+}
+E2E_REQUEST = "$kind: http-request\nscripts:\n  - type: afterResponse\n    code: pm.test('then', () => {});\n"
+
+
+def e2e_scenario_json(**over: object) -> str:
+    """A scenario file, with ``over`` replacing top-level keys."""
+    return json.dumps({**E2E_SCENARIO, **over})
+
+
+def write_e2e_scenario(repo: TempRepo, sid: str, request: str | None = E2E_REQUEST) -> None:
+    """The scenario file, and the Postman request that runs it unless ``request`` is None."""
+    repo.write_file(f"tests/e2e/{sid}.json", e2e_scenario_json())
+    if request is not None:
+        repo.write_file(f"postman/collections/e2e/{sid}.request.yaml", request)
+
+
+def write_e2e_project(repo: TempRepo) -> TempRepo:
+    """The sample map (kvad depends on rune), an API-only project, one scenario per feature."""
+    repo.write_sample_map()
+    repo.write_file("harness/e2e/system.json", json.dumps({"tools": {"API": "postman"}}))
+    write_e2e_scenario(repo, "kvad/squares")
+    write_e2e_scenario(repo, "rune/carves")
+    return repo
+
+
+def e2e_scenario(sid: str, tools: tuple[str, ...] = ("postman",)) -> Scenario:
+    return Scenario(id=sid, feature=sid.split("/")[0], method="API", tools=tools, given="g", when="w", then="t")
