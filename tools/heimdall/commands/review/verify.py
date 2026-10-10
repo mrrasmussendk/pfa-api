@@ -137,7 +137,9 @@ def _rule(check: Check | None, inquiry: Inquiry) -> list[Ruling]:
     """The rulings with every confirmation checked against the code; undecided for all when there is no verifier
     or it could not rule."""
     if check is None:
-        return [Ruling(UNDECIDED, "Claude did not review: set ANTHROPIC_API_KEY so Claude answers the review")] * len(inquiry.doubts)
+        return [Ruling(UNDECIDED, "Claude did not review: it answers in CI (heimdall review --claude, with ANTHROPIC_API_KEY)")] * len(
+            inquiry.doubts
+        )
     try:
         rulings = check(inquiry)
     except VerifyError as e:
