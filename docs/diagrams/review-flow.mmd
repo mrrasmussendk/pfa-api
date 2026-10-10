@@ -4,14 +4,19 @@ flowchart TB
     diff["PR diff<br/>base...HEAD"]:::input
     map["Feature map<br/>.heimdall/map.json"]:::input
     task["Task<br/>PR title and body"]:::input
-    tree["Working tree<br/>each edited application file, whole"]:::input
-    state["Heimdall builds bounded state<br/>Diff, architecture and computed facts"]:::process
+    tree["Working tree<br/>the changed functions and files, whole"]:::input
+    items["Changed functions<br/>each read whole, routes marked"]:::process
+    state["Heimdall builds bounded state<br/>Functions, diff, architecture, computed facts"]:::process
     craft["Craft pass<br/>One call per file: clean code on the whole file"]:::process
-    jev["Jev API<br/>Answers typed review questions"]:::process
-    policy["Policy in code<br/>Applies thresholds and gates"]:::decision
-    verdict["Outcome<br/>approve / comment<br/>request_changes / escalate"]:::output
+    jev["Jev API<br/>Narrow fault checks per function, in batches"]:::process
+    policy["Policy in code<br/>A row per check at its place; facts first"]:::decision
+    claude["Claude verifies (PR only)<br/>Failing and unsure checks, evidence from the file"]:::decision
+    verdict["Outcome<br/>comment / request_changes / escalate"]:::output
     reports["Review artifacts<br/>JSON, Markdown and telemetry"]:::output
     comment["Workflow updates the PR comment<br/>and check status"]:::output
+    diff --> items
+    tree --> items
+    items --> state
     diff --> state
     map --> state
     task --> state
@@ -19,7 +24,7 @@ flowchart TB
     tree --> craft
     state --> jev
     craft --> jev
-    jev --> policy --> verdict
+    jev --> policy --> claude --> verdict
     verdict --> reports --> comment
     classDef input fill:#eff6ff,stroke:#2563eb,color:#172554
     classDef process fill:#f0fdfa,stroke:#0f766e,color:#134e4a

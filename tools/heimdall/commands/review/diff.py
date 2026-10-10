@@ -62,6 +62,8 @@ def parse_unified_diff(diff: str) -> list[FileChange]:
 
 
 def git_diff(cwd: str, base: str | None) -> str:
+    if base and base.startswith("-"):  # git would read it as an option, not a ref
+        raise ReviewError(f"--base {base!r} must be a ref, not an option")
     spec = [f"{base}...HEAD"] if base else ["HEAD"]
     try:
         out = subprocess.run(
