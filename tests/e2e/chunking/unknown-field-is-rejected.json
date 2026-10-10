@@ -1,0 +1,11 @@
+{
+  "method": "API",
+  "tools": [
+    "postman"
+  ],
+  "scenario": {
+    "given": "a split request that also carries a field the API does not know, \"budgt\"",
+    "when": "I send it to POST /chunking/split",
+    "then": "I receive 422 as an application/problem+json validation-error whose errors name body.budgt"
+  }
+}

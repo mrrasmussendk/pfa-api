@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from . import craft, state
 from .base import EXIT_ERROR, EXIT_ESCALATE, EXIT_OK, EXIT_REQUEST_CHANGES, OUTCOMES, ReviewError, Streams
-from .command import USAGE, run
+from .command import USAGE, Seams, run
 from .craft import CraftFile, craft_files, craft_state
 from .diff import FileChange, git_diff, parse_unified_diff
 from .policy import T, Verdict, decide
@@ -55,6 +55,7 @@ __all__ = [
     "CraftFile",
     "FileChange",
     "ReviewError",
+    "Seams",
     "Streams",
     "T",
     "Transport",

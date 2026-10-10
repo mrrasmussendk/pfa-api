@@ -57,6 +57,11 @@ def _file_rows(v: Verdict) -> list[tuple[str, str, str]]:
     return [(path, score, label) for _, path, score, label in sorted(rows)]
 
 
+def _verification_lines(v: Verdict) -> list[str]:
+    """How the verifier ruled on each of Jev's doubts: what was confirmed, refuted or left to a person, and why."""
+    return [f"Claude {r['verdict']}: {r['doubt']} — {r['reason']}" for r in v.verification]
+
+
 def render_table(v: Verdict, qs: dict[str, dict[str, Any]], facts: dict[str, Any] | None = None) -> str:
     """The stdout report. The Stop hook hands the agent its tail, so each reason carries its advice: the
     reason alone ("clean code 2.28/3 below the target") names nothing to fix."""
@@ -64,6 +69,8 @@ def render_table(v: Verdict, qs: dict[str, dict[str, Any]], facts: dict[str, Any
     rows += [f"  {reason}: {why}" for reason, why in zip(v.reasons, v.advice, strict=False)]
     if v.advice:
         rows.append("")
+    if v.verification:
+        rows += [f"  {line}" for line in _verification_lines(v)] + [""]
     violations = (facts or {}).get("wall_violations") or []
     if violations:
         rows += [f"  {violation_line(x)}" + (f"  fix: {x['fix']}" if x.get("fix") else "") for x in violations] + [""]
@@ -175,6 +182,7 @@ def render_markdown(v: Verdict, state: dict[str, Any], qs: dict[str, dict[str, A
         f"_{'; '.join(v.reasons)}_",
         "",
         *_what_went_wrong(v, facts),
+        *(["### How Claude ruled on Jev's doubts", "", *(f"- {line}" for line in _verification_lines(v)), ""] if v.verification else []),
         "| question | answer | probability |",
         "|---|---|---|",
     ]

@@ -51,6 +51,37 @@ jobs:
           git diff --exit-code -- AGENTS.md src/pfa/features/*/AGENTS.md \
             || { echo "::error::AGENTS.md is stale — run 'heimdall map --root .' and commit"; exit 1; }
 
+  # ------------------------------------------------------------------ 1b. the scenarios: every one, against the started service
+  # The runner is the environment: `heimdall e2e --all` starts `python -m pfa.api` from harness/e2e/system.json on a
+  # free port, waits for /health, runs the Postman requests in postman/collections/e2e from the checkout, and stops it.
+  # Nothing is deployed and nothing is read from Postman's cloud, so no Postman login is needed.
+  e2e:
+    name: e2e scenarios
+    needs: enforce
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - name: Install the API (CPU torch) and the dev-only tooling
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]" -e ./tools
+      - name: Install the Postman CLI
+        run: curl -o- "https://dl-cli.pstmn.io/install/linux64.sh" | sh
+      - name: Cache the model weights (~2.2 GB)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-intfloat-multilingual-e5-large
+      - name: Fetch the model before the run, so no request waits on a download
+        run: python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"
+      - name: Every scenario
+        run: heimdall e2e --all
+      - name: The service's log, when a scenario failed
+        if: failure()
+        run: cat .heimdall/e2e-service.log || true
+
   # ------------------------------------------------------------------ 2. the distribution must not carry the tooling
   wheel:
     name: wheel ships no tooling

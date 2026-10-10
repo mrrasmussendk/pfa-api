@@ -1,0 +1,6 @@
+{
+  "start": ["{python}", "-m", "pfa.api"],
+  "port_env": "PFA_PORT",
+  "ready": "/health",
+  "tools": {"API": "postman"}
+}
