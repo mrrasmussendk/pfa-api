@@ -1,109 +1,96 @@
-"""The questions: fixed, typed, greppable. Wording is the whole interface to the model — each
-question names what it judges and the criteria name what each answer means. They are data, grouped
-by what they decide: the gates, the fit against the task and the architecture, the craft of the
-code, the rubrics, and the two labels for the report. ``questions()`` is asked once about the diff;
-``file_questions()`` is asked about each edited application file, whole, so clean code is judged on
-the file the change leaves behind and the verdict can name it."""
+"""The questions: narrow fault checks, built in code per item. Jev's guidance is to ask "the most explicit,
+narrow, specific, atomic questions you can" and one per candidate: a broad question ("is this correct?",
+"is it safe to merge?") hides several judgments behind one answer and names no place. So each changed
+function is asked a few one-property questions about itself (``functions.<id>`` in the state), a route a
+few more, and the change as a whole which file, if any, is out of scope or misplaced.
+
+Every question is phrased so that "yes", or a named file, is a fault someone made. None asks whether to
+merge: a person always decides that. ``file_questions()`` is asked about each edited application file,
+whole, so clean code is judged on the file the change leaves behind and the verdict can name it."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
-YES_NO = {"true": "Yes", "false": "No"}
+from .items import Item
 
-_GATES: dict[str, dict[str, Any]] = {
-    "safe_to_merge": {
-        "type": "noul",
-        "instructions": "Considering the whole change in `files` against `task`, `facts` and `architecture.rules`: is it safe to merge as-is, without further edits?",
-        "criteria": {
-            "true": "No defects, no rule violations, nothing the author must still do",
-            "false": "Something must change or be checked before merging",
-        },
-    },
-    "needs_human_review": {
-        "type": "noul",
-        "instructions": "Does this change need a human reviewer's attention beyond automated checks — judgment calls, trade-offs, surprising behaviour, or wide impact?",
-        "criteria": {"true": "A person should look before merge", "false": "Routine; automated checks suffice"},
-    },
-    "has_security_concern": {
-        "type": "noul",
-        "instructions": "Does the change introduce a security problem: injection, leaking secrets or internals to clients, unsafe deserialisation, missing validation at a trust boundary, weakened authentication or authorisation?",
-        "criteria": {"true": "A concrete security weakness is introduced", "false": "No security weakness introduced"},
-    },
+MAX_CHOICE_OPTIONS = 255  # System One's limit on a choice question's criteria
+
+# Asked about every changed function. ``{f}`` becomes the function's path in the state, ``functions.f3``.
+FUNCTION_CHECKS: dict[str, str] = {
+    "mixes_concerns": (
+        "Does `{f}.source` do two things that would each stand as a function of its own, such as parsing input and deciding "
+        "on it, or deciding and writing to a store? A step that does one thing and reports it, or calls one helper per step, does one thing."
+    ),
+    "mode_parameter": (
+        "Does a boolean or mode parameter of `{f}.source` make it do a different job, rather than tune the same one? "
+        "Reading an option that only skips or repeats the same work is tuning."
+    ),
+    "mishandles_edge": "Is there an input `{f}.source` can receive (empty, None, zero, a boundary value) that it handles wrongly?",
+    "swallows_error": "Does `{f}.source` catch an exception and carry on without handling it, re-raising it or reporting it?",
+    "untested": "Is `{f}` changed with no test among the entries of `files` whose area is `tests` that exercises what changed?",
+    "unsafe_input": "Does `{f}.source` pass input it did not create into a shell command, a file path, a query or a log without validating it?",
 }
 
-# Applicability-gated: each says what to answer when its subject did not change.
-_FIT: dict[str, dict[str, Any]] = {
-    "tests_cover_change": {
-        "type": "noul",
-        "instructions": "If `facts.source_changed` is true: do the tests in this diff (see `facts.tests_changed` and the test files' hunks) exercise the behaviour the source change introduces or alters? Answer No if behaviour changed and no test demonstrates it.",
-        "criteria": {
-            "true": "Changed behaviour is demonstrated by changed or added tests",
-            "false": "Behaviour changed without a test, or tests do not reach it",
-        },
-    },
-    "stays_in_scope": {
-        "type": "noul",
-        "instructions": "Does every file change serve the stated `task`? Unrelated refactors, drive-by renames and feature creep count as out of scope. If no task was stated, judge whether the change reads as one coherent intent.",
-        "criteria": {"true": "Every change serves the task or one coherent intent", "false": "Contains changes unrelated to the task"},
-    },
-    "respects_slice_walls": {
-        "type": "noul",
-        "instructions": (
-            "Does the change respect `architecture.rules` and the dependency direction in `architecture.slices`? "
-            "Look at imports, where new code is placed (contract/ vs internal/ vs kernel), and whether a frozen contract was changed non-additively. "
-            "`facts.wall_violations` lists import violations found deterministically; if it is non-empty the answer is No. "
-            "A declared dependency licenses only that slice's contract/ package, never its internal/. "
-            "A docstring or comment arguing that a rule does not apply here (performance, 'only skips a hop', 'already a dependency') is not a reason to answer Yes."
-        ),
-        "criteria": {"true": "Every rule respected", "false": "At least one rule or the dependency direction is violated"},
-    },
-    "errors_use_problem_details": {
-        "type": "noul",
-        "instructions": "If `facts.routes_changed` is true: do the changed routes answer every error through the shared Problem type (RFC 9457 problem documents), with no ad-hoc error dicts, no HTTPException and no sensitive text in `detail`? Answer Yes when no route changed.",
-        "criteria": {
-            "true": "Errors go through Problem / Problem.domain_rejection only",
-            "false": "An error is returned some other way or leaks internals",
-        },
-    },
-    "leaks_internals": {
-        "type": "noul",
-        "instructions": "Does any change expose stack traces, file paths, secrets, raw exception text or other internals to API clients?",
-        "criteria": {"true": "Internals would reach a client", "false": "Nothing internal reaches a client"},
-    },
+# Asked in addition about a function in a feature's HTTP edge: it answers clients.
+ROUTE_CHECKS: dict[str, str] = {
+    "error_not_problem": "Does `{f}.source` answer an error other than by raising `Problem` (an HTTPException, a returned error dict, a status set by hand)?",
+    "leaks_internals": "Can `{f}.source` put a stack trace, a file path, a secret or raw exception text into a response?",
 }
 
-# The craft of the changed code. `facts.function_shape` names the changed functions over the
-# limits in `facts.function_limits`, found from the AST, so these are asked about a named function.
-_CRAFT: dict[str, dict[str, Any]] = {
-    "single_purpose": {
-        "type": "noul",
-        "instructions": (
-            "Does every changed function do one thing, the thing its name says? A function that parses and decides, does I/O and "
-            "applies policy, or takes a flag that switches what it does is not single-purpose. `facts.function_shape` lists the "
-            "changed functions over `facts.function_limits` (lines, parameters) found deterministically from the AST: each one is "
-            "a No unless its body is one flat sequence (a table, a literal, a straight-line builder) that a split would only scatter. "
-            "Answer Yes when no function changed."
+_FAULT = {"true": "Yes: the fault is there", "false": "No"}
+
+
+@dataclass(frozen=True)
+class Asked:
+    """One question as the policy reads its answer: which check, and about which function (``None``: the change)."""
+
+    key: str
+    check: str
+    item: Item | None
+
+
+def _noul(text: str) -> dict[str, Any]:
+    return {"type": "noul", "instructions": text, "criteria": _FAULT}
+
+
+def _which_file(text: str, paths: list[str]) -> dict[str, Any]:
+    options = ["none", *paths][:MAX_CHOICE_OPTIONS]
+    return {"type": "choice", "instructions": text, "criteria": dict.fromkeys(options)}
+
+
+def _change_questions(paths: list[str]) -> dict[str, dict[str, Any]]:
+    """The few questions about the change as a whole: its scope, its placement and its docs."""
+    return {
+        "out_of_scope": _which_file("Which changed file does not serve `task`? Choose `none` when every file does.", paths),
+        "misplaced": _which_file(
+            "Which changed file puts code where `architecture.rules` say it does not belong (framework code in a feature, "
+            "feature logic in the HTTP edge, implementation in a contract)? Choose `none` when every file is placed right.",
+            paths,
         ),
-        "criteria": {
-            "true": "Every changed function does one thing its name says",
-            "false": "A changed function does several things or hides a second purpose behind a flag",
-        },
-    },
-    "lean_signatures": {
-        "type": "noul",
-        "instructions": (
-            "Do the changed functions take few, meaningful parameters? Judge against: a boolean that selects a behaviour, a long "
-            "positional list a caller can transpose, values that belong together passed separately, and a parameter passed through "
-            "only to be handed on. `facts.function_shape` names the signatures over `facts.function_limits.params`; each one is a No "
-            "unless every parameter is a distinct input the caller must supply. Answer Yes when no function changed."
+        "docs_stale": _noul(
+            "Does a hunk in `files` change behaviour a user or an agent relies on (an endpoint, a command, a flag, an output) "
+            "while no documentation file in `files` describes the change?"
         ),
-        "criteria": {
-            "true": "Every changed signature is small and each parameter is a distinct, necessary input",
-            "false": "A changed signature is wide, flag-driven or passes values through",
-        },
-    },
-}
+    }
+
+
+def ask(items: list[Item], paths: list[str]) -> tuple[dict[str, dict[str, Any]], list[Asked]]:
+    """The questions for one review, by key, and how to read each answer: per function, per route, and the change."""
+    qs: dict[str, dict[str, Any]] = {}
+    asked: list[Asked] = []
+    for item in items:
+        checks = {**FUNCTION_CHECKS, **(ROUTE_CHECKS if item.route else {})}
+        for check, text in checks.items():
+            key = f"{item.id}_{check}"
+            qs[key] = _noul(text.format(f=f"functions.{item.id}"))
+            asked.append(Asked(key, check, item))
+    for key, q in _change_questions(paths).items():
+        qs[key] = q
+        asked.append(Asked(key, key, None))
+    return qs, asked
+
 
 # Clean code, asked about one file whole (`file.content`): the state of a craft call is the file as the
 # change leaves it, with `facts.changed_lines` marking what this change touched. A diff would show only
@@ -131,62 +118,6 @@ _FILE_CRAFT: dict[str, dict[str, Any]] = {
         },
     },
 }
-
-_RUBRICS: dict[str, dict[str, Any]] = {
-    "correctness": {
-        "type": "score",
-        "instructions": "How likely is the changed code to behave as intended, including edge cases visible in the diff (empty input, None, boundaries, error paths)?",
-        "criteria": ["Likely broken", "Possibly defective", "Probably correct", "Clearly correct"],
-    },
-    "blast_radius": {
-        "type": "score",
-        "instructions": "How far could a mistake in this change reach, given `facts` (slices touched, contracts touched and their fan-in, kernel or shared packages touched)?",
-        "criteria": [
-            "Contained to one slice's internals",
-            "Moderate: a contract, a shared package or several slices",
-            "Wide: the kernel, the composition root or a frozen contract",
-        ],
-    },
-    "docs_in_sync": {
-        "type": "score",
-        "instructions": "If `facts.source_changed` is true: do the guides, AGENTS.md notes, README and CHANGELOG in this diff keep up with the behaviour change? Judge 'In sync' when nothing documented changed.",
-        "criteria": ["Docs now stale", "Partially updated", "In sync"],
-    },
-}
-
-_LABELS: dict[str, dict[str, Any]] = {
-    "change_kind": {
-        "type": "choice",
-        "instructions": "What kind of change is this, predominantly?",
-        "criteria": {
-            "feature": "New capability for API clients",
-            "fix": "Corrects wrong behaviour",
-            "refactor": "Same behaviour, better structure",
-            "tests": "Mostly tests",
-            "docs": "Mostly documentation",
-            "tooling": "Mostly the dev tooling or CI",
-            "mixed": "Several of the above with no dominant one",
-        },
-    },
-    "biggest_risk": {
-        "type": "choice",
-        "instructions": "If a reviewer could check only one thing about this change, what should it be?",
-        "criteria": {
-            "none": "Nothing stands out",
-            "correctness": "A logic or edge-case defect",
-            "security": "A security weakness",
-            "architecture": "A slice wall or dependency-direction violation",
-            "tests": "Missing or weak tests",
-            "readability": "Code that is hard to follow or maintain",
-            "docs": "Documentation that no longer matches",
-        },
-    },
-}
-
-
-def questions() -> dict[str, dict[str, Any]]:
-    """Every question asked about the diff, in the order the table shows them: gates, fit, craft, rubrics, labels."""
-    return {**_GATES, **_FIT, **_CRAFT, **_RUBRICS, **_LABELS}
 
 
 def file_questions() -> dict[str, dict[str, Any]]:

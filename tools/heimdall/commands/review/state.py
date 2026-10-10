@@ -31,11 +31,13 @@ _FIX_LINE = re.compile(r"^\*\*Fix[^*]*:\*\*\s*(.+?)\s*$", re.MULTILINE)
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 __all__ = [
+    "Known",
     "area_of",
     "build_state",
     "fix_from_docs",
     "function_shape",
     "is_application",
+    "priority",
     "shape_line",
     "touched_lines",
     "truncate",
@@ -78,7 +80,8 @@ def is_application(area: str) -> bool:
     return area.startswith(("slice:", "contract:", "shared:")) or area in ("kernel", "app", "service")
 
 
-def _priority(area: str) -> int:
+def priority(area: str) -> int:
+    """Where an area comes in the budget's order: the code the walls are about first, prose last."""
     return next((i for i, prefix in enumerate(_AREA_PRIORITY) if area == prefix or area.startswith(prefix)), len(_AREA_PRIORITY))
 
 
@@ -195,6 +198,8 @@ class _Tally:
     source_changed: bool = False
     code_changed: bool = False  # Python in the application (a slice, the kernel, the app): the craft floor is about this, not the tooling
     docs_changed: bool = False
+    kernel_changed: bool = False  # every feature imports the kernel: a mistake there reaches all of them
+    shared_changed: bool = False  # the application outside the features (composition root, HTTP edge helpers) or a shared package
     tests: set[str] = field(default_factory=set)
     truncated: list[str] = field(default_factory=list)
     diff_tokens: int = 0  # the whole diff, Brokkr's estimate
@@ -214,6 +219,8 @@ class _Tally:
                 self.routes_changed = True
         elif area in ("kernel", "app", "service") or area.startswith("shared:"):
             self.source_changed = True
+            self.kernel_changed = self.kernel_changed or area == "kernel"
+            self.shared_changed = self.shared_changed or area == "app" or area.startswith("shared:")
         elif area == "tests":
             self.tests.add(norm(f.path))
         elif area == "docs":
@@ -224,7 +231,7 @@ def _entries(files: list[FileChange], m: MapModel | None, tally: _Tally, budget:
     """One entry per file, source first (see ``_AREA_PRIORITY``), git order within an area. ``budget`` is spent on
     whole entries, path and counts included; a file that no longer fits is counted in the facts and not shown."""
     entries: list[dict[str, Any]] = []
-    classified = sorted(((area_of(f.path, m), f) for f in files), key=lambda pair: _priority(pair[0]))
+    classified = sorted(((area_of(f.path, m), f) for f in files), key=lambda pair: priority(pair[0]))
     for area, f in classified:
         tally.count(area, f, m)
         tally.diff_tokens += 0 if f.binary else estimate(f.text)
@@ -280,6 +287,8 @@ def _facts(files: list[FileChange], tally: _Tally, walls: list[dict[str, Any]], 
         "code_changed": tally.code_changed,
         "tests_changed": sorted(tally.tests),
         "docs_changed": tally.docs_changed,
+        "kernel_changed": tally.kernel_changed,
+        "shared_changed": tally.shared_changed,
         "files_truncated": tally.truncated,
         "files_not_shown": tally.not_shown,
         "diff_tokens": tally.diff_tokens,
@@ -292,16 +301,21 @@ def _facts(files: list[FileChange], tally: _Tally, walls: list[dict[str, Any]], 
     }
 
 
-def build_state(
-    files: list[FileChange],
-    m: MapModel | None,
-    task: str | None,
-    walls: list[dict[str, Any]] | None = None,
-    shape: list[dict[str, Any]] | None = None,
-) -> dict[str, Any]:
-    """The JSON object Jev judges: the task, the architecture, the facts and the files, at most
-    ``MAX_STATE_TOKENS`` as sent. The files get what the rest leaves; when the whole still overshoots
-    (the facts grow with every file cut), the files' share shrinks by the overshoot and they are laid out again."""
+@dataclass(frozen=True)
+class Known:
+    """What Heimdall established before asking: Eitri's findings, the functions over the shape limits, and the
+    changed functions the questions are about, by id (``functions.f1``)."""
+
+    walls: list[dict[str, Any]] = field(default_factory=list)
+    shape: list[dict[str, Any]] = field(default_factory=list)
+    functions: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+
+def build_state(files: list[FileChange], m: MapModel | None, task: str | None, known: Known | None = None) -> dict[str, Any]:
+    """The JSON object Jev judges: the task, the architecture, the facts, the changed functions and the files, at
+    most ``MAX_STATE_TOKENS`` as sent. The files get what the rest leaves; when the whole still overshoots (the
+    facts grow with every file cut), the files' share shrinks by the overshoot and they are laid out again."""
+    known = known or Known()
     budget = MAX_STATE_TOKENS
     while True:
         tally = _Tally()
@@ -309,7 +323,8 @@ def build_state(
         state = {
             "task": task or "(no task statement given)",
             "architecture": _architecture(m),
-            "facts": _facts(files, tally, list(walls or []), list(shape or [])),
+            "facts": _facts(files, tally, list(known.walls), list(known.shape)),
+            "functions": dict(known.functions),
             "files": entries,
         }
         over = estimate(json.dumps(state, ensure_ascii=False)) - MAX_STATE_TOKENS

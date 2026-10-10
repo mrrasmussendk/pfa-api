@@ -1,50 +1,51 @@
-"""The entry point: arguments → diff → state → one call about the diff and one per edited application
-file, whole (Jev) → the same questions answered by Claude, with evidence → policy on Claude's answers, each
-judged block standing only on its evidence → table (Claude beside Jev), files, telemetry, exit code."""
+"""The entry point: arguments → diff → the changed functions → narrow checks per function, route and file,
+asked of Jev in one call, and clean code of each edited application file whole → policy → (PR pipeline only)
+Claude verifies each failing or unsure check → table, files, telemetry, exit code."""
 
 from __future__ import annotations
 
 import json
 import os
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, NamedTuple, TextIO
+
+from brokkr import estimate
 
 from ...model import Finding, MapModel
 from ...pathutil import norm
 from ...store import UnreadableMap, append_findings, heimdall_dir, load_map
 from .base import EXIT_ERROR, EXIT_OK, ReviewError, Streams
-from .claude import KEY_ENVS, ClaudeReview, ReviewInquiry, claude_review
+from .claude import KEY_ENVS, claude_check
 from .craft import craft_files, craft_state
 from .diff import FileChange, git_diff, parse_unified_diff
-from .policy import Verdict, decide
-from .questions import file_questions, questions
+from .items import Item, changed_functions
+from .policy import Judgment, Verdict, decide, evaluate
+from .questions import Asked, ask, file_questions
 from .report import render_markdown, render_table
-from .state import build_state, function_shape, wall_findings
+from .state import Known, build_state, function_shape, wall_findings
 from .transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL, Transport, http_transport
 from .vendored import is_vendored, vendored_patterns
-from .verify import Check, Evidence, VerifyError, anchored, read_sources, settle
+from .verify import Check, Evidence, read_sources, settle
 
 USAGE = (
     "usage: heimdall review [--base <ref> | --diff <file|->] [--task <text>] [--model jev-latest]\n"
     "                       [--json <out>] [--markdown <out>] [--dry-run] [--allow-missing-key]\n"
     "                       [--session <id>] [--claude]\n"
     "  default diff: `git diff HEAD` (working tree); --base <ref> uses `git diff <ref>...HEAD`\n"
-    "  --claude: Claude answers the review and decides (CI only; needs ANTHROPIC_API_KEY). Without it,\n"
-    "            Jev's verdict stands and each of its judged blocks escalates as unverified"
+    "  --claude: the PR pipeline; Claude verifies each failing check and only a confirmed one blocks\n"
+    "            (needs ANTHROPIC_API_KEY). Without it, the agent pipeline: Jev's failing checks block"
 )
 
 
-Reviewer = Callable[[ReviewInquiry], ClaudeReview]
-
-
 class Seams(NamedTuple):
-    """What a test replaces: Jev's transport, the environment keys are read from, and Claude. ``claude`` left out
-    means Claude when a key is set, and Jev's verdict alone, every judged block unverified, otherwise."""
+    """What a test replaces: Jev's transport, the environment keys are read from, and the verifier. ``check`` left
+    out means Claude when a key is set, and no verifier otherwise."""
 
     transport: Transport | None = None
     env: Mapping[str, str] | None = None
-    claude: Reviewer | None = None
+    check: Check | None = None
 
 
 _SKIPPED_COMMENT = (
@@ -151,6 +152,43 @@ def _judge(payload: dict[str, Any], transport: Transport, stderr: TextIO) -> dic
     return response
 
 
+# Jev reads one request of 64k tokens, the state and every question in it (docs.typesafe.ai/models). Brokkr is
+# within about 10% of a real tokenizer, so the margin keeps each batch under the limit.
+MAX_REQUEST_TOKENS = 56_000
+
+
+def _batches(diff: dict[str, Any]) -> list[dict[str, Any]]:
+    """The checks call split so that each request, the state and its share of the questions, fits the limit. Jev
+    answers each question in isolation, so a batch's answers mean what they would in one call."""
+    room = MAX_REQUEST_TOKENS - estimate(json.dumps(diff["state"], ensure_ascii=False))
+    batches: list[dict[str, Any]] = []
+    current: dict[str, Any] = {}
+    used = 0
+    for key, q in diff["questions"].items():
+        cost = estimate(json.dumps({key: q}, ensure_ascii=False))
+        if current and used + cost > room:
+            batches.append(current)
+            current, used = {}, 0
+        current[key] = q
+        used += cost
+    if current:
+        batches.append(current)
+    return [{**diff, "questions": b} for b in batches]
+
+
+def _judge_checks(diff: dict[str, Any], transport: Transport, stderr: TextIO) -> dict[str, Any] | None:
+    """Every batch of checks asked: one response with all the answers and the usage added up; ``None`` when a
+    batch gave no verdict."""
+    responses: list[dict[str, Any]] = []
+    for payload in _batches(diff):
+        response = _judge(payload, transport, stderr)
+        if response is None:
+            return None
+        responses.append(response)
+    answers = {key: a for r in responses for key, a in r["answers"].items()}
+    return {"model": responses[0].get("model"), "answers": answers, "usage": _usage(responses)}
+
+
 def _judge_files(payloads: list[dict[str, Any]], transport: Transport, stderr: TextIO) -> list[dict[str, Any]] | None:
     """The craft pass: one call per edited application file, whole. ``None`` when any of them is not a verdict."""
     responses: list[dict[str, Any]] = []
@@ -174,8 +212,7 @@ def _usage(responses: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _report(opts: dict[str, Any], verdict: Verdict, state: dict[str, Any], io: Streams, cwd: str) -> None:
     """The table on stdout, the JSON and Markdown files when asked, and the telemetry line."""
-    qs = questions()
-    io.stdout.write(render_table(verdict, qs, state["facts"]))
+    io.stdout.write(render_table(verdict, state["facts"]))
     if opts["json"]:
         report = {
             "outcome": verdict.outcome,
@@ -187,17 +224,34 @@ def _report(opts: dict[str, Any], verdict: Verdict, state: dict[str, Any], io: S
             "model": verdict.model,
             "usage": verdict.usage,
             "verification": verdict.verification,
-            "jev": {"outcome": verdict.jev.outcome, "answers": verdict.jev.answers, "files": verdict.jev.files} if verdict.jev else None,
+            "checks": [{"check": r.check, "where": r.where, "p": r.p, "state": r.state} for r in verdict.rows],
         }
         _write(opts["json"], cwd, json.dumps(report, indent=2))
     if opts["markdown"]:
-        _write(opts["markdown"], cwd, render_markdown(verdict, state, qs))
+        _write(opts["markdown"], cwd, render_markdown(verdict, state))
     _telemetry(cwd, verdict, state["facts"], opts["session"])
 
 
-def _payloads(opts: dict[str, Any], io: Streams, cwd: str) -> dict[str, Any] | int:
-    """Every call the review makes — ``diff``: the one about the change; ``files``: one per edited application
-    file, whole — or the exit code when there is no diff to judge. The diff's facts name the files judged whole."""
+@dataclass(frozen=True)
+class Calls:
+    """Every call the review makes: ``diff``, the checks about the change; ``files``, one per edited application
+    file, whole; and what the policy and the verifier need to read the answers."""
+
+    diff: dict[str, Any]
+    files: list[dict[str, Any]]
+    sources: list[str]
+    asked: list[Asked]
+
+    def printable(self) -> dict[str, Any]:
+        return {"diff": self.diff, "files": self.files, "sources": self.sources}
+
+
+def _function_state(items: list[Item]) -> dict[str, dict[str, Any]]:
+    return {i.id: {"path": i.path, "line": i.line, "name": i.name, "route": i.route, "source": i.source} for i in items}
+
+
+def _changed(opts: dict[str, Any], io: Streams, cwd: str) -> tuple[list[FileChange], int] | int:
+    """The changed files the review judges and how many vendored ones it left out, or the exit code."""
     try:
         changed = parse_unified_diff(_read_diff(opts, io.stdin, cwd))
     except (ReviewError, OSError) as e:
@@ -208,18 +262,29 @@ def _payloads(opts: dict[str, Any], io: Streams, cwd: str) -> dict[str, Any] | i
     if not files:
         io.stdout.write("heimdall review: nothing to review (empty diff)\n")
         return EXIT_OK
+    return files, len(changed) - len(files)
+
+
+def _payloads(opts: dict[str, Any], io: Streams, cwd: str) -> Calls | int:
+    """Every call the review makes, or the exit code when there is no diff to judge."""
+    found = _changed(opts, io, cwd)
+    if isinstance(found, int):
+        return found
+    files, vendored = found
     m = _load_map(cwd, io.stderr)
     shape = function_shape(cwd, files, m)
-    state = build_state(files, m, opts["task"], wall_findings(cwd, files), shape)
+    items, not_asked = changed_functions(cwd, files, m)
+    state = build_state(files, m, opts["task"], Known(wall_findings(cwd, files), shape, _function_state(items)))
+    qs, asked = ask(items, [norm(f.path) for f in files])
     crafts = [craft_state(f, opts["task"], shape) for f in craft_files(cwd, files, m)]
-    state["facts"]["vendored_files"] = len(changed) - len(files)
-    state["facts"]["craft_files"] = [c["file"]["path"] for c in crafts]
-    state["facts"]["craft_truncated"] = [c["file"]["path"] for c in crafts if c["facts"]["truncated"]]
-    return {
-        "diff": {"model": opts["model"], "state": state, "questions": questions()},
-        "files": [{"model": opts["model"], "state": c, "questions": file_questions()} for c in crafts],
-        "sources": _source_paths(state, files),
-    }
+    facts = state["facts"]
+    facts.update(vendored_files=vendored, functions_asked=len(items), functions_not_asked=not_asked)
+    facts.update(
+        craft_files=[c["file"]["path"] for c in crafts], craft_truncated=[c["file"]["path"] for c in crafts if c["facts"]["truncated"]]
+    )
+    diff = {"model": opts["model"], "state": state, "questions": qs}
+    craft_calls = [{"model": opts["model"], "state": c, "questions": file_questions()} for c in crafts]
+    return Calls(diff, craft_calls, _source_paths(state, files), asked)
 
 
 def _source_paths(state: dict[str, Any], files: list[FileChange]) -> list[str]:
@@ -228,55 +293,24 @@ def _source_paths(state: dict[str, Any], files: list[FileChange]) -> list[str]:
     return shown + [norm(f.path) for f in files if f.status != "deleted" and norm(f.path) not in shown]
 
 
-def _jev(payloads: dict[str, Any], transport: Transport, opts: dict[str, Any], stderr: TextIO) -> Verdict | None:
-    """Jev's verdict on the diff and on each file judged whole; ``None`` when a call gave no verdict."""
-    response = _judge(payloads["diff"], transport, stderr)
-    per_file = _judge_files(payloads["files"], transport, stderr) if response is not None else None
+def _jev(calls: Calls, transport: Transport, opts: dict[str, Any], stderr: TextIO) -> Verdict | None:
+    """Jev's verdict on the checks and on each file judged whole; ``None`` when a call gave no verdict."""
+    response = _judge_checks(calls.diff, transport, stderr)
+    per_file = _judge_files(calls.files, transport, stderr) if response is not None else None
     if response is None or per_file is None:
         return None
-    state = payloads["diff"]["state"]
-    file_answers = {c["state"]["file"]["path"]: r["answers"] for c, r in zip(payloads["files"], per_file, strict=True)}
+    file_answers = {c["state"]["file"]["path"]: r["answers"] for c, r in zip(calls.files, per_file, strict=True)}
+    answers = response["answers"]
     model = str(response.get("model", opts["model"]))
-    return decide(response["answers"], state["facts"], model, _usage([response, *per_file]), file_answers)
+    judgment = Judgment(evaluate(answers, calls.asked), file_answers, answers, model, _usage([response, *per_file]))
+    return decide(judgment, calls.diff["state"]["facts"])
 
 
-def _reviewer(opts: dict[str, Any], seams: Seams, environ: Mapping[str, str]) -> Reviewer | None:
-    """Claude, only when the run asks for it with ``--claude``: the PR workflow does, a local run and the Stop hook
-    do not, so a key in a developer's environment never makes a paid call on its own."""
-    if not opts["claude"]:
-        return None
-    if seams.claude is not None:
-        return seams.claude
-    return claude_review if any(environ.get(k) for k in KEY_ENVS) else None
-
-
-def _inquiry(opts: dict[str, Any], payloads: dict[str, Any], sources: dict[str, str]) -> ReviewInquiry:
-    state = payloads["diff"]["state"]
-    craft = list(state["facts"].get("craft_files") or [])
-    return ReviewInquiry(
-        opts["task"] or "", state["facts"], state["architecture"], questions(), file_questions(), craft, state["files"], sources
-    )
-
-
-def _failed(error: VerifyError) -> Check:
-    def check(_: Any) -> Any:
-        raise error
-
-    return check
-
-
-def _claude(jev: Verdict, review: Reviewer | None, inquiry: ReviewInquiry) -> Verdict:
-    """Claude's verdict with Jev's beside it; Jev's alone, each judged block unverified, when Claude gave none."""
-    evidence = Evidence(inquiry.task, inquiry.diff, inquiry.sources)
-    if review is None:
-        return settle(jev, None, evidence)
-    try:
-        c = review(inquiry)
-    except VerifyError as e:
-        return settle(jev, _failed(e), evidence)
-    verdict = settle(decide(c.answers, inquiry.facts, c.model, c.usage, c.files), anchored(c.answers, c.files), evidence)
-    verdict.jev = jev
-    return verdict
+def _checker(seams: Seams, environ: Mapping[str, str]) -> Check | None:
+    """The PR pipeline's verifier: Claude when a key is set; ``None`` (every failing check escalates) without one."""
+    if seams.check is not None:
+        return seams.check
+    return claude_check if any(environ.get(k) for k in KEY_ENVS) else None
 
 
 def run(args: list[str], io: Streams, cwd: str, seams: Seams | None = None) -> int:
@@ -287,19 +321,21 @@ def run(args: list[str], io: Streams, cwd: str, seams: Seams | None = None) -> i
     except ReviewError as e:
         io.stderr.write(str(e) + "\n")
         return 2
-    payloads = _payloads(opts, io, cwd)
-    if isinstance(payloads, int):
-        return payloads
+    calls = _payloads(opts, io, cwd)
+    if isinstance(calls, int):
+        return calls
     if opts["dry_run"]:
-        io.stdout.write(json.dumps(payloads, indent=2, ensure_ascii=False) + "\n")
+        io.stdout.write(json.dumps(calls.printable(), indent=2, ensure_ascii=False) + "\n")
         return EXIT_OK
     transport = seams.transport or _transport_from_env(opts, environ, io, cwd)
     if isinstance(transport, int):
         return transport
-    verdict = _jev(payloads, transport, opts, io.stderr)
+    verdict = _jev(calls, transport, opts, io.stderr)
     if verdict is None:
         return EXIT_ERROR
-    inquiry = _inquiry(opts, payloads, read_sources(cwd, payloads["sources"]))
-    verdict = _claude(verdict, _reviewer(opts, seams, environ), inquiry)
-    _report(opts, verdict, payloads["diff"]["state"], io, cwd)
+    state = calls.diff["state"]
+    if opts["claude"]:
+        evidence = Evidence(opts["task"] or "", state["files"], read_sources(cwd, calls.sources))
+        verdict = settle(verdict, _checker(seams, environ), evidence)
+    _report(opts, verdict, state, io, cwd)
     return verdict.exit_code

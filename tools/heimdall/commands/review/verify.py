@@ -1,8 +1,8 @@
-"""Evidence before a block. A block that rests on the reviewer's answers is a doubt, and it blocks only when it is
-anchored: a named file and function, and lines quoted from that file, which this module finds in the file before
-it believes them. Claude answers the review and gives its findings with each answer (``anchored``); a doubt with
-no evidence, or with no review at all (no key, no answer), goes to a person. A fact (Eitri) is never put to
-this test: it stands.
+"""The second opinion: Jev triages, Claude verifies. A block that rests on Jev's answers is a doubt, and a doubt
+blocks only when the verifier confirms it with evidence: a named file and function, and lines quoted from that
+file, which this module finds in the file before it believes them. A refuted doubt falls away; one the verifier
+cannot decide, or that it was never asked about (no key, no answer), goes to a person. A fact (Eitri) is never
+put to the verifier: it stands.
 
 Why: Jev answers in probabilities and never names a place, so a block resting on it alone told the agent to
 "split each function" without saying which; the agent could only guess, and a guess does not move the score."""
@@ -23,14 +23,13 @@ MAX_SOURCE_TOKENS = 120_000  # the changed files sent whole; the verifier reads 
 
 
 class VerifyError(Exception):
-    """Claude could not answer: no response, a refusal, or an answer of the wrong shape."""
+    """The verifier could not rule: no answer, a refusal, or an answer of the wrong shape."""
 
 
 @dataclass(frozen=True)
 class Doubt:
-    reason: str  # the block as the policy worded it
+    reason: str  # the block as Jev's policy worded it
     advice: str  # the fix it proposed
-    key: str = ""  # the answer it rests on: a question, or ``file:<path>`` for one file's clean code
 
 
 @dataclass(frozen=True)
@@ -105,41 +104,28 @@ def _quoted_at(lines: list[str], start: int, quoted: list[str]) -> bool:
     return bool(lines[start]) and rest == quoted
 
 
-def _findings(raw: Any) -> tuple[Finding, ...]:
-    """The findings an answer carries, skipping any of the wrong shape."""
-    found = []
-    for item in raw if isinstance(raw, list) else []:
-        try:
-            found.append(Finding(**item))
-        except TypeError:
-            continue
-    return tuple(found)
-
-
-def anchored(answers: dict[str, Any], files: dict[str, dict[str, Any]]) -> Check:
-    """Rulings from Claude's own answers: a block stands on the findings of the answer it rests on. Claude gives
-    its evidence with the answer, so no second call is made; a block whose answer gave none goes to a person."""
-
-    def answer_for(key: str) -> dict[str, Any]:
-        if key.startswith("file:"):
-            return (files.get(key.removeprefix("file:")) or {}).get("clean_code") or {}
-        return answers.get(key) or {}
-
-    def rule(doubt: Doubt) -> Ruling:
-        a = answer_for(doubt.key)
-        found, reason = _findings(a.get("findings")), str(a.get("reason") or "no reason given")
-        return Ruling(CONFIRMED, reason, found) if found else Ruling(UNDECIDED, f"no evidence given: {reason}")
-
-    return lambda inquiry: [rule(d) for d in inquiry.doubts]
+def parse_rulings(raw: Any, count: int) -> list[Ruling]:
+    """The verifier's answer as rulings, one per doubt in order; ``VerifyError`` when it is not that."""
+    items = raw.get("rulings") if isinstance(raw, dict) else None
+    if not isinstance(items, list) or len(items) != count:
+        raise VerifyError(f"expected {count} ruling(s), got {raw!r:.200}")
+    try:
+        ordered = sorted(items, key=lambda r: int(r["doubt"]))
+        rulings = [Ruling(str(r["verdict"]), str(r["reason"]), tuple(Finding(**f) for f in r["findings"])) for r in ordered]
+    except (KeyError, TypeError, ValueError) as e:
+        raise VerifyError(f"a ruling of the wrong shape ({e})") from None
+    if any(r.verdict not in (CONFIRMED, REFUTED, UNDECIDED) for r in rulings):
+        raise VerifyError("a verdict other than confirmed, refuted or undecided")
+    return rulings
 
 
 def _rule(check: Check | None, inquiry: Inquiry) -> list[Ruling]:
     """The rulings with every confirmation checked against the code; undecided for all when there is no verifier
     or it could not rule."""
     if check is None:
-        return [Ruling(UNDECIDED, "Claude did not review: it answers in CI (heimdall review --claude, with ANTHROPIC_API_KEY)")] * len(
-            inquiry.doubts
-        )
+        return [
+            Ruling(UNDECIDED, "Claude did not verify: it runs in the PR pipeline (heimdall review --claude, with ANTHROPIC_API_KEY)")
+        ] * len(inquiry.doubts)
     try:
         rulings = check(inquiry)
     except VerifyError as e:
@@ -167,26 +153,44 @@ def _record(doubts: list[Doubt], rulings: list[Ruling]) -> list[dict[str, Any]]:
     ]
 
 
+def _doubts(v: Verdict) -> tuple[list[Doubt], list[Doubt]]:
+    """The checks to verify: those that failed (they block unless refuted) and those Jev was unsure of (they
+    block only if confirmed). Facts are never among them."""
+    failing = [Doubt(v.reasons[i], v.advice[i]) for i in v.judged] if v.outcome == "request_changes" else []
+    return failing, [Doubt(reason, advice) for reason, advice in v.unsure]
+
+
+def _facts_of(v: Verdict) -> list[tuple[str, str]]:
+    """The blocks that rest on a fact, kept whatever the verifier says."""
+    if v.outcome != "request_changes":
+        return []
+    return [(r, a) for i, (r, a) in enumerate(zip(v.reasons, v.advice, strict=True)) if i not in v.judged]
+
+
 def settle(v: Verdict, check: Check | None, evidence: Evidence) -> Verdict:
-    """Jev's verdict once the verifier has ruled on each of its judged blocks: facts and confirmed doubts block,
-    undecided doubts escalate, and with every doubt refuted the outcome is the one Jev gives without them."""
-    if v.outcome != "request_changes" or not v.judged or v.unblocked is None:
+    """Jev's verdict once the verifier has ruled on each failing and unsure check: facts and confirmed checks
+    block, an undecided failing check escalates, and with nothing confirmed the outcome is the one without them."""
+    failing, unsure = _doubts(v)
+    if not failing and not unsure:
         return v
-    doubts = [Doubt(v.reasons[i], v.advice[i], v.keys[i]) for i in v.judged]
+    doubts = failing + unsure
     rulings = _rule(check, Inquiry(evidence.task, tuple(doubts), evidence.diff, evidence.sources))
     record = _record(doubts, rulings)
-    facts = [(r, a) for i, (r, a) in enumerate(zip(v.reasons, v.advice, strict=True)) if i not in v.judged]
     confirmed = [(d.reason, _where(r)) for d, r in zip(doubts, rulings, strict=True) if r.verdict == CONFIRMED]
-    if facts or confirmed:
-        reasons, advice = zip(*(facts + confirmed), strict=True)
-        return replace(v, reasons=list(reasons), advice=list(advice), judged=[], unblocked=None, verification=record)
+    blocks = _facts_of(v) + confirmed
+    if blocks:
+        reasons, advice = zip(*blocks, strict=True)
+        return replace(
+            v, outcome="request_changes", reasons=list(reasons), advice=list(advice), judged=[], unblocked=None, verification=record
+        )
+    base = v.unblocked or v
     undecided = [
         (f"unverified: {d.reason}", f"{r.reason}. Proposed fix: {d.advice}")
-        for d, r in zip(doubts, rulings, strict=True)
+        for d, r in zip(failing, rulings, strict=False)
         if r.verdict == UNDECIDED
     ]
     if undecided:
-        rest = list(zip(v.unblocked.reasons, v.unblocked.advice, strict=False)) if v.unblocked.outcome == "escalate" else []
+        rest = list(zip(base.reasons, base.advice, strict=False)) if base.outcome == "escalate" else []
         reasons, advice = zip(*(undecided + rest), strict=True)
         return replace(v, outcome="escalate", reasons=list(reasons), advice=list(advice), judged=[], unblocked=None, verification=record)
-    return replace(v.unblocked, verification=record)
+    return replace(base, verification=record)

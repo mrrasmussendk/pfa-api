@@ -5,14 +5,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from .policy import Verdict
+from .policy import FAIL, UNSURE, Verdict, blast_radius
 from .questions import file_questions
 from .state import shape_line
 
-_BADGE = {"approve": "✅", "comment": "💬", "request_changes": "🛑", "escalate": "🙋"}
+_BADGE = {"comment": "💬", "request_changes": "🛑", "escalate": "🙋"}
 
 
 def _fmt_answer(key: str, a: dict[str, Any], qs: dict[str, dict[str, Any]]) -> tuple[str, str]:
+    """A file's clean-code answer as ``(label, numbers)`` for the per-file table."""
     t = a.get("type")
     if t == "noul":
         p = float(a.get("noul", 0.0))
@@ -62,47 +63,20 @@ def _verification_lines(v: Verdict) -> list[str]:
     return [f"Claude {r['verdict']}: {r['doubt']} — {r['reason']}" for r in v.verification]
 
 
-def _cell(key: str, a: Any, qs: dict[str, dict[str, Any]]) -> str:
-    if not isinstance(a, dict):
-        return "—"
-    ans, prob = _fmt_answer(key, a, qs)
-    return f"{ans} {prob}"
+def _flagged(v: Verdict) -> list[tuple[str, str, str]]:
+    """``(check, where, p)`` for each check that failed or was unsure, failures first."""
+    flagged = sorted((r for r in v.rows if r.state in (FAIL, UNSURE)), key=lambda r: (r.state != FAIL, -r.p))
+    return [(f"{r.check} ({r.state})", r.where, f"{r.p:.2f}") for r in flagged]
 
 
-def _answer_rows(v: Verdict, qs: dict[str, dict[str, Any]]) -> list[str]:
-    """The stdout table: Claude's answer beside Jev's when Claude reviewed; Jev's answer and probability otherwise."""
-    if v.jev is None:
-        rows = ["question".ljust(28) + "answer".ljust(44) + "probability"]
-        for key in qs:
-            a = v.answers.get(key)
-            if isinstance(a, dict):
-                ans, prob = _fmt_answer(key, a, qs)
-                rows.append(key.ljust(28) + ans[:43].ljust(44) + prob)
-        return rows
-    jev = v.jev.answers
-    return ["question".ljust(28) + "Claude".ljust(44) + "Jev"] + [
-        key.ljust(28) + _cell(key, v.answers.get(key), qs)[:43].ljust(44) + _cell(key, jev.get(key), qs) for key in qs
-    ]
+def _checked(v: Verdict) -> str:
+    """One line on what was checked: how many checks, on how many functions, and how they came out."""
+    functions = len({r.where for r in v.rows if r.key.startswith("f")})
+    fails, unsure = sum(r.state == FAIL for r in v.rows), sum(r.state == UNSURE for r in v.rows)
+    return f"{len(v.rows)} checks on {functions} changed functions and the change: {fails} failed, {unsure} unsure"
 
 
-def _answer_table(v: Verdict, qs: dict[str, dict[str, Any]]) -> list[str]:
-    """The comment's table: with Claude's reason for each answer when Claude reviewed."""
-    if v.jev is None:
-        rows = ["| question | answer | probability |", "|---|---|---|"]
-        for key in qs:
-            a = v.answers.get(key)
-            if isinstance(a, dict):
-                ans, prob = _fmt_answer(key, a, qs)
-                rows.append(f"| `{key}` | {ans} | {prob} |")
-        return rows
-    rows = ["| question | Claude | why (Claude) | Jev |", "|---|---|---|---|"]
-    for key in qs:
-        why = str((v.answers.get(key) or {}).get("reason", "")).replace("|", "/")
-        rows.append(f"| `{key}` | {_cell(key, v.answers.get(key), qs)} | {why} | {_cell(key, v.jev.answers.get(key), qs)} |")
-    return rows
-
-
-def render_table(v: Verdict, qs: dict[str, dict[str, Any]], facts: dict[str, Any] | None = None) -> str:
+def render_table(v: Verdict, facts: dict[str, Any] | None = None) -> str:
     """The stdout report. The Stop hook hands the agent its tail, so each reason carries its advice: the
     reason alone ("clean code 2.28/3 below the target") names nothing to fix."""
     rows = [f"outcome: {v.outcome}  ({'; '.join(v.reasons)})", ""]
@@ -117,28 +91,27 @@ def render_table(v: Verdict, qs: dict[str, dict[str, Any]], facts: dict[str, Any
     shape = (facts or {}).get("function_shape") or []
     if shape:
         rows += [f"  over the limits: {shape_line(x)}" for x in shape] + [""]
-    rows += _answer_rows(v, qs)
+    rows.append(_checked(v))
+    flagged = _flagged(v)
+    if flagged:
+        rows.append("check".ljust(30) + "where".ljust(70) + "p")
+        rows += [check.ljust(30) + where[:69].ljust(70) + p for check, where, p in flagged]
     rows.append("")
     files = _file_rows(v)
     if files:
         rows.append("file (judged whole)".ljust(56) + "clean code".ljust(32) + "limit")
         rows += [path[:55].ljust(56) + score.ljust(32) + label for path, score, label in files]
         rows.append("")
-    beside = f" · beside it Jev {v.jev.model} ({v.jev.outcome} on its own)" if v.jev else ""
-    rows.append(
-        f"model: {v.model} · input tokens {v.usage.get('input_tokens', '?')} · output tokens {v.usage.get('output_tokens', '?')}{beside}"
-    )
+    rows.append(f"model: {v.model} · input tokens {v.usage.get('input_tokens', '?')} · output tokens {v.usage.get('output_tokens', '?')}")
     return "\n".join(rows) + "\n"
 
 
 def _what_went_wrong(v: Verdict, facts: dict[str, Any]) -> list[str]:
     """The part of the comment a human reads first."""
-    if v.outcome == "approve":
-        return []
     lines = ["### What went wrong" if v.outcome == "request_changes" else "### What the judge wants", ""]
     lines += [f"- **{reason}.** {why}" for reason, why in zip(v.reasons, v.advice, strict=False)]
     if v.outcome == "comment":
-        lines.append("- Nothing blocks the merge; the notes above are what a reviewer would raise.")
+        lines.append("- No check failed. A person still decides the merge; the notes above are what a reviewer would look at.")
     violations = facts.get("wall_violations") or []
     if violations:
         lines += ["", "Eitri's findings in the changed files:", ""]
@@ -162,6 +135,9 @@ def _told_the_judge(facts: dict[str, Any]) -> list[str]:
         + (" — **cross-slice**" if facts["cross_slice_change"] else ""),
         "- contracts touched: " + (", ".join(_contract_label(k, d) for k, d in facts["contracts_touched"].items()) or "(none)"),
         f"- routes changed: {'yes' if facts['routes_changed'] else 'no'} · tests changed: {len(facts['tests_changed'])} · docs changed: {'yes' if facts['docs_changed'] else 'no'}",
+        "- blast radius (from the facts): {1} ({0}/2)".format(*blast_radius(facts)),
+        f"- changed functions asked about: {facts.get('functions_asked', 0)}"
+        + (f"; {facts['functions_not_asked']} more did not fit the budget" if facts.get("functions_not_asked") else ""),
     ]
     shape = facts.get("function_shape") or []
     if shape:
@@ -210,7 +186,7 @@ def _size_line(facts: dict[str, Any]) -> str:
     return line + f"; the whole diff (~{whole:,} tokens) was seen"
 
 
-def render_markdown(v: Verdict, state: dict[str, Any], qs: dict[str, dict[str, Any]]) -> str:
+def render_markdown(v: Verdict, state: dict[str, Any]) -> str:
     facts = state["facts"]
     lines = [
         "<!-- heimdall-review -->",
@@ -220,12 +196,16 @@ def render_markdown(v: Verdict, state: dict[str, Any], qs: dict[str, dict[str, A
         "",
         *_what_went_wrong(v, facts),
         *(["### How Claude ruled on Jev's doubts", "", *(f"- {line}" for line in _verification_lines(v)), ""] if v.verification else []),
-        *_answer_table(v, qs),
+        f"_{_checked(v)}._",
+        "",
     ]
+    flagged = _flagged(v)
+    if flagged:
+        lines += ["| check | where | p |", "|---|---|---|", *(f"| {check} | `{where}` | {p} |" for check, where, p in flagged)]
     lines += _clean_code_by_file(v)
     lines += ["", "<details><summary>What Heimdall told the judge</summary>", "", *_told_the_judge(facts), "", "</details>", ""]
     lines.append(
         f"<sub>Jev `{v.model}` via `heimdall review` — typed judgments, policy in code. "
-        f"Probabilities are a policy input, not proof; `request changes` fails the check, `escalate` asks for a human.</sub>"
+        f"Each check is one narrow question about one place; probabilities are a policy input, not proof. A person always decides the merge.</sub>"
     )
     return "\n".join(lines) + "\n"
