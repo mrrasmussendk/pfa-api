@@ -7,3 +7,8 @@
 *.toml text eol=lf
 *.yml text eol=lf
 Dockerfile text eol=lf
+
+# Copied in by the Postman CLI, not written here: GitHub collapses them in a PR, and `heimdall review` leaves
+# them out of what Jev judges.
+postman/skills/** linguist-vendored
+.postman/skills.json linguist-vendored

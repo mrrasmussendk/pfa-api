@@ -299,6 +299,16 @@ def test_all_runs_every_scenario_without_a_change_or_jev(repo: TempRepo) -> None
     assert code == EXIT_OK and seen == [] and ran == [["kvad/squares", "rune/carves"]] and "green" in out
 
 
+def test_all_without_scenarios_says_there_are_none(repo: TempRepo) -> None:
+    write_e2e_project(repo)
+    (repo.root / "tests/e2e/kvad/squares.json").unlink()
+    (repo.root / "tests/e2e/rune/carves.json").unlink()
+
+    code, out, _ = _run(repo, "--all", seams=Seams(runner=_runner(GREEN)))
+
+    assert code == EXIT_OK and "no scenarios under tests/e2e" in out and "reached by this change" not in out
+
+
 def test_all_exits_failed_when_a_scenario_fails(repo: TempRepo) -> None:
     write_e2e_project(repo)
 

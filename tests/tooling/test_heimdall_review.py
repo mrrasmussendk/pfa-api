@@ -32,6 +32,7 @@ from heimdall.commands.review import (
     wall_findings,
 )
 from heimdall.commands.review.state import area_of
+from heimdall.commands.review.vendored import is_vendored
 from heimdall.model import MapModel
 
 DIFF = """\
@@ -243,6 +244,51 @@ def test_a_feature_s_notes_are_docs_not_the_feature() -> None:
     assert area_of("src/pfa/features/kvad/AGENTS.md", _map()) == "docs"
 
 
+def _doc_diff(n: int) -> str:
+    return "".join(
+        f"diff --git a/docs/d{i}.md b/docs/d{i}.md\n--- a/docs/d{i}.md\n+++ b/docs/d{i}.md\n@@ -1 +1 @@\n-old\n+new line {i}\n"
+        for i in range(n)
+    )
+
+
+def test_the_whole_state_fits_the_budget_however_many_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(review.state, "MAX_STATE_TOKENS", 3_000)
+
+    state = build_state(parse_unified_diff(DIFF + _doc_diff(300)), _map(), None)
+
+    assert estimate(json.dumps(state, ensure_ascii=False)) <= 3_000
+    assert state["facts"]["files_changed"] == 304 and state["facts"]["files_not_shown"] > 0
+    assert any(e["path"] == "src/pfa/api/routes/kvad.py" for e in state["files"])  # the code is the last to go
+
+
+def test_vendored_files_are_left_out_of_the_review(repo: TempRepo) -> None:
+    repo.write_file(".gitattributes", "* text=auto\npostman/skills/** linguist-vendored\n")
+    vendored = "diff --git a/postman/skills/x/SKILL.md b/postman/skills/x/SKILL.md\n--- a/postman/skills/x/SKILL.md\n+++ b/postman/skills/x/SKILL.md\n@@ -1 +1 @@\n-a\n+b\n"
+    repo.write_file("change.diff", vendored + DIFF)
+
+    code, out, _ = _run(repo, "--diff", "change.diff", "--dry-run")
+
+    facts = json.loads(out)["diff"]["state"]["facts"]
+    assert code == EXIT_OK and facts["files_changed"] == 4 and facts["vendored_files"] == 1
+
+
+@pytest.mark.parametrize(
+    ("path", "pattern", "vendored"),
+    [
+        ("postman/skills/x/SKILL.md", "postman/skills/**", True),
+        ("postman/collections/e2e/a.yaml", "postman/skills/**", False),
+        ("third_party/lib/a.py", "/third_party/", True),
+        (".postman/skills.json", ".postman/skills.json", True),
+        ("web/dist/app.min.js", "*.min.js", True),
+        ("gen/a.py", "**/gen/**", True),
+        ("x/gen/a.py", "**/gen/**", True),
+        ("src/pfa/app.py", "*.min.js", False),
+    ],
+)
+def test_vendored_patterns_match_as_git_does(path: str, pattern: str, vendored: bool) -> None:
+    assert is_vendored(path, [pattern]) is vendored
+
+
 def test_exported_diagrams_are_dropped_from_the_diff() -> None:
     svg = "diff --git a/docs/diagrams/x.svg b/docs/diagrams/x.svg\n--- a/docs/diagrams/x.svg\n+++ b/docs/diagrams/x.svg\n@@ -1 +1 @@\n-<svg/>\n+<svg></svg>\n"
     assert [f.path for f in parse_unified_diff(svg + DIFF)] == [f.path for f in parse_unified_diff(DIFF)]
@@ -252,10 +298,12 @@ def test_the_budget_is_spent_on_the_source_before_tests_and_docs(monkeypatch: py
     files = parse_unified_diff(DIFF)
     files.reverse()  # git lists the docs first; the judge must still see the code
     source = [f for f in files if f.path.startswith("src/")]
-    monkeypatch.setattr(review.state, "MAX_STATE_TOKENS", sum(estimate(f.text) for f in source))
+    room_for_the_source = estimate(json.dumps(build_state(source, _map(), None), ensure_ascii=False)) + 60
+    monkeypatch.setattr(review.state, "MAX_STATE_TOKENS", room_for_the_source)
     state = build_state(files, _map(), None)
-    assert [e["area"] for e in state["files"]] == ["slice:kvad", "contract:rune", "tests", "docs"]
+    assert [e["area"] for e in state["files"]][:2] == ["slice:kvad", "contract:rune"]
     assert not any(p.startswith("src/") for p in state["facts"]["files_truncated"])
+    assert state["facts"]["files_not_shown"] + len(state["files"]) == 4
 
 
 def test_questions_are_valid_system_one_requests() -> None:

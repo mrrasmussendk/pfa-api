@@ -19,6 +19,7 @@ from .questions import file_questions, questions
 from .report import render_markdown, render_table
 from .state import build_state, function_shape, wall_findings
 from .transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL, Transport, http_transport
+from .vendored import is_vendored, vendored_patterns
 
 USAGE = (
     "usage: heimdall review [--base <ref> | --diff <file|->] [--task <text>] [--model jev-latest]\n"
@@ -179,10 +180,12 @@ def _payloads(opts: dict[str, Any], io: Streams, cwd: str) -> dict[str, Any] | i
     """Every call the review makes — ``diff``: the one about the change; ``files``: one per edited application
     file, whole — or the exit code when there is no diff to judge. The diff's facts name the files judged whole."""
     try:
-        files = parse_unified_diff(_read_diff(opts, io.stdin, cwd))
+        changed = parse_unified_diff(_read_diff(opts, io.stdin, cwd))
     except (ReviewError, OSError) as e:
         io.stderr.write(f"heimdall review: {e}\n")
         return EXIT_ERROR
+    patterns = vendored_patterns(cwd)
+    files = [f for f in changed if not is_vendored(f.path, patterns)]
     if not files:
         io.stdout.write("heimdall review: nothing to review (empty diff)\n")
         return EXIT_OK
@@ -190,6 +193,7 @@ def _payloads(opts: dict[str, Any], io: Streams, cwd: str) -> dict[str, Any] | i
     shape = function_shape(cwd, files, m)
     state = build_state(files, m, opts["task"], wall_findings(cwd, files), shape)
     crafts = [craft_state(f, opts["task"], shape) for f in craft_files(cwd, files, m)]
+    state["facts"]["vendored_files"] = len(changed) - len(files)
     state["facts"]["craft_files"] = [c["file"]["path"] for c in crafts]
     state["facts"]["craft_truncated"] = [c["file"]["path"] for c in crafts if c["facts"]["truncated"]]
     return {

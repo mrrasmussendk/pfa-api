@@ -16,7 +16,7 @@ from ...store import UnreadableMap, heimdall_dir, load_map
 from ..review import FileChange, ReviewError, Streams, Transport, build_state, http_transport, parse_unified_diff
 from ..review.state import is_application
 from ..review.transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL
-from .base import EXIT_ERROR, EXIT_FAILED, EXIT_NEEDS_SCENARIOS, EXIT_OK, GUIDE, SYSTEM, E2EError
+from .base import EXIT_ERROR, EXIT_FAILED, EXIT_NEEDS_SCENARIOS, EXIT_OK, GUIDE, SCENARIOS_DIR, SYSTEM, E2EError
 from .change import Change, fingerprint, working_diff
 from .judge import Plan, T, decide, fallback, questions
 from .runner import Runner, system_runner
@@ -168,9 +168,6 @@ def _plan(sit: _Situation, seams: Seams, out: TextIO) -> Plan:
 
 def _passes(chosen: list[Scenario], runner: Runner, out: TextIO) -> bool:
     """Whether every chosen scenario passed; a failure's runner output is written for the agent to act on."""
-    if not chosen:
-        out.write("heimdall e2e: no scenario is reached by this change\n")
-        return True
     out.write(f"heimdall e2e: running {len(chosen)} scenario(s): {', '.join(s.id for s in chosen)}\n")
     result = runner(chosen)
     if not result.ok:
@@ -199,6 +196,13 @@ def _owed(lines: list[str], out: TextIO) -> int:
     return EXIT_OK
 
 
+def _verdict(chosen: list[Scenario], owed: list[str], runner: Runner, out: TextIO) -> int:
+    """The run's exit code: the chosen scenarios first, then the scenarios still to write or fix."""
+    if chosen and not _passes(chosen, runner, out):
+        return EXIT_FAILED
+    return _owed(owed, out)
+
+
 def _load_map(cwd: str, err: TextIO) -> MapModel | None:
     try:
         return load_map(heimdall_dir(cwd))
@@ -207,22 +211,29 @@ def _load_map(cwd: str, err: TextIO) -> MapModel | None:
         return None
 
 
-def _execute(opts: dict[str, Any], io: Streams, cwd: str, seams: Seams) -> int:
-    diff = _read_diff(opts, cwd)
-    files = parse_unified_diff(diff)
+def _idle(files: list[FileChange], fp: str, opts: dict[str, Any], cwd: str) -> str | None:
+    """Why there is nothing to run, or ``None``: an empty change, or the one the last green run saw."""
     if not files:
-        io.stdout.write("heimdall e2e: nothing changed\n")
-        return EXIT_OK
-    fp = fingerprint(diff)
+        return "nothing changed"
     if not opts.get("force") and _last_green(cwd) == fp:
-        io.stdout.write("heimdall e2e: unchanged since the last green run\n")
+        return "unchanged since the last green run"
+    return None
+
+
+def _execute(opts: dict[str, Any], io: Streams, cwd: str, seams: Seams) -> int:
+    """The scenarios the change reaches, run; a green verdict is remembered against the change."""
+    diff = _read_diff(opts, cwd)
+    files, fp = parse_unified_diff(diff), fingerprint(diff)
+    idle = _idle(files, fp, opts, cwd)
+    if idle:
+        io.stdout.write(f"heimdall e2e: {idle}\n")
         return EXIT_OK
     system = load_system(cwd)
     scenarios, problems = load_scenarios(cwd, system)
     plan = _plan(_Situation(files, _load_map(cwd, io.stderr), scenarios, opts.get("task")), seams, io.stdout)
-    if not _passes(plan.rerun, seams.runner or system_runner(cwd, system), io.stdout):
-        return EXIT_FAILED
-    code = _owed(_owed_lines(plan, problems, system), io.stdout)
+    if not plan.rerun:
+        io.stdout.write("heimdall e2e: no scenario is reached by this change\n")
+    code = _verdict(plan.rerun, _owed_lines(plan, problems, system), seams.runner or system_runner(cwd, system), io.stdout)
     if code == EXIT_OK:
         _remember_green(cwd, fp)
     return code
@@ -232,9 +243,9 @@ def _execute_all(io: Streams, cwd: str, seams: Seams) -> int:
     """Every scenario against the started system: the promise checked on every push, not only on an agent's stop."""
     system = load_system(cwd)
     scenarios, problems = load_scenarios(cwd, system)
-    if not _passes(scenarios, seams.runner or system_runner(cwd, system), io.stdout):
-        return EXIT_FAILED
-    return _owed([f"fix {p}" for p in problems], io.stdout)
+    if not scenarios:
+        io.stdout.write(f"heimdall e2e: no scenarios under {SCENARIOS_DIR}\n")
+    return _verdict(scenarios, [f"fix {p}" for p in problems], seams.runner or system_runner(cwd, system), io.stdout)
 
 
 def _new(args: list[str], io: Streams, cwd: str) -> int:
