@@ -33,6 +33,7 @@ from heimdall.commands.review import (
 )
 from heimdall.commands.review.state import area_of
 from heimdall.commands.review.vendored import is_vendored
+from heimdall.commands.review.verify import CONFIRMED, Finding, Ruling
 from heimdall.model import MapModel
 
 DIFF = """\
@@ -165,10 +166,12 @@ def _transport(answers: dict[str, Any], seen: list[dict[str, Any]] | None = None
     return call
 
 
-def _run(repo: TempRepo, *args: str, transport=None, env: dict[str, str] | None = None, stdin: str = "") -> tuple[int, str, str]:
+def _run(
+    repo: TempRepo, *args: str, transport=None, env: dict[str, str] | None = None, stdin: str = "", check=None
+) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     streams = review.Streams(io.StringIO(stdin), out, err)
-    code = review.run(list(args), streams, str(repo.root), transport=transport, env=env if env is not None else {})
+    code = review.run(list(args), streams, str(repo.root), review.Seams(transport, env if env is not None else {}, check))
     return code, out.getvalue(), err.getvalue()
 
 
@@ -416,7 +419,7 @@ def test_each_edited_application_file_is_judged_whole_in_its_own_call(repo: Temp
     code, out, _ = _run(
         repo, "--diff", "change.diff", "--json", "out/r.json", "--markdown", "out/r.md", transport=_transport(_answers(), seen, low)
     )
-    assert code == EXIT_REQUEST_CHANGES
+    assert code == EXIT_ESCALATE  # no verifier ran, so Jev's block goes to a person
     assert [("file" in p["state"]) for p in seen] == [False, True]  # the diff first, then the one file on disk
     craft = seen[1]
     assert craft["questions"] == file_questions() and craft["state"]["file"] == {
@@ -427,7 +430,7 @@ def test_each_edited_application_file_is_judged_whole_in_its_own_call(repo: Temp
     assert craft["state"]["facts"]["changed_lines"] == [2, 4] and craft["state"]["facts"]["truncated"] is False
     assert seen[0]["state"]["facts"]["craft_files"] == ["src/pfa/api/routes/kvad.py"]
     # the verdict names the file, and the advice says the whole file was rated and what limits it
-    assert out.startswith("outcome: request_changes  (clean code 2.31/3 in src/pfa/api/routes/kvad.py below the target 2.7)")
+    assert out.startswith("outcome: escalate  (unverified: clean code 2.31/3 in src/pfa/api/routes/kvad.py below the target 2.7)")
     assert "The judge rates the whole file src/pfa/api/routes/kvad.py, not only this change's lines, 2.31 on 0–3" in out
     assert "its most probable limit: duplication (0.70): extract the logic written twice into one function" in out
     assert (
@@ -461,11 +464,22 @@ def test_a_failed_file_call_is_exit_3_not_a_verdict(repo: TempRepo) -> None:
     assert code == EXIT_ERROR and "unreachable" in err
 
 
+def _confirm(*evidence: str):
+    """A verifier that confirms every doubt, quoting ``evidence`` from the route module."""
+    finding = Finding("src/pfa/api/routes/kvad.py", "router", 0, "\n".join(evidence), "the prefix is wrong", "fix it")
+    return lambda inquiry: [Ruling(CONFIRMED, "seen", (finding,))] * len(inquiry.doubts)
+
+
 def test_review_exit_codes_follow_the_outcome(repo: TempRepo) -> None:
     repo.write_sample_map()
     repo.write_file("change.diff", DIFF)
-    code, out, _ = _run(repo, "--diff", "change.diff", transport=_transport(_answers(has_security_concern={"type": "noul", "noul": 0.9})))
-    assert code == EXIT_REQUEST_CHANGES and out.startswith("outcome: request_changes")
+    repo.write_file("src/pfa/api/routes/kvad.py", _ROUTE_SOURCE)
+    insecure = _transport(_answers(has_security_concern={"type": "noul", "noul": 0.9}))
+    code, out, _ = _run(repo, "--diff", "change.diff", transport=insecure, check=_confirm("router = APIRouter(prefix='/kvad')"))
+    assert code == EXIT_REQUEST_CHANGES and out.startswith("outcome: request_changes  (confirmed by Claude: security concern")
+    assert "src/pfa/api/routes/kvad.py:3 router: the prefix is wrong. Fix: fix it." in out
+    code, out, _ = _run(repo, "--diff", "change.diff", transport=insecure)
+    assert code == EXIT_ESCALATE and out.startswith("outcome: escalate  (unverified: security concern")
     code, out, _ = _run(repo, "--diff", "change.diff", transport=_transport(_answers(needs_human_review={"type": "noul", "noul": 0.8})))
     assert code == EXIT_ESCALATE and out.startswith("outcome: escalate")
 
