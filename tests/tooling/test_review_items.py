@@ -57,3 +57,15 @@ def test_the_application_comes_before_the_tooling_and_the_budget_skips_the_rest(
     items, skipped = changed_functions(str(tmp_path), changes, sample_map(), budget=120)
 
     assert [i.name for i in items] == ["list_items"] and skipped == 1
+
+
+def test_a_function_over_its_own_budget_is_cut_at_a_line_and_says_so(tmp_path: Path) -> None:
+    body = "".join(f"    total_{i} = compute_value_number_{i}(previous_{i})\n" for i in range(400))
+    _write(tmp_path, "src/pfa/features/kvad/internal/engine.py", "def big(previous):\n" + body)
+
+    items, skipped = changed_functions(str(tmp_path), [touching("src/pfa/features/kvad/internal/engine.py", 2)], sample_map())
+
+    source = items[0].source
+    assert skipped == 0 and source.startswith("def big(previous):\n")
+    assert source.endswith("\n# … the rest of the function is not shown") and len(source) < len(body)
+    assert all(line.startswith(("def ", "    total_", "# …")) for line in source.splitlines())  # cut between lines, never inside one
