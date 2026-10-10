@@ -18,12 +18,13 @@ from ...pathutil import norm
 from ...store import UnreadableMap, append_findings, heimdall_dir, load_map
 from .base import EXIT_ERROR, EXIT_OK, ReviewError, Streams
 from .claude import KEY_ENVS, claude_check
+from .comment import render_comment
 from .craft import craft_files, craft_state
 from .diff import FileChange, git_diff, parse_unified_diff
 from .items import Item, changed_functions
 from .policy import Judgment, Verdict, decide, evaluate
 from .questions import Asked, ask, file_questions
-from .report import render_markdown, render_table
+from .report import render_table
 from .state import Known, build_state, function_shape, wall_findings
 from .transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL, Transport, http_transport
 from .vendored import is_vendored, vendored_patterns
@@ -235,7 +236,7 @@ def _report(opts: dict[str, Any], verdict: Verdict, state: dict[str, Any], io: S
         }
         _write(opts["json"], cwd, json.dumps(report, indent=2))
     if opts["markdown"]:
-        _write(opts["markdown"], cwd, render_markdown(verdict, state))
+        _write(opts["markdown"], cwd, render_comment(verdict, state))
     _telemetry(cwd, verdict, state["facts"], opts["session"])
 
 

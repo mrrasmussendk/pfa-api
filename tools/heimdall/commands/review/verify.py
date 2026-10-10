@@ -143,7 +143,7 @@ def _believed(ruling: Ruling, sources: dict[str, str]) -> Ruling:
 
 
 def _where(r: Ruling) -> str:
-    return " ".join(f"{f.file}:{f.line} {f.function}: {f.problem}. Fix: {f.fix}." for f in r.findings)
+    return " ".join(f"{f.file}:{f.line} {f.function}: {f.problem.rstrip('.')}. Fix: {f.fix.rstrip('.')}." for f in r.findings)
 
 
 def _record(doubts: list[Doubt], rulings: list[Ruling]) -> list[dict[str, Any]]:

@@ -24,7 +24,8 @@ one module per step:
                  ``request_changes`` · ``escalate``, never an approval: a person merges;
 - ``verify``     the PR pipeline: Claude confirms or refutes each failing or unsure check, with
                  evidence found in the file (``claude`` makes the call);
-- ``report``     the table on stdout and the PR comment, which says what went wrong in words;
+- ``report``     the table on stdout, which the Stop hook hands the agent;
+- ``comment``    the PR comment: what to fix first, each a place and a fix; the evidence folded below;
 - ``command``    argument parsing, outputs, telemetry.
 
 Exit codes: 0 comment · 1 request_changes · 2 escalate · 3 could not review.
@@ -38,11 +39,12 @@ from __future__ import annotations
 from . import craft, state
 from .base import EXIT_ERROR, EXIT_ESCALATE, EXIT_OK, EXIT_REQUEST_CHANGES, OUTCOMES, ReviewError, Streams
 from .command import USAGE, Seams, run
+from .comment import render_comment
 from .craft import CraftFile, craft_files, craft_state
 from .diff import FileChange, git_diff, parse_unified_diff
 from .policy import Judgment, Row, T, Verdict, decide, evaluate
 from .questions import Asked, ask, file_questions
-from .report import render_markdown, render_table
+from .report import render_table
 from .state import Known, build_state, function_shape, wall_findings
 from .transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL, Transport, http_transport
 
@@ -81,7 +83,7 @@ __all__ = [
     "git_diff",
     "http_transport",
     "parse_unified_diff",
-    "render_markdown",
+    "render_comment",
     "render_table",
     "run",
     "state",
