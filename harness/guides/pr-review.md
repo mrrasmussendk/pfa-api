@@ -101,7 +101,7 @@ A block that rests on an answer stands only on that answer's findings, and only 
 |---|---|
 | has findings whose quoted lines are in the file | `request_changes`, naming `file:line function`, the problem and the fix |
 | names a defect with no finding, or quotes lines that are not in the file | `escalate` (`unverified: …`): a person decides |
-| Claude did not answer: no `ANTHROPIC_API_KEY`, a refusal, or the call failed | Jev's verdict, every block of it escalated as unverified |
+| Claude did not answer: a local run (no `--claude`), no `ANTHROPIC_API_KEY`, a refusal, or the call failed | Jev's verdict, every block of it escalated as unverified |
 | an Eitri wall violation (a fact) | blocks; facts never need evidence |
 
 - ✅ Act on a block: it names the place, and its evidence was found in the file before it was believed.
@@ -109,7 +109,7 @@ A block that rests on an answer stands only on that answer's findings, and only 
 - ❌ Don't treat an `unverified` reason as a block, or Jev's column as the verdict.
 - ⚠️ **Check:** a key that is not scoped to a workspace answers 400 "must include the anthropic-workspace-id header". Set `ANTHROPIC_WORKSPACE_ID` (a repository variable in CI) or use a workspace-scoped key; until then Claude does not answer and every block escalates as unverified.
 
-Every review now makes one Claude call, with `fallbacks: "default"`, so a refused request retries server-side. The first run on this branch read 188 000 tokens and wrote 8 500 (about $0.46 at Sonnet 5.5's rates) in 70 seconds. Claude's outcome was `escalate` where Jev's was `request_changes`. They disagreed on `single_purpose` (Claude yes 0.80, Jev no 0.38) and on the biggest risk: Claude named docs, and it was right. This guide and the workflow comment still described the earlier verifier design. Each review in which both answer is a label on Jev's answers, which is the calibration data the thresholds in `T` have lacked.
+Claude answers only in CI: the PR workflow runs `heimdall review --claude`, and a local run or the Stop hook, without the flag, never calls it, even when `ANTHROPIC_API_KEY` is set. Locally you get Jev's verdict, every judged block escalated as unverified, so the Stop hook blocks only on facts (and a red suite or scenario); the PR check is where a judged block can stand. Each PR review makes one Claude call, with `fallbacks: "default"`, so a refused request retries server-side. The first run on this branch read 188 000 tokens and wrote 8 500 (about $0.46 at Sonnet 5.5's rates) in 70 seconds. Claude's outcome was `escalate` where Jev's was `request_changes`. They disagreed on `single_purpose` (Claude yes 0.80, Jev no 0.38) and on the biggest risk: Claude named docs, and it was right. This guide and the workflow comment still described the earlier verifier design. Each review in which both answer is a label on Jev's answers, which is the calibration data the thresholds in `T` have lacked.
 
 ## Function shape: the same limits while you edit
 

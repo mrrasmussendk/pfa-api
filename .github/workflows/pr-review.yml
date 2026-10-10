@@ -52,7 +52,7 @@ jobs:
         shell: bash
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          # Claude (Sonnet 5.5) answers the review and decides; without it Jev's blocks escalate as unverified.
+          # Claude (Sonnet 5.5) answers the review and decides, here only (--claude); without it Jev's blocks escalate.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Only for a key not scoped to a workspace: the workspace each request runs in (an ID, not a secret).
           ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID || secrets.ANTHROPIC_WORKSPACE_ID }}
@@ -68,7 +68,8 @@ jobs:
             --json review/review.json \
             --markdown review/review.md \
             --session "pr-${{ github.event.pull_request.number }}" \
-            --allow-missing-key
+            --allow-missing-key \
+            --claude
           code=$?
           set -e
           echo "exit=${code}" >> "$GITHUB_OUTPUT"

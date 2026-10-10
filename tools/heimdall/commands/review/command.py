@@ -28,8 +28,10 @@ from .verify import Check, Evidence, VerifyError, anchored, read_sources, settle
 USAGE = (
     "usage: heimdall review [--base <ref> | --diff <file|->] [--task <text>] [--model jev-latest]\n"
     "                       [--json <out>] [--markdown <out>] [--dry-run] [--allow-missing-key]\n"
-    "                       [--session <id>]\n"
-    "  default diff: `git diff HEAD` (working tree); --base <ref> uses `git diff <ref>...HEAD`"
+    "                       [--session <id>] [--claude]\n"
+    "  default diff: `git diff HEAD` (working tree); --base <ref> uses `git diff <ref>...HEAD`\n"
+    "  --claude: Claude answers the review and decides (CI only; needs ANTHROPIC_API_KEY). Without it,\n"
+    "            Jev's verdict stands and each of its judged blocks escalates as unverified"
 )
 
 
@@ -61,17 +63,15 @@ def _parse(args: list[str]) -> dict[str, Any]:
         "markdown": None,
         "dry_run": False,
         "allow_missing_key": False,
+        "claude": False,
         "session": "review",
     }
     i = 0
     while i < len(args):
         a = args[i]
         nxt = args[i + 1] if i + 1 < len(args) else None
-        if a == "--dry-run":
-            opts["dry_run"] = True
-            i += 1
-        elif a == "--allow-missing-key":
-            opts["allow_missing_key"] = True
+        if a in ("--dry-run", "--allow-missing-key", "--claude"):
+            opts[a[2:].replace("-", "_")] = True
             i += 1
         elif a in ("--base", "--diff", "--task", "--model", "--json", "--markdown", "--session") and nxt is not None:
             opts[a[2:]] = nxt
@@ -240,7 +240,11 @@ def _jev(payloads: dict[str, Any], transport: Transport, opts: dict[str, Any], s
     return decide(response["answers"], state["facts"], model, _usage([response, *per_file]), file_answers)
 
 
-def _reviewer(seams: Seams, environ: Mapping[str, str]) -> Reviewer | None:
+def _reviewer(opts: dict[str, Any], seams: Seams, environ: Mapping[str, str]) -> Reviewer | None:
+    """Claude, only when the run asks for it with ``--claude``: the PR workflow does, a local run and the Stop hook
+    do not, so a key in a developer's environment never makes a paid call on its own."""
+    if not opts["claude"]:
+        return None
     if seams.claude is not None:
         return seams.claude
     return claude_review if any(environ.get(k) for k in KEY_ENVS) else None
@@ -296,6 +300,6 @@ def run(args: list[str], io: Streams, cwd: str, seams: Seams | None = None) -> i
     if verdict is None:
         return EXIT_ERROR
     inquiry = _inquiry(opts, payloads, read_sources(cwd, payloads["sources"]))
-    verdict = _claude(verdict, _reviewer(seams, environ), inquiry)
+    verdict = _claude(verdict, _reviewer(opts, seams, environ), inquiry)
     _report(opts, verdict, payloads["diff"]["state"], io, cwd)
     return verdict.exit_code
