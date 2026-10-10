@@ -1,10 +1,10 @@
-# PR review with Jev
+# PR review: Claude answers, Jev beside it
 
 | ✅ Do | ❌ Don't |
 |---|---|
 | Describe the intended change in the PR title/body or `--task`. | Make the reviewer infer the task from the diff alone. |
 | Run deterministic checks and fix Eitri violations. | Treat a favorable model answer as permission to bypass a rule. |
-| Read the reported reasons and address `request_changes`: each one names a place Claude confirmed. | Treat a skipped review as an approval. |
+| Read the reported reasons and address `request_changes`: each one names a place, with evidence found in the file. | Treat a skipped review as an approval. |
 | Ask for human review when the outcome is `escalate`. | Treat a probability as proof that the change is correct. |
 
 ⚠️ **Check:** a missing API key, truncated diff, or uncertain answer changes what the review can establish. Inspect the report before relying on the result.
@@ -89,26 +89,27 @@ A seventh point, and a change of state (2026-10-09): the per-file probe above ha
 
 A third point (2026-10-08), a 101-file move of the whole package layout with no Eitri finding: `p(respects_slice_walls)=0.93`, `change_kind=refactor` at 1.00, `blast_radius` wide at 1.99, and still `biggest_risk = architecture` at `0.98`. Here the label means "review the restructure", not "find the import" — the first comment sent the author hunting for a cross-slice import that did not exist. That is why the label escalates instead of blocking on a wide refactor.
 
-## Claude verifies the judge's doubts
+## Claude answers the review, Jev beside it
 
-Jev triages; Claude verifies. Jev answers in probabilities and never names a place, so a block resting on its answers alone told the agent to "split each function" without saying which. The agent could only guess, and a guess did not move the score: three rounds of real fixes on the e2e branch left `p(safe)` between 0.22 and 0.27, and `function_shape` was empty throughout.
+Claude decides; Jev is the second column. Jev answers in probabilities and never names a place, so a block resting on its answers told the agent to "split each function" without saying which. The agent could only guess, and a guess did not move the score: three rounds of real fixes on the e2e branch left `p(safe)` between 0.22 and 0.27, and `function_shape` was empty throughout.
 
-So every block that rests on Jev's answers is now a **doubt**, and Claude (Sonnet 5.5, `tools/heimdall/commands/review/claude.py`) rules on it. Claude reads the task, the diff as Jev saw it, and the changed files whole, up to 120 000 tokens (`MAX_SOURCE_TOKENS`). It is asked to refute each doubt first.
+So Claude (Sonnet 5.5, effort `high`, thinking on; `tools/heimdall/commands/review/claude.py`) answers the same questions Jev does, in one streamed call: the fifteen about the diff, and `clean_code` and `clean_code_limit` for each edited application file. It reads the task, the architecture and the facts, the diff, and the changed files whole, up to 120 000 tokens (`MAX_SOURCE_TOKENS`). Each answer comes with a reason, and an answer that names a defect comes with **findings**: the file, the function, the line, lines quoted from the file, the problem and the smallest fix. Its answers are read into the shapes the policy reads (`read_answers`), so the thresholds in `T` decide from Claude's answers. Jev still runs, and its answers fill the table's second column.
 
-| Claude rules | Outcome |
+A block that rests on an answer stands only on that answer's findings, and only when `verify.grounded` finds the quoted lines in the file:
+
+| The answer behind a block | Outcome |
 |---|---|
-| **confirmed**, with a file, a function and lines quoted from that file | `request_changes`, naming `file:line function`, the problem and the fix |
-| **refuted** | the doubt falls away; the outcome is the one Jev's other answers give (often `comment` or `escalate`) |
-| **undecided**, or a confirmation whose quoted lines are not in the file | `escalate`: a person decides |
-| not asked: no `ANTHROPIC_API_KEY`, or the call failed | `escalate`, with Jev's advice attached |
+| has findings whose quoted lines are in the file | `request_changes`, naming `file:line function`, the problem and the fix |
+| names a defect with no finding, or quotes lines that are not in the file | `escalate` (`unverified: …`): a person decides |
+| Claude did not answer: no `ANTHROPIC_API_KEY`, a refusal, or the call failed | Jev's verdict, every block of it escalated as unverified |
+| an Eitri wall violation (a fact) | blocks; facts never need evidence |
 
-- ✅ Act on a confirmed block: it names the place, and its evidence was found in the file by `verify.grounded` before it was believed.
-- ✅ Read the "How Claude ruled" lines on an `escalate`: a refuted doubt says why the code is fine, an undecided one says what was missing.
-- ❌ Don't treat a refuted doubt as a defect to fix, or an unverified one as a block.
-- ⚠️ **Check:** facts never go to Claude. An Eitri wall violation blocks whatever Claude says.
-- ⚠️ **Check:** a key that is not scoped to a workspace answers 400 "must include the anthropic-workspace-id header". Set `ANTHROPIC_WORKSPACE_ID` (a repository variable in CI) or use a workspace-scoped key; until then every doubt escalates as unverified.
+- ✅ Act on a block: it names the place, and its evidence was found in the file before it was believed.
+- ✅ Read the table where Claude and Jev disagree, and Claude's reason in the comment (`why (Claude)`).
+- ❌ Don't treat an `unverified` reason as a block, or Jev's column as the verdict.
+- ⚠️ **Check:** a key that is not scoped to a workspace answers 400 "must include the anthropic-workspace-id header". Set `ANTHROPIC_WORKSPACE_ID` (a repository variable in CI) or use a workspace-scoped key; until then Claude does not answer and every block escalates as unverified.
 
-The check costs one Claude call per review that has a doubt, with `fallbacks: "default"`, so a refused request retries server-side. The first live run, on this branch, took 86 seconds. Jev's not-safe block, with nothing to point at, was refuted: "the changed functions are small orchestrators or single-step helpers … I found no concrete input that produces wrong behaviour". The outcome moved from `request_changes` to `escalate` on Jev's `needs_human_review` of 0.69. Claude's rulings are also labels on Jev's answers, which is the calibration data the thresholds in `T` have lacked.
+Every review now makes one Claude call, with `fallbacks: "default"`, so a refused request retries server-side. The first run on this branch read 188 000 tokens and wrote 8 500 (about $0.46 at Sonnet 5.5's rates) in 70 seconds. Claude's outcome was `escalate` where Jev's was `request_changes`. They disagreed on `single_purpose` (Claude yes 0.80, Jev no 0.38) and on the biggest risk: Claude named docs, and it was right. This guide and the workflow comment still described the earlier verifier design. Each review in which both answer is a label on Jev's answers, which is the calibration data the thresholds in `T` have lacked.
 
 ## Function shape: the same limits while you edit
 

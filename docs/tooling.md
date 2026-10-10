@@ -223,7 +223,7 @@ rule of thumb: sustained oob% > 20 on a slice = re-cut that seam
 
 A read is *in bounds* if it hit the kernel, a shared package, a slice the session edited, or the contract of a slice the edited slice declares. The per-session table comes first because wandering is a session property that the aggregate dilutes. The number to act on is the aggregate over time: if work on a slice keeps needing reads outside its working set, the boundary is drawn wrong.
 
-### 4 · Review — Jev as the judge
+### 4 · Review — Claude answers, Jev beside it
 
 `heimdall review` is the judgment on top of the gate. [Jev](https://docs.typesafe.ai/) (TypeSafe AI) does not write review comments; it answers **typed** questions — yes/no with a probability, a choice, a position on a rubric — over a state you give it. Heimdall is the deliberation around that call:
 
@@ -231,15 +231,17 @@ A read is *in bounds* if it hit the kernel, a shared package, a slice the sessio
 2. **One call about the diff, fifteen questions.** Gates (`safe_to_merge`, `needs_human_review`, `has_security_concern`), fit (`respects_slice_walls`, `errors_use_problem_details`, `tests_cover_change`, `stays_in_scope`, `leaks_internals`), craft (`single_purpose`, `lean_signatures` — asked about the functions `facts.function_shape` names as over 40 lines or 5 parameters), rubrics (`correctness`, `blast_radius`, `docs_in_sync`), and two labels for the report.
 3. **One call per edited application file, whole, two questions.** Each file of the application's Python the change edits is read whole from the working tree (up to 28 000 tokens) and sent on its own with the lines the change touched and its functions over the limits: `clean_code` and `clean_code_limit`, what holds the score down. A file below 2.7 (90%) fails the check naming the file, with that label and the file's functions over the limits as the fix. The tooling and the tests are never judged whole.
 4. **Policy in code.** Thresholds in `T` in `tools/heimdall/commands/review/policy.py` map the answers to one outcome: `approve` · `comment` · `request_changes` · `escalate` (exit 0 · 0 · 1 · 2; 3 when the review could not run). Missing answers fall back to neutral and land on `escalate`, never `approve`.
-5. **Outputs.** A table on stdout with a clean-code row per file judged whole, `--json` and `--markdown` reports, and a `review` line in the telemetry beside the session's reads and edits.
+5. **Claude answers the same questions.** Claude (Sonnet 5.5, thinking, `tools/heimdall/commands/review/claude.py`) reads the task, the facts, the diff and the changed files whole, and answers every question with a reason; an answer that names a defect comes with findings quoted from the code. The policy decides from Claude's answers, and a block stands only when its quoted lines are found in the file (`verify.py`); one without evidence escalates. Without `ANTHROPIC_API_KEY`, Jev's verdict stands with every block escalated as unverified.
+6. **Outputs.** A table on stdout, Claude's answers beside Jev's, with a clean-code row per file judged whole, `--json` and `--markdown` reports, and a `review` line in the telemetry beside the session's reads and edits.
 
 ```bash
 export TYPESAFE_API_KEY=…                       # https://console.typesafe.ai/
+export ANTHROPIC_API_KEY=…                      # Claude answers the review (and ANTHROPIC_WORKSPACE_ID for an unscoped key)
 heimdall review --base origin/main --task "…"   # what the PR check will see
 heimdall review --diff change.diff --dry-run    # print every call (the diff's, then one per file), call nothing
 ```
 
-Stdlib only, retries on 429/529, never on 401. Facts stay with Eitri: Jev is *told* the walls, never asked to re-derive them. The thresholds are a starting point — measure them against your own merges (`heimdall review --json` on past PRs) before letting `approve` carry weight. Full detail in [guides/pr-review.md](../harness/guides/pr-review.md).
+Jev's call is stdlib only, retrying on 429/529 and never on 401; Claude's uses the `anthropic` SDK (a dependency of the tooling, never of the service). Facts stay with Eitri: Jev is *told* the walls, never asked to re-derive them. The thresholds are a starting point — measure them against your own merges (`heimdall review --json` on past PRs) before letting `approve` carry weight. Full detail in [guides/pr-review.md](../harness/guides/pr-review.md).
 
 ### 5 · Estimate — the shared ruler
 

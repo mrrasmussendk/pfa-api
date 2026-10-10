@@ -4,8 +4,8 @@
 # a fixed set of yes/no, choice and score questions (correctness, single purpose and lean
 # signatures about the functions the AST found over the shape limits, tests, security, scope,
 # architecture fit), then sends each edited application file whole in a call of its own for its
-# clean code, so a shortfall names the file, and maps the probabilities to one outcome. Every block that
-# rests on Jev's answers is then put to Claude, which confirms it with evidence from the code or refutes it:
+# clean code. Claude (Sonnet 5.5, thinking) then answers the same questions with reasons, and the outcome is
+# decided from Claude's answers, Jev's beside them; a block stands only on findings quoted from the code:
 #   approve / comment  -> check passes
 #   request_changes    -> check fails
 #   escalate           -> check passes with a warning; a human is asked for
@@ -52,7 +52,7 @@ jobs:
         shell: bash
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
-          # Claude (Sonnet 5.5) verifies each block that rests on Jev's answers; without it those blocks escalate.
+          # Claude (Sonnet 5.5) answers the review and decides; without it Jev's blocks escalate as unverified.
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           # Only for a key not scoped to a workspace: the workspace each request runs in (an ID, not a secret).
           ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID || secrets.ANTHROPIC_WORKSPACE_ID }}

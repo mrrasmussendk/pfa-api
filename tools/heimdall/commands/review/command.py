@@ -1,19 +1,20 @@
 """The entry point: arguments → diff → state → one call about the diff and one per edited application
-file, whole → policy → Claude verifies the judge's doubts → table, files, telemetry, exit code."""
+file, whole (Jev) → the same questions answered by Claude, with evidence → policy on Claude's answers, each
+judged block standing only on its evidence → table (Claude beside Jev), files, telemetry, exit code."""
 
 from __future__ import annotations
 
 import json
 import os
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple, TextIO
 
 from ...model import Finding, MapModel
 from ...pathutil import norm
 from ...store import UnreadableMap, append_findings, heimdall_dir, load_map
 from .base import EXIT_ERROR, EXIT_OK, ReviewError, Streams
-from .claude import KEY_ENVS, claude_check
+from .claude import KEY_ENVS, ClaudeReview, ReviewInquiry, claude_review
 from .craft import craft_files, craft_state
 from .diff import FileChange, git_diff, parse_unified_diff
 from .policy import Verdict, decide
@@ -22,7 +23,7 @@ from .report import render_markdown, render_table
 from .state import build_state, function_shape, wall_findings
 from .transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL, Transport, http_transport
 from .vendored import is_vendored, vendored_patterns
-from .verify import Check, Evidence, read_sources, settle
+from .verify import Check, Evidence, VerifyError, anchored, read_sources, settle
 
 USAGE = (
     "usage: heimdall review [--base <ref> | --diff <file|->] [--task <text>] [--model jev-latest]\n"
@@ -32,13 +33,16 @@ USAGE = (
 )
 
 
+Reviewer = Callable[[ReviewInquiry], ClaudeReview]
+
+
 class Seams(NamedTuple):
-    """What a test replaces: Jev's transport, the environment keys are read from, and the verifier. ``check`` left
-    out means Claude when a key is set, and no verifier otherwise."""
+    """What a test replaces: Jev's transport, the environment keys are read from, and Claude. ``claude`` left out
+    means Claude when a key is set, and Jev's verdict alone, every judged block unverified, otherwise."""
 
     transport: Transport | None = None
     env: Mapping[str, str] | None = None
-    check: Check | None = None
+    claude: Reviewer | None = None
 
 
 _SKIPPED_COMMENT = (
@@ -183,6 +187,7 @@ def _report(opts: dict[str, Any], verdict: Verdict, state: dict[str, Any], io: S
             "model": verdict.model,
             "usage": verdict.usage,
             "verification": verdict.verification,
+            "jev": {"outcome": verdict.jev.outcome, "answers": verdict.jev.answers, "files": verdict.jev.files} if verdict.jev else None,
         }
         _write(opts["json"], cwd, json.dumps(report, indent=2))
     if opts["markdown"]:
@@ -235,10 +240,39 @@ def _jev(payloads: dict[str, Any], transport: Transport, opts: dict[str, Any], s
     return decide(response["answers"], state["facts"], model, _usage([response, *per_file]), file_answers)
 
 
-def _checker(seams: Seams, environ: Mapping[str, str]) -> Check | None:
-    if seams.check is not None:
-        return seams.check
-    return claude_check if any(environ.get(k) for k in KEY_ENVS) else None
+def _reviewer(seams: Seams, environ: Mapping[str, str]) -> Reviewer | None:
+    if seams.claude is not None:
+        return seams.claude
+    return claude_review if any(environ.get(k) for k in KEY_ENVS) else None
+
+
+def _inquiry(opts: dict[str, Any], payloads: dict[str, Any], sources: dict[str, str]) -> ReviewInquiry:
+    state = payloads["diff"]["state"]
+    craft = list(state["facts"].get("craft_files") or [])
+    return ReviewInquiry(
+        opts["task"] or "", state["facts"], state["architecture"], questions(), file_questions(), craft, state["files"], sources
+    )
+
+
+def _failed(error: VerifyError) -> Check:
+    def check(_: Any) -> Any:
+        raise error
+
+    return check
+
+
+def _claude(jev: Verdict, review: Reviewer | None, inquiry: ReviewInquiry) -> Verdict:
+    """Claude's verdict with Jev's beside it; Jev's alone, each judged block unverified, when Claude gave none."""
+    evidence = Evidence(inquiry.task, inquiry.diff, inquiry.sources)
+    if review is None:
+        return settle(jev, None, evidence)
+    try:
+        c = review(inquiry)
+    except VerifyError as e:
+        return settle(jev, _failed(e), evidence)
+    verdict = settle(decide(c.answers, inquiry.facts, c.model, c.usage, c.files), anchored(c.answers, c.files), evidence)
+    verdict.jev = jev
+    return verdict
 
 
 def run(args: list[str], io: Streams, cwd: str, seams: Seams | None = None) -> int:
@@ -261,8 +295,7 @@ def run(args: list[str], io: Streams, cwd: str, seams: Seams | None = None) -> i
     verdict = _jev(payloads, transport, opts, io.stderr)
     if verdict is None:
         return EXIT_ERROR
-    state = payloads["diff"]["state"]
-    evidence = Evidence(opts["task"] or "", state["files"], read_sources(cwd, payloads["sources"]))
-    verdict = settle(verdict, _checker(seams, environ), evidence)
-    _report(opts, verdict, state, io, cwd)
+    inquiry = _inquiry(opts, payloads, read_sources(cwd, payloads["sources"]))
+    verdict = _claude(verdict, _reviewer(seams, environ), inquiry)
+    _report(opts, verdict, payloads["diff"]["state"], io, cwd)
     return verdict.exit_code

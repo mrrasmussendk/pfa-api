@@ -31,9 +31,10 @@ from heimdall.commands.review import (
     render_table,
     wall_findings,
 )
+from heimdall.commands.review.claude import ClaudeReview
 from heimdall.commands.review.state import area_of
 from heimdall.commands.review.vendored import is_vendored
-from heimdall.commands.review.verify import CONFIRMED, Finding, Ruling
+from heimdall.commands.review.verify import VerifyError
 from heimdall.model import MapModel
 
 DIFF = """\
@@ -167,11 +168,11 @@ def _transport(answers: dict[str, Any], seen: list[dict[str, Any]] | None = None
 
 
 def _run(
-    repo: TempRepo, *args: str, transport=None, env: dict[str, str] | None = None, stdin: str = "", check=None
+    repo: TempRepo, *args: str, transport=None, env: dict[str, str] | None = None, stdin: str = "", claude=None
 ) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     streams = review.Streams(io.StringIO(stdin), out, err)
-    code = review.run(list(args), streams, str(repo.root), review.Seams(transport, env if env is not None else {}, check))
+    code = review.run(list(args), streams, str(repo.root), review.Seams(transport, env if env is not None else {}, claude))
     return code, out.getvalue(), err.getvalue()
 
 
@@ -464,22 +465,85 @@ def test_a_failed_file_call_is_exit_3_not_a_verdict(repo: TempRepo) -> None:
     assert code == EXIT_ERROR and "unreachable" in err
 
 
-def _confirm(*evidence: str):
-    """A verifier that confirms every doubt, quoting ``evidence`` from the route module."""
-    finding = Finding("src/pfa/api/routes/kvad.py", "router", 0, "\n".join(evidence), "the prefix is wrong", "fix it")
-    return lambda inquiry: [Ruling(CONFIRMED, "seen", (finding,))] * len(inquiry.doubts)
+_OPEN_PREFIX = {
+    "file": "src/pfa/api/routes/kvad.py",
+    "function": "router",
+    "line": 0,
+    "evidence": "router = APIRouter(prefix='/kvad')",
+    "problem": "the prefix is wrong",
+    "fix": "fix it",
+}
+
+
+def _claude(answers: dict[str, Any], seen: list[Any] | None = None):
+    """Claude's review of the change: ``answers``, the clean ones with some replaced."""
+
+    def review(inquiry: Any) -> ClaudeReview:
+        if seen is not None:
+            seen.append(inquiry)
+        return ClaudeReview(answers, {}, "claude-sonnet-5-5", {"input_tokens": 9000, "output_tokens": 800})
+
+    return review
+
+
+def test_claude_decides_and_a_block_stands_on_its_evidence(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    repo.write_file("change.diff", DIFF)
+    repo.write_file("src/pfa/api/routes/kvad.py", _ROUTE_SOURCE)
+    concern = {"type": "noul", "noul": 0.9, "reason": "an open prefix", "findings": [_OPEN_PREFIX]}
+    seen: list[Any] = []
+
+    code, out, _ = _run(
+        repo, "--diff", "change.diff", transport=_transport(_answers()), claude=_claude(_answers(has_security_concern=concern), seen)
+    )
+
+    assert code == EXIT_REQUEST_CHANGES and out.startswith("outcome: request_changes  (security concern p=0.90)")
+    assert "src/pfa/api/routes/kvad.py:3 router: the prefix is wrong. Fix: fix it." in out
+    assert seen[0].sources["src/pfa/api/routes/kvad.py"] == _ROUTE_SOURCE and "single_purpose" in seen[0].questions
+
+
+def test_a_claude_block_without_evidence_goes_to_a_person(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    repo.write_file("change.diff", DIFF)
+    bare = {"type": "noul", "noul": 0.9, "reason": "an open prefix", "findings": []}
+
+    code, out, _ = _run(
+        repo, "--diff", "change.diff", transport=_transport(_answers()), claude=_claude(_answers(has_security_concern=bare))
+    )
+
+    assert code == EXIT_ESCALATE and out.startswith("outcome: escalate  (unverified: security concern")
+    assert "no evidence given: an open prefix" in out
+
+
+def test_without_claude_jev_s_blocks_go_to_a_person(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    repo.write_file("change.diff", DIFF)
+    insecure = _transport(_answers(has_security_concern={"type": "noul", "noul": 0.9}))
+
+    def broken(_: Any) -> ClaudeReview:
+        raise VerifyError("Claude did not answer (APIConnectionError)")
+
+    code, out, _ = _run(repo, "--diff", "change.diff", transport=insecure)
+    assert code == EXIT_ESCALATE and out.startswith("outcome: escalate  (unverified: security concern")
+    code, out, _ = _run(repo, "--diff", "change.diff", transport=insecure, claude=broken)
+    assert code == EXIT_ESCALATE and "APIConnectionError" in out
+
+
+def test_the_table_sets_claude_beside_jev(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    repo.write_file("change.diff", DIFF)
+    unsure_jev = _transport(_answers(single_purpose={"type": "noul", "noul": 0.2}))
+
+    code, out, _ = _run(repo, "--diff", "change.diff", transport=unsure_jev, claude=_claude(_answers()))
+
+    assert code == EXIT_OK and "question".ljust(28) + "Claude".ljust(44) + "Jev" in out
+    assert "single_purpose".ljust(28) + "yes 0.90".ljust(44) + "no 0.20" in out
+    assert "model: claude-sonnet-5-5 · input tokens 9000 · output tokens 800 · beside it Jev jev-1.13.0 (comment on its own)" in out
 
 
 def test_review_exit_codes_follow_the_outcome(repo: TempRepo) -> None:
     repo.write_sample_map()
     repo.write_file("change.diff", DIFF)
-    repo.write_file("src/pfa/api/routes/kvad.py", _ROUTE_SOURCE)
-    insecure = _transport(_answers(has_security_concern={"type": "noul", "noul": 0.9}))
-    code, out, _ = _run(repo, "--diff", "change.diff", transport=insecure, check=_confirm("router = APIRouter(prefix='/kvad')"))
-    assert code == EXIT_REQUEST_CHANGES and out.startswith("outcome: request_changes  (confirmed by Claude: security concern")
-    assert "src/pfa/api/routes/kvad.py:3 router: the prefix is wrong. Fix: fix it." in out
-    code, out, _ = _run(repo, "--diff", "change.diff", transport=insecure)
-    assert code == EXIT_ESCALATE and out.startswith("outcome: escalate  (unverified: security concern")
     code, out, _ = _run(repo, "--diff", "change.diff", transport=_transport(_answers(needs_human_review={"type": "noul", "noul": 0.8})))
     assert code == EXIT_ESCALATE and out.startswith("outcome: escalate")
 
