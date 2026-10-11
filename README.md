@@ -12,12 +12,15 @@ Read the [harness overview](#the-agent-harness) below or the [full harness expla
 
 ## Quick start
 
-Requires **Python 3.10+**. Run these commands from the repository root, inside an activated virtual environment:
+Requires **Python 3.10+**. Run these commands from the repository root:
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -e ".[dev]" -e ./tools
 python -m pfa.api
 ```
+
+Name the environment `.venv`: the Claude Code hooks (`.claude/hooks/python.sh`) run with `.venv/bin/python` when it exists, and fall back to `python`, then `python3`.
 
 Open **[the interactive API docs](http://127.0.0.1:8000/docs)** to try a request. The OpenAPI schema is at `/openapi.json`.
 
