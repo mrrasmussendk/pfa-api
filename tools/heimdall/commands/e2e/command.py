@@ -297,6 +297,7 @@ def _new(args: list[str], io: Streams, cwd: str) -> int:
     written = scaffold(cwd, _parse_new(args), load_system(cwd))
     io.stdout.write("heimdall e2e new: wrote\n" + "".join(f"  {p}\n" for p in written))
     io.stdout.write("Each test fails until it asserts each `then` clause under its name: write it, then let the Stop hook run it.\n")
+    io.stdout.write("Run `heimdall map --root .` so the feature's AGENTS.md lists the new scenario.\n")
     return EXIT_OK
 
 

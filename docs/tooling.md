@@ -190,8 +190,8 @@ Everything Heimdall knows comes from `.heimdall/map.json`, and everything it wri
 | Artifact | Who writes it | What it tells the agent |
 |---|---|---|
 | `AGENTS.md` (root) | you, except the slice table | The dependency direction, the walls, the exact working set for a task, how to add a slice, how to change a contract, which guide to read. `CLAUDE.md` is one line, `@AGENTS.md`, so Claude Code loads the same document. |
-| the **slice table** inside it | `heimdall map` | Every slice with its declared dependencies, fan-in, contract path, and routes — generated from the manifests and `src/pfa/api/routes/<feature>.py`, so it cannot be stale. |
-| `src/pfa/features/<name>/AGENTS.md` | `heimdall map` writes the first two lines, you write the rest | `depends on:` and `routes:` (generated), then what the slice is for, its working set, its gotchas. |
+| the **slice table** inside it | `heimdall map` | Every slice with its declared dependencies, fan-in, budget used, contract path, and routes — generated from the manifests and `src/pfa/api/routes/<feature>.py`, so it cannot be stale. |
+| `src/pfa/features/<name>/AGENTS.md` | `heimdall map` writes the first four lines, you write the rest | `depends on:`, `routes:`, `scenarios:` (the use cases in `tests/e2e/<name>.feature` that state its promise) and `budget:` (its EIT100 working set, rounded to 10% so the line moves only when the feature grows by a tenth), then what the slice is for, its working set, its gotchas. |
 | [Change guides](../harness/guides/) | you | One guide per kind of change: adding a route, returning an error, what the PR review judges. |
 | `.heimdall/map.json` | `heimdall map` | The machine-readable feature table plus the layout from `[tool.heimdall]` as paths: `features`, `kernel`, `app` (the application; any read inside it that is not a feature is in-bounds) and `routes` (`<routes>/<feature>.py` classifies as the feature), plus any `shared` packages. This is what the sensors and the review read. |
 

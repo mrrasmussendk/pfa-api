@@ -47,8 +47,8 @@ Before any non-trivial API engineering task (designing, implementing, mocking, t
 <!--heimdall:map-->
 features: `src/pfa/features` · kernel: `src/pfa/kernel` · routes: `src/pfa/api/routes/<feature>.py` · budget: 15000 tokens per feature · regenerate with `heimdall map --root .`
 
-| feature | depends on | fan-in | contract | routes |
-|---|---|---|---|---|
-| chunking | (none) | 1 | `src/pfa/features/chunking/contract/` | `POST /chunking/split` |
-| embeddings | chunking | 0 | `src/pfa/features/embeddings/contract/` | `POST /embeddings/query`<br>`POST /embeddings/passages`<br>`POST /embeddings/similarity` |
+| feature | depends on | fan-in | budget used | contract | routes |
+|---|---|---|---|---|---|
+| chunking | (none) | 1 | ≈10% | `src/pfa/features/chunking/contract/` | `POST /chunking/split` |
+| embeddings | chunking | 0 | ≈30% | `src/pfa/features/embeddings/contract/` | `POST /embeddings/query`<br>`POST /embeddings/passages`<br>`POST /embeddings/similarity` |
 <!--/heimdall:map-->

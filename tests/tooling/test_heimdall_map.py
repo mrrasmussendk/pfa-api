@@ -42,24 +42,51 @@ def test_the_map_records_each_feature_s_routes(repo: TempRepo) -> None:
     assert json.loads(repo.read_file(".heimdall/map.json"))["slices"]["kvad"]["routes"] == ["POST /kvad/squares", "GET /kvad/{id}"]
 
 
+def _generated(name: str, deps: str) -> str:
+    """The lines ``heimdall map`` writes for a feature with no routes, no scenarios and no code."""
+    return (
+        f"<!--heimdall:deps-->depends on: {deps} + kernel<!--/heimdall:deps-->\n"
+        "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n"
+        f"<!--heimdall:scenarios-->scenarios: (none) — add them with `heimdall e2e new {name}/<name>`<!--/heimdall:scenarios-->\n"
+        "<!--heimdall:budget-->budget: ≈0% of 15,000 tokens used — `eitri check` has the exact count<!--/heimdall:budget-->\n"
+    )
+
+
 def test_map_injects_and_refreshes_agents_md_markers_idempotently(repo: TempRepo) -> None:
     _write_sample_tree(repo)
     repo.run("", "map", "--root", "src")
-    assert repo.read_file("src/pfa/features/kvad/AGENTS.md") == (
-        "# kvad\nhand-written notes stay.\n<!--heimdall:deps-->depends on: rune + kernel<!--/heimdall:deps-->\n"
-        "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n"
-    )
+    assert repo.read_file("src/pfa/features/kvad/AGENTS.md") == "# kvad\nhand-written notes stay.\n" + _generated("kvad", "rune")
     # rune had no AGENTS.md -> created from scratch
-    assert repo.read_file("src/pfa/features/rune/AGENTS.md") == (
-        "# rune\n<!--heimdall:deps-->depends on: (none) + kernel<!--/heimdall:deps-->\n"
-        "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n"
-    )
+    assert repo.read_file("src/pfa/features/rune/AGENTS.md") == "# rune\n" + _generated("rune", "(none)")
     # rerun: markers replaced in place, no duplication
     repo.run("", "map", "--root", "src")
-    assert repo.read_file("src/pfa/features/kvad/AGENTS.md") == (
-        "# kvad\nhand-written notes stay.\n<!--heimdall:deps-->depends on: rune + kernel<!--/heimdall:deps-->\n"
-        "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n"
+    assert repo.read_file("src/pfa/features/kvad/AGENTS.md") == "# kvad\nhand-written notes stay.\n" + _generated("kvad", "rune")
+
+
+def test_a_new_marker_goes_after_the_ones_before_it_and_the_author_s_text_stays_below(repo: TempRepo) -> None:
+    _write_sample_tree(repo)
+    repo.write_file(
+        "src/pfa/features/rune/AGENTS.md",
+        "# rune\n<!--heimdall:deps-->old<!--/heimdall:deps-->\n<!--heimdall:routes-->old<!--/heimdall:routes-->\n\nNotes.\n",
     )
+
+    repo.run("", "map", "--root", "src")
+
+    assert repo.read_file("src/pfa/features/rune/AGENTS.md") == "# rune\n" + _generated("rune", "(none)") + "\nNotes.\n"
+
+
+def test_a_feature_names_its_scenarios_and_its_budget_headroom(repo: TempRepo) -> None:
+    _write_sample_tree(repo)
+    repo.write_file(
+        "tests/e2e/kvad.feature", "@API\nFeature: kvad\n\n  Scenario: squares\n    Given a\n\n  Scenario: rounds\n    Given b\n"
+    )
+    repo.write_file("src/pfa/features/kvad/internal/big.py", "x = 'word ' * 1\n" * 650)
+
+    repo.run("", "map", "--root", ".", "--budget", "15000")
+
+    text = repo.read_file("src/pfa/features/kvad/AGENTS.md")
+    assert "scenarios: `tests/e2e/kvad.feature` — squares, rounds" in text
+    assert "budget: ≈30% of 15,000 tokens used" in text
 
 
 def test_map_creates_and_refreshes_the_root_agents_md_block(repo: TempRepo) -> None:
@@ -68,8 +95,8 @@ def test_map_creates_and_refreshes_the_root_agents_md_block(repo: TempRepo) -> N
     repo.run("", "map", "--root", "src")
     txt = repo.read_file("AGENTS.md")
     assert txt.startswith("# Agents\n\n## Feature map\n\n<!--heimdall:map-->\n")
-    assert "| kvad | rune | 0 | `src/pfa/features/kvad/contract/` | (none) |" in txt
-    assert "| rune | (none) | 1 | `src/pfa/features/rune/contract/` | (none) |" in txt
+    assert "| kvad | rune | 0 | ≈0% | `src/pfa/features/kvad/contract/` | (none) |" in txt
+    assert "| rune | (none) | 1 | ≈0% | `src/pfa/features/rune/contract/` | (none) |" in txt
     assert txt.count("<!--heimdall:map-->") == 1 and txt.endswith("<!--/heimdall:map-->\n")
     # hand-written prose around the markers survives, the block is replaced in place
     repo.write_file("AGENTS.md", "# Mine\nintro stays.\n\n<!--heimdall:map-->\nstale\n<!--/heimdall:map-->\n\noutro stays.\n")
@@ -140,16 +167,13 @@ def test_map_inventories_routes_from_the_app_routes_module_without_importing_it(
     )
     assert "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->" in repo.read_file("src/pfa/features/rune/AGENTS.md")
     assert (
-        "| kvad | rune | 0 | `src/pfa/features/kvad/contract/` | `POST /kvad/compose`<br>`GET /kvad/{stave_id}`<br>`DELETE /other/x` |"
+        "| kvad | rune | 0 | ≈0% | `src/pfa/features/kvad/contract/` | `POST /kvad/compose`<br>`GET /kvad/{stave_id}`<br>`DELETE /other/x` |"
         in repo.read_file("AGENTS.md")
     )
     # a slice AGENTS.md that predates the routes marker gets the line inserted right after deps, once
     repo.write_file("src/pfa/features/rune/AGENTS.md", "# rune\n<!--heimdall:deps-->stale<!--/heimdall:deps-->\nnotes stay.\n")
     repo.run("", "map", "--root", "src")
-    assert repo.read_file("src/pfa/features/rune/AGENTS.md") == (
-        "# rune\n<!--heimdall:deps-->depends on: (none) + kernel<!--/heimdall:deps-->\n"
-        "<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\nnotes stay.\n"
-    )
+    assert repo.read_file("src/pfa/features/rune/AGENTS.md") == "# rune\n" + _generated("rune", "(none)") + "notes stay.\n"
 
 
 def test_map_records_shared_packages_from_pyproject(repo: TempRepo) -> None:

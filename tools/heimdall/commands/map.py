@@ -1,7 +1,9 @@
 """``heimdall map --root <dir> [--budget 15000] [--kernel <name>]`` — the feedforward emitter.
 
 The ``feature.json`` graph is the ground truth: writes ``.heimdall/map.json`` (relative to CWD)
-and regenerates the AGENTS.md deps and routes markers in every slice. Where things are comes
+and regenerates the AGENTS.md markers in every slice: its dependencies, its routes, the e2e scenarios
+that state its promise (``tests/e2e/<feature>.feature``), and how much of the token budget it uses,
+rounded to 10% so the line moves only when the feature grows by a tenth of its budget. Where things are comes
 from ``[tool.heimdall]`` in the root ``pyproject.toml``, as paths from the repo root:
 
 - ``features`` — the folder of slices (default: ``src/pfa/features``, else ``src/slices``, ``slices``);
@@ -25,9 +27,9 @@ from typing import Any, TextIO
 USAGE = "usage: heimdall map --root <dir> [--budget 15000] [--kernel <name>]"
 MANIFEST = "feature.json"
 _HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
-_DEPS = re.compile(r"<!--heimdall:deps-->.*?<!--/heimdall:deps-->", re.S)
-_ROUTES = re.compile(r"<!--heimdall:routes-->.*?<!--/heimdall:routes-->", re.S)
 _MAP = re.compile(r"<!--heimdall:map-->.*?<!--/heimdall:map-->", re.S)
+_SCENARIO = re.compile(r"^\s*Scenario:\s*(\S+)", re.M)
+SCENARIOS_DIR = "tests/e2e"
 
 
 def _const(text: str) -> Callable[[re.Match[str]], str]:
@@ -74,6 +76,69 @@ def _routes_of(path: str) -> list[str]:
     return routes
 
 
+def _scenarios_line(root_abs: str, name: str) -> str:
+    """Where the feature's promise is written, and the scenarios in it."""
+    path = os.path.join(root_abs, SCENARIOS_DIR, name + ".feature")
+    try:
+        with open(path, encoding="utf-8") as f:
+            names = _SCENARIO.findall(f.read())
+    except OSError:
+        return f"scenarios: (none) — add them with `heimdall e2e new {name}/<name>`"
+    return f"scenarios: `{SCENARIOS_DIR}/{name}.feature` — " + (", ".join(names) if names else "(none yet)")
+
+
+def _budget_used(root_abs: str, budget: int) -> dict[str, int]:
+    """Each feature's EIT100 working set as a percentage of ``budget``, rounded to 10: the headroom an agent
+    should know before it adds code, coarse enough that the generated line rarely changes. Empty when Eitri
+    cannot measure the tree (it has its own check for that)."""
+    try:
+        from eitri.context_budget import measure
+        from eitri.core import EitriConfig
+        from eitri.project import discover_slices, find_kernel_dir, find_slices_dir
+    except ImportError:
+        return {}
+    from pathlib import Path
+
+    root = Path(root_abs)
+    config = EitriConfig.read(root, token_budget=budget)
+    try:
+        sd = find_slices_dir(root, config)
+        slices = discover_slices(sd) if sd is not None else []
+        kernel = find_kernel_dir(root, config, sd)
+        by_name = {s.name: s for s in slices}
+        return {s.name: round(10 * measure(s, by_name, kernel, config).total / budget) * 10 for s in slices}
+    except (OSError, ValueError, SyntaxError):
+        return {}
+
+
+def _set_marker(txt: str, name: str, line: str, after: str | None) -> str:
+    """``txt`` with the ``name`` marker holding ``line``: replaced where it is, else inserted after the ``after``
+    marker's line, else appended."""
+    marked = f"<!--heimdall:{name}-->{line}<!--/heimdall:{name}-->"
+    pattern = re.compile(rf"<!--heimdall:{name}-->.*?<!--/heimdall:{name}-->", re.S)
+    if pattern.search(txt):
+        return pattern.sub(_const(marked), txt)
+    anchor = re.search(rf"<!--/heimdall:{after}-->\n", txt) if after else None
+    if anchor:
+        return txt[: anchor.end()] + marked + "\n" + txt[anchor.end() :]
+    return txt.rstrip() + "\n" + marked + "\n"
+
+
+def _write_feature_agents(path: str, name: str, lines: list[tuple[str, str]]) -> None:
+    """The feature's AGENTS.md with each generated ``(marker, line)`` in place, in order; the rest is the author's."""
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            txt = f.read()
+    else:
+        txt = f"# {name}\n"
+    previous = None
+    for marker, line in lines:
+        txt = _set_marker(txt, marker, line, previous)
+        previous = marker
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(txt)
+
+
 def _root_map_block(
     kernel_dir: str,
     slices_dir: str,
@@ -82,18 +147,22 @@ def _root_map_block(
     discovered: list[tuple[str, list[str]]],
     fan_in: dict[str, int],
     routes: dict[str, list[str]],
+    used: dict[str, int],
 ) -> str:
     """The generated slice table in the root AGENTS.md — the feedforward map in prose form."""
     lines = [
         "<!--heimdall:map-->",
         f"features: `{slices_dir}` · kernel: `{kernel_dir}` · routes: `{routes_dir}/<feature>.py` · budget: {budget} tokens per feature · regenerate with `heimdall map --root .`",
         "",
-        "| feature | depends on | fan-in | contract | routes |",
-        "|---|---|---|---|---|",
+        "| feature | depends on | fan-in | budget used | contract | routes |",
+        "|---|---|---|---|---|---|",
     ]
     for name, deps in discovered:
         rs = "<br>".join(f"`{r}`" for r in routes[name]) if routes[name] else "(none)"
-        lines.append(f"| {name} | {', '.join(deps) if deps else '(none)'} | {fan_in[name]} | `{slices_dir}/{name}/contract/` | {rs} |")
+        share = f"≈{used[name]}%" if name in used else "?"
+        lines.append(
+            f"| {name} | {', '.join(deps) if deps else '(none)'} | {fan_in[name]} | {share} | `{slices_dir}/{name}/contract/` | {rs} |"
+        )
     lines.append("<!--/heimdall:map-->")
     return "\n".join(lines)
 
@@ -219,6 +288,7 @@ def run(args: list[str], stdout: TextIO, stderr: TextIO, cwd: str) -> int:
 
     discovered: list[tuple[str, list[str]]] = []
     routes: dict[str, list[str]] = {}
+    used = _budget_used(root_abs, budget)
     for name in sorted(os.listdir(slices_dir)):
         manifest = os.path.join(slices_dir, name, MANIFEST)
         if not os.path.isfile(manifest):
@@ -231,24 +301,14 @@ def run(args: list[str], stdout: TextIO, stderr: TextIO, cwd: str) -> int:
         discovered.append((name, refs))
         routes[name] = _routes_of(os.path.join(routes_dir, name + ".py"))
 
-        agents = os.path.join(slices_dir, name, "AGENTS.md")
-        dep_line = f"<!--heimdall:deps-->depends on: {', '.join(refs) if refs else '(none)'} + {kernel}<!--/heimdall:deps-->"
-        routes_line = f"<!--heimdall:routes-->routes: {', '.join(routes[name]) if routes[name] else '(none)'}<!--/heimdall:routes-->"
-        if os.path.isfile(agents):
-            with open(agents, encoding="utf-8") as f:
-                txt = f.read()
-            if "<!--heimdall:deps-->" in txt:
-                txt = _DEPS.sub(_const(dep_line), txt)
-            else:
-                txt = txt.rstrip() + "\n" + dep_line + "\n"
-            if "<!--heimdall:routes-->" in txt:
-                txt = _ROUTES.sub(_const(routes_line), txt)
-            else:
-                txt = txt.replace(dep_line, dep_line + "\n" + routes_line, 1)
-        else:
-            txt = f"# {name}\n{dep_line}\n{routes_line}\n"
-        with open(agents, "w", encoding="utf-8", newline="\n") as f:
-            f.write(txt)
+        generated = [
+            ("deps", f"depends on: {', '.join(refs) if refs else '(none)'} + {kernel}"),
+            ("routes", f"routes: {', '.join(routes[name]) if routes[name] else '(none)'}"),
+            ("scenarios", _scenarios_line(root_abs, name)),
+        ]
+        if name in used:
+            generated.append(("budget", f"budget: ≈{used[name]}% of {budget:,} tokens used — `eitri check` has the exact count"))
+        _write_feature_agents(os.path.join(slices_dir, name, "AGENTS.md"), name, generated)
 
     fan_in = {name: 0 for name, _ in discovered}
     for _, deps in discovered:
@@ -280,7 +340,7 @@ def run(args: list[str], stdout: TextIO, stderr: TextIO, cwd: str) -> int:
     with open(os.path.join(heimdall_dir, "map.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(doc, f, indent=2)
     _update_root_agents(
-        cwd, _root_map_block(_rel(kernel_dir, cwd), _rel(slices_dir, cwd), _rel(routes_dir, cwd), budget, discovered, fan_in, routes)
+        cwd, _root_map_block(_rel(kernel_dir, cwd), _rel(slices_dir, cwd), _rel(routes_dir, cwd), budget, discovered, fan_in, routes, used)
     )
     stdout.write(f"heimdall map: {len(discovered)} features -> .heimdall/map.json; AGENTS.md deps regenerated\n")
     return 0
