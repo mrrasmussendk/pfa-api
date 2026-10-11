@@ -1,18 +1,19 @@
 """``heimdall e2e`` — the BDD scenarios a change reaches, rerun against the running system, whatever the system is.
 
-A scenario is a use case written as given/when/then (the shape is ``scenarios.KEYS`` and ``STEPS``) and kept
-at ``tests/e2e/<feature>/<name>.json``. Its ``method`` says what kind of behaviour it describes (``API``, ``UI``,
-``service``, ...) and its ``tools`` which tools run it; each tool keeps its test at a path derived from the same
-``<feature>/<name>``. ``harness/e2e/system.json`` is the project's part: how to start the system under test and
-which tool tests each method. One module per step:
+A scenario is a use case written in Gherkin — ``Given``/``When``/``Then``, ``And`` for each further clause — as
+``Scenario: <name>`` in ``tests/e2e/<feature>.feature``. A tag names its method (``@API``, ``@UI``, ``@service``,
+...) and ``harness/e2e/system.json`` the tool that tests it (``@tool:<tool>`` overrides); each tool keeps its test
+at a path derived from ``<feature>/<name>`` and asserts each ``then`` clause by name, so the text and the test are
+checked against each other. ``system.json`` is the project's part: how to start the system under test and which
+tool tests each method. One module per step:
 
-- ``scenarios``  load and check the scenario files against that shape, the project's tools and their tests;
+- ``scenarios``  read the feature files, and check each scenario against the project's tools and its tests;
 - ``system``     the project's settings, and the started system for the length of a run;
-- ``tools``      postman, playwright, pytest: where each keeps its test, the failing stub, the run command;
+- ``tools``      postman, playwright, pytest: where each keeps its test, what it asserts, the failing stub, the run command;
 - ``scaffold``   ``heimdall e2e new``: the scenario and one failing test per tool;
 - ``change``     the change — committed since the base, uncommitted and untracked — and the features it reaches;
-- ``judge``      Jev answers typed questions (rerun this scenario? is one missing?); thresholds in code decide,
-                 facts first; without Jev the slice map decides (``fallback``);
+- ``judge``      Jev answers typed questions (rerun this scenario? is one missing? do its text and test agree?);
+                 thresholds in code decide, facts first; without Jev the slice map decides (``fallback``);
 - ``runner``     start the system, run each tool's batch, stop it;
 - ``command``    argument parsing, the remembered green run, exit codes.
 
@@ -25,10 +26,10 @@ from ..review import Streams
 from .base import EXIT_ERROR, EXIT_FAILED, EXIT_NEEDS_SCENARIOS, EXIT_OK, GUIDE, SCENARIOS_DIR, SYSTEM, E2EError
 from .change import Change, fingerprint, working_diff
 from .command import USAGE, Seams, run
-from .judge import Plan, T, decide, fallback, questions
+from .judge import Plan, T, decide, drift_questions, fallback, questions
 from .runner import Runner, RunResult, by_tool, system_runner
 from .scaffold import NewScenario, Steps, new_advice, scaffold
-from .scenarios import Scenario, load_scenarios
+from .scenarios import Scenario, load_scenarios, parse_feature
 from .system import System, load_system
 from .tools import NOT_WRITTEN, TOOLS, Tool
 
@@ -58,11 +59,13 @@ __all__ = [
     "Tool",
     "by_tool",
     "decide",
+    "drift_questions",
     "fallback",
     "fingerprint",
     "load_scenarios",
     "load_system",
     "new_advice",
+    "parse_feature",
     "questions",
     "run",
     "scaffold",

@@ -5,8 +5,8 @@ from __future__ import annotations
 
 # Where the scenario format is explained; named in every message that asks for a scenario to be written or fixed.
 GUIDE = "harness/guides/e2e-scenarios.md"
-# A scenario is ``<SCENARIOS_DIR>/<feature>/<name>.json``. Each tool it names keeps the test that runs it at a
-# path derived from the same ``<feature>/<name>`` (see tools.py), so the scenario needs no field pointing at it.
+# A scenario is ``Scenario: <name>`` in ``<SCENARIOS_DIR>/<feature>.feature``. Each tool that runs it keeps its
+# test at a path derived from ``<feature>/<name>`` (see tools.py), so the scenario needs no field pointing at it.
 SCENARIOS_DIR = "tests/e2e"
 # What is project-specific: how to start the system under test, and which tool tests each method. Harness
 # settings, not a scenario, so it lives with the harness rather than among the tests.

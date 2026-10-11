@@ -8,7 +8,7 @@ import io
 from typing import Any
 
 import pytest
-from conftest import TempRepo, e2e_scenario, write_e2e_project
+from conftest import E2E_REQUEST, TempRepo, e2e_scenario, write_e2e_project
 
 from heimdall.commands import e2e
 from heimdall.commands.e2e import (
@@ -22,6 +22,7 @@ from heimdall.commands.e2e import (
     Scenario,
     Seams,
     decide,
+    drift_questions,
     fallback,
     questions,
 )
@@ -29,17 +30,20 @@ from heimdall.commands.review import parse_unified_diff
 from heimdall.model import MapModel
 
 
-def _diff(*paths: str) -> str:
-    return "".join(f"diff --git a/{p} b/{p}\nindex 1111111..2222222 100644\n--- a/{p}\n+++ b/{p}\n@@ -1 +1 @@\n-old\n+new\n" for p in paths)
+def _diff(*paths: str, line: int = 1) -> str:
+    """Each path with its ``line`` replaced."""
+    return "".join(
+        f"diff --git a/{p} b/{p}\nindex 1111111..2222222 100644\n--- a/{p}\n+++ b/{p}\n@@ -{line} +{line} @@\n-old\n+new\n" for p in paths
+    )
 
 
 def _change(repo: TempRepo, *paths: str) -> Change:
     return Change.of(parse_unified_diff(_diff(*paths)), MapModel.load(str(repo.root / ".heimdall/map.json")))
 
 
-def _answers(new: float = 0.1, **rerun: float) -> dict[str, Any]:
-    out: dict[str, Any] = {"needs_new_scenario": {"type": "noul", "noul": new}}
-    out.update({key: {"type": "noul", "noul": p} for key, p in rerun.items()})
+def _answers(new: float | None = 0.1, **by_key: float) -> dict[str, Any]:
+    out: dict[str, Any] = {} if new is None else {"needs_new_scenario": {"type": "noul", "noul": new}}
+    out.update({key: {"type": "noul", "noul": p} for key, p in by_key.items()})
     return out
 
 
@@ -80,6 +84,21 @@ def test_one_rerun_question_per_scenario_and_one_about_new_scenarios() -> None:
     assert "`scenarios[1]` (rune/carves, method API)" in qs["rerun_1"]["instructions"]
 
 
+def test_a_scenario_whose_text_or_test_changed_is_asked_whether_the_two_still_agree() -> None:
+    scenarios = [e2e_scenario("kvad/squares"), e2e_scenario("rune/carves")]
+
+    qs = questions(scenarios, [scenarios[1]])
+
+    assert list(qs) == ["rerun_0", "rerun_1", "needs_new_scenario", "drifted_1"]
+    assert "`scenarios[1].tests`" in qs["drifted_1"]["instructions"]
+
+
+def test_the_drift_question_alone_names_only_the_edited_scenarios() -> None:
+    scenarios = [e2e_scenario("kvad/squares"), e2e_scenario("rune/carves")]
+
+    assert list(drift_questions(scenarios, [scenarios[0]])) == ["drifted_0"]
+
+
 # ---------------------------------------------------------------- the policy
 
 
@@ -93,13 +112,33 @@ def test_jev_reruns_a_scenario_at_the_threshold_and_skips_one_below(repo: TempRe
     assert [s.id for s in plan.rerun] == ["kvad/squares"]
 
 
-def test_a_scenario_whose_own_files_changed_reruns_whatever_jev_says(repo: TempRepo) -> None:
+def test_a_scenario_whose_own_test_changed_reruns_whatever_jev_says(repo: TempRepo) -> None:
     write_e2e_project(repo)
     scenarios = [e2e_scenario("kvad/squares")]
 
     plan = decide(_answers(rerun_0=0.0), scenarios, _change(repo, "postman/collections/e2e/kvad/squares.request.yaml"))
 
     assert [s.id for s in plan.rerun] == ["kvad/squares"]
+
+
+@pytest.mark.parametrize(("line", "reruns"), [(5, ["kvad/b"]), (2, []), (8, [])])
+def test_only_a_scenario_whose_own_lines_of_the_feature_file_changed_reruns(line: int, reruns: list[str]) -> None:
+    scenarios = [e2e_scenario("kvad/a", lines=(3, 4)), e2e_scenario("kvad/b", lines=(5, 7))]
+    change = Change.of(parse_unified_diff(_diff("tests/e2e/kvad.feature", line=line)), None)
+
+    plan = decide(_answers(rerun_0=0.0, rerun_1=0.0), scenarios, change)
+
+    assert [s.id for s in plan.rerun] == reruns
+
+
+def test_jev_finding_a_scenario_s_text_and_test_disagree_is_in_the_plan(repo: TempRepo) -> None:
+    write_e2e_project(repo)
+    scenarios = [e2e_scenario("kvad/squares"), e2e_scenario("rune/carves")]
+    change = _change(repo, "postman/collections/e2e/kvad/squares.request.yaml", "postman/collections/e2e/rune/carves.request.yaml")
+
+    plan = decide(_answers(drifted_0=e2e.T["drift"], drifted_1=e2e.T["drift"] - 0.01), scenarios, change)
+
+    assert [(s.id, p) for s, p in plan.drifted] == [("kvad/squares", e2e.T["drift"])]
 
 
 def test_jev_confident_a_new_scenario_is_needed_asks_for_one(repo: TempRepo) -> None:
@@ -151,9 +190,12 @@ def test_without_a_key_a_kernel_change_reruns_every_scenario(repo: TempRepo) -> 
 def test_new_through_the_command_lists_what_it_wrote(repo: TempRepo) -> None:
     write_e2e_project(repo)
 
-    code, out, _ = _run(repo, "new", "kvad/rounds", "--method", "API", "--given", "g", "--when", "w", "--then", "t", seams=Seams())
+    args = ["new", "kvad/rounds", "--method", "API", "--given", "g", "--when", "I call POST /rounds", "--then", "t", "--then", "u"]
+
+    code, out, _ = _run(repo, *args, seams=Seams())
 
     assert code == EXIT_OK and "postman/collections/e2e/kvad/rounds.request.yaml" in out
+    assert repo.read_file("tests/e2e/kvad.feature").endswith("    Then t\n    And u\n")
 
 
 def test_an_empty_diff_runs_nothing(repo: TempRepo) -> None:
@@ -193,14 +235,36 @@ def test_jev_reads_the_hunks_of_application_files_only(repo: TempRepo) -> None:
 
 def test_a_change_outside_the_application_runs_only_the_scenarios_whose_files_changed(repo: TempRepo) -> None:
     write_e2e_project(repo)
-    repo.write_file("change.diff", _diff("docs/guide.md", "tests/e2e/rune/carves.json"))
-    seen: list[dict[str, Any]] = []
+    repo.write_file("change.diff", _diff("docs/guide.md", "tests/e2e/rune.feature", line=5))
     ran: list[list[str]] = []
-    seams = Seams(transport=_transport(_answers(), seen), runner=_runner(GREEN, ran))
+    seams = Seams(transport=_transport(_answers(new=None, drifted_1=0.1)), runner=_runner(GREEN, ran))
 
     code, _, _ = _run(repo, "--diff", "change.diff", seams=seams)
 
-    assert code == EXIT_OK and seen == [] and ran == [["rune/carves"]]
+    assert code == EXIT_OK and ran == [["rune/carves"]]
+
+
+def test_an_edited_scenario_is_held_to_its_test_by_jev_even_without_application_code(repo: TempRepo) -> None:
+    write_e2e_project(repo)
+    repo.write_file("change.diff", _diff("postman/collections/e2e/rune/carves.request.yaml"))
+    seen: list[dict[str, Any]] = []
+    seams = Seams(transport=_transport(_answers(new=None, drifted_1=0.9), seen), runner=_runner(GREEN))
+
+    code, out, _ = _run(repo, "--diff", "change.diff", seams=seams)
+
+    assert list(seen[0]["questions"]) == ["drifted_1"]
+    assert seen[0]["state"]["scenarios"][1]["tests"] == {"postman/collections/e2e/rune/carves.request.yaml": E2E_REQUEST}
+    assert "tests" not in seen[0]["state"]["scenarios"][0]
+    assert code == EXIT_NEEDS_SCENARIOS and "rune/carves's text and its test disagree" in out
+
+
+def test_without_a_key_an_edited_scenario_is_held_to_its_test_by_its_clauses_alone(repo: TempRepo) -> None:
+    write_e2e_project(repo)
+    repo.write_file("change.diff", _diff("postman/collections/e2e/rune/carves.request.yaml"))
+
+    code, out, _ = _run(repo, "--diff", "change.diff", seams=Seams(runner=_runner(GREEN), env={}))
+
+    assert code == EXIT_OK and "only their clauses hold a scenario's text to its test" in out
 
 
 def test_a_feature_s_notes_are_not_application_code_so_jev_is_not_asked(repo: TempRepo) -> None:
@@ -237,7 +301,7 @@ def test_a_needed_scenario_exits_with_the_command_that_writes_it(repo: TempRepo)
 
 def test_an_uncovered_feature_is_named_in_the_command_that_writes_its_scenario(repo: TempRepo) -> None:
     write_e2e_project(repo)
-    (repo.root / "tests/e2e/rune/carves.json").unlink()
+    (repo.root / "tests/e2e/rune.feature").unlink()
     repo.write_file("change.diff", _diff("src/pfa/features/rune/internal/a.py"))
 
     code, out, _ = _run(repo, "--diff", "change.diff", seams=Seams(transport=_transport(_answers(rerun_0=0.0)), runner=_runner(GREEN)))
@@ -247,12 +311,12 @@ def test_an_uncovered_feature_is_named_in_the_command_that_writes_its_scenario(r
 
 def test_an_invalid_scenario_exits_asking_for_it_to_be_fixed(repo: TempRepo) -> None:
     write_e2e_project(repo)
-    repo.write_file("tests/e2e/kvad/torn.json", "{")
+    repo.write_file("tests/e2e/torn.feature", "{")
     repo.write_file("change.diff", _diff("src/pfa/features/kvad/internal/a.py"))
 
     code, out, _ = _run(repo, "--diff", "change.diff", seams=Seams(transport=_transport(_answers()), runner=_runner(GREEN)))
 
-    assert code == EXIT_NEEDS_SCENARIOS and "fix tests/e2e/kvad/torn.json" in out
+    assert code == EXIT_NEEDS_SCENARIOS and "fix tests/e2e/torn.feature: line 1" in out
 
 
 def test_a_green_run_is_remembered_so_the_same_change_is_not_run_again(repo: TempRepo) -> None:
@@ -301,8 +365,8 @@ def test_all_runs_every_scenario_without_a_change_or_jev(repo: TempRepo) -> None
 
 def test_all_without_scenarios_says_there_are_none(repo: TempRepo) -> None:
     write_e2e_project(repo)
-    (repo.root / "tests/e2e/kvad/squares.json").unlink()
-    (repo.root / "tests/e2e/rune/carves.json").unlink()
+    (repo.root / "tests/e2e/kvad.feature").unlink()
+    (repo.root / "tests/e2e/rune.feature").unlink()
 
     code, out, _ = _run(repo, "--all", seams=Seams(runner=_runner(GREEN)))
 
@@ -319,11 +383,11 @@ def test_all_exits_failed_when_a_scenario_fails(repo: TempRepo) -> None:
 
 def test_all_asks_for_an_invalid_scenario_to_be_fixed(repo: TempRepo) -> None:
     write_e2e_project(repo)
-    repo.write_file("tests/e2e/kvad/torn.json", "{")
+    repo.write_file("tests/e2e/torn.feature", "{")
 
     code, out, _ = _run(repo, "--all", seams=Seams(runner=_runner(GREEN)))
 
-    assert code == EXIT_NEEDS_SCENARIOS and "fix tests/e2e/kvad/torn.json" in out
+    assert code == EXIT_NEEDS_SCENARIOS and "fix tests/e2e/torn.feature" in out
 
 
 @pytest.mark.parametrize(

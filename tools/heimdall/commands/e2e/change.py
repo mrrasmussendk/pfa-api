@@ -5,6 +5,7 @@ exactly the change that decides what to run."""
 from __future__ import annotations
 
 import hashlib
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,7 @@ from .base import E2EError
 
 # Areas whose change reaches every feature: the shared primitives and the wiring around them.
 _WIDE = ("kernel", "app", "service")
+_HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
 def _git(cwd: str, *args: str) -> str:
@@ -66,6 +68,28 @@ def _reach(touched: frozenset[str], m: MapModel | None) -> frozenset[str]:
     return frozenset(reach)
 
 
+def touched_lines(f: FileChange) -> frozenset[int]:
+    """The lines of the file's new side the change touched: each added line, and, where lines were only removed,
+    the line either side of the gap they left."""
+    lines: set[int] = set()
+    n, gap = 0, False
+    for line in [*f.hunks, "@@ end"]:
+        if line.startswith("-"):
+            gap = True
+            continue
+        if gap and not line.startswith("+"):
+            lines.update((n - 1, n))
+        gap = False
+        if m := _HUNK.match(line):
+            n = int(m.group(1))
+        elif line.startswith("+"):
+            lines.add(n)
+            n += 1
+        elif not line.startswith("\\"):
+            n += 1
+    return frozenset(lines)
+
+
 @dataclass(frozen=True)
 class Change:
     paths: frozenset[str]
@@ -73,6 +97,7 @@ class Change:
     reach: frozenset[str]  # touched, and every feature that depends on one of them
     wide: bool  # the kernel, the application or code shared by every feature changed
     application: bool  # any application code changed; without it, no client-visible behaviour can have
+    lines: dict[str, frozenset[int]]  # by path: the new-side lines touched, so a scenario knows if its own text changed
 
     @classmethod
     def of(cls, files: list[FileChange], m: MapModel | None) -> Change:
@@ -80,4 +105,9 @@ class Change:
         areas = [area_of(p, m) for p in paths]
         touched = frozenset(a.split(":", 1)[1] for a in areas if a.startswith(("slice:", "contract:")))
         wide = any(a in _WIDE or a.startswith("shared:") for a in areas)
-        return cls(paths, touched, _reach(touched, m), wide, any(is_application(a) for a in areas))
+        lines = {norm(f.path): touched_lines(f) for f in files}
+        return cls(paths, touched, _reach(touched, m), wide, any(is_application(a) for a in areas), lines)
+
+    def touches(self, path: str, first: int, last: int) -> bool:
+        """Whether the change touched lines ``first``..``last`` of ``path``."""
+        return any(first <= n <= last for n in self.lines.get(path, ()))
