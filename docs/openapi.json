@@ -1,0 +1,1178 @@
+{
+  "components": {
+    "schemas": {
+      "EmbeddingOut": {
+        "properties": {
+          "dimensions": {
+            "description": "Length of each `embedding`",
+            "title": "Dimensions",
+            "type": "integer"
+          },
+          "embedding": {
+            "description": "Unit-normalised vector of `dimensions` floats (1024 for the default model); the example shows the first four",
+            "items": {
+              "type": "number"
+            },
+            "title": "Embedding",
+            "type": "array"
+          },
+          "model": {
+            "description": "The model that embedded",
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "dimensions",
+          "embedding"
+        ],
+        "title": "EmbeddingOut",
+        "type": "object"
+      },
+      "HealthOut": {
+        "properties": {
+          "status": {
+            "description": "Always `ok`: the process answers",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "HealthOut",
+        "type": "object"
+      },
+      "MatchOut": {
+        "properties": {
+          "chunk_count": {
+            "description": "How many chunks the source text became; 1 when it fit the model's window",
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "chunk_index": {
+            "description": "Position of this chunk within its source text, from 0",
+            "title": "Chunk Index",
+            "type": "integer"
+          },
+          "score": {
+            "description": "Cosine similarity between the question and `text`; higher is better. e5 scores cluster in a narrow band, so compare within one response rather than against a fixed threshold",
+            "title": "Score",
+            "type": "number"
+          },
+          "source_index": {
+            "description": "Index in `candidates` of this text",
+            "title": "Source Index",
+            "type": "integer"
+          },
+          "text": {
+            "description": "The candidate, or the best-scoring chunk of a long one",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_index",
+          "text",
+          "score",
+          "chunk_index",
+          "chunk_count"
+        ],
+        "title": "MatchOut",
+        "type": "object"
+      },
+      "PassageEmbeddingOut": {
+        "properties": {
+          "chunk_count": {
+            "description": "How many chunks the source text became; 1 when it fit the model's window",
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "chunk_index": {
+            "description": "Position of this chunk within its source text, from 0",
+            "title": "Chunk Index",
+            "type": "integer"
+          },
+          "embedding": {
+            "description": "Unit-normalised vector of `dimensions` floats (1024 for the default model); the example shows the first four",
+            "items": {
+              "type": "number"
+            },
+            "title": "Embedding",
+            "type": "array"
+          },
+          "source_index": {
+            "description": "Index in `texts` of the document this chunk came from",
+            "title": "Source Index",
+            "type": "integer"
+          },
+          "text": {
+            "description": "The chunk that was embedded",
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_index",
+          "chunk_index",
+          "chunk_count",
+          "text",
+          "embedding"
+        ],
+        "title": "PassageEmbeddingOut",
+        "type": "object"
+      },
+      "PassagesOut": {
+        "properties": {
+          "chunks": {
+            "description": "One entry per chunk: documents in order, each document's chunks in order",
+            "items": {
+              "$ref": "#/components/schemas/PassageEmbeddingOut"
+            },
+            "title": "Chunks",
+            "type": "array"
+          },
+          "dimensions": {
+            "description": "Length of each `embedding`",
+            "title": "Dimensions",
+            "type": "integer"
+          },
+          "model": {
+            "description": "The model that embedded",
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "dimensions",
+          "chunks"
+        ],
+        "title": "PassagesOut",
+        "type": "object"
+      },
+      "PassagesRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "texts": {
+            "description": "Documents; long ones are chunked on sentence boundaries",
+            "items": {
+              "maxLength": 200000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Texts",
+            "type": "array"
+          }
+        },
+        "required": [
+          "texts"
+        ],
+        "title": "PassagesRequest",
+        "type": "object"
+      },
+      "ProblemDetails": {
+        "additionalProperties": true,
+        "description": "The response body — the RFC 9457 §3.1 members. ``extra=\"allow\"`` is how extension\nmembers (``errors`` on a validation problem) ride along and are documented.",
+        "examples": [
+          {
+            "detail": "empty question",
+            "instance": "/embeddings/query",
+            "status": 422,
+            "title": "Request rejected",
+            "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+            "type": "urn:pfa-api:problem:domain-rejection"
+          }
+        ],
+        "properties": {
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Human-readable explanation of this occurrence",
+            "title": "Detail"
+          },
+          "instance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "URI reference identifying this occurrence (the request path)",
+            "title": "Instance"
+          },
+          "status": {
+            "description": "HTTP status code of this response",
+            "maximum": 599,
+            "minimum": 100,
+            "title": "Status",
+            "type": "integer"
+          },
+          "title": {
+            "description": "Short, human-readable summary of the problem type",
+            "title": "Title",
+            "type": "string"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "W3C Trace Context trace id of the request; quote it when reporting",
+            "title": "Trace Id"
+          },
+          "type": {
+            "default": "about:blank",
+            "description": "URI identifying the problem type",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "status"
+        ],
+        "title": "ProblemDetails",
+        "type": "object"
+      },
+      "QuestionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "question": {
+            "description": "Natural-language question, any of the model's 100+ languages",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "QuestionRequest",
+        "type": "object"
+      },
+      "ReadyOut": {
+        "properties": {
+          "components": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "description": "Each heavy component and whether it is in memory",
+            "title": "Components",
+            "type": "object"
+          },
+          "status": {
+            "description": "`ready` once every component is loaded",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "components"
+        ],
+        "title": "ReadyOut",
+        "type": "object"
+      },
+      "SimilarityOut": {
+        "properties": {
+          "matches": {
+            "description": "Every candidate, best first",
+            "items": {
+              "$ref": "#/components/schemas/MatchOut"
+            },
+            "title": "Matches",
+            "type": "array"
+          },
+          "model": {
+            "description": "The model that scored",
+            "title": "Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "matches"
+        ],
+        "title": "SimilarityOut",
+        "type": "object"
+      },
+      "SimilarityRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "candidates": {
+            "description": "Texts to rank against the question, any language",
+            "items": {
+              "maxLength": 200000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Candidates",
+            "type": "array"
+          },
+          "question": {
+            "description": "Natural-language question, any of the model's 100+ languages",
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question",
+          "candidates"
+        ],
+        "title": "SimilarityRequest",
+        "type": "object"
+      },
+      "SplitOut": {
+        "properties": {
+          "budget": {
+            "description": "The budget the chunks were cut to",
+            "title": "Budget",
+            "type": "integer"
+          },
+          "chunks": {
+            "description": "The pieces in order, each stripped of surrounding whitespace",
+            "items": {
+              "type": "string"
+            },
+            "title": "Chunks",
+            "type": "array"
+          },
+          "token_counts": {
+            "description": "Model tokens in each chunk, never above `budget`",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Token Counts",
+            "type": "array"
+          },
+          "tokenizer": {
+            "description": "The tokenizer that counted: the embedding model's own",
+            "title": "Tokenizer",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tokenizer",
+          "budget",
+          "chunks",
+          "token_counts"
+        ],
+        "title": "SplitOut",
+        "type": "object"
+      },
+      "SplitRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "budget": {
+            "default": 500,
+            "description": "Max model tokens per chunk; a hard limit, counted with the model's tokenizer",
+            "maximum": 512.0,
+            "minimum": 1.0,
+            "title": "Budget",
+            "type": "integer"
+          },
+          "text": {
+            "description": "The text to split; paragraph and sentence boundaries are the preferred cut points",
+            "maxLength": 200000,
+            "minLength": 1,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "SplitRequest",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "description": "One model, [intfloat/multilingual-e5-large](https://huggingface.co/intfloat/multilingual-e5-large): 100+ languages,\n1024-dimensional unit-normalised vectors, cross-lingual on meaning rather than shared words.\n\n**The flow.** Embed your documents once with `POST /embeddings/passages` and store the vectors. For each question,\n`POST /embeddings/query` gives the vector to rank them by: dot product, which is cosine since every vector is\nunit-normalised. `POST /embeddings/similarity` does both in one call when the candidates are at hand. A long document\nis chunked on sentence boundaries with the model's own tokenizer; `POST /chunking/split` shows the cuts.\n\n**Errors** are RFC 9457 problem documents (`application/problem+json`): branch on `type`, read `detail`, and quote\n`trace_id` when reporting. It is the W3C trace id on every response header and every log line.\n",
+    "summary": "Multilingual text embeddings, chunking and similarity",
+    "title": "PFA API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/chunking/split": {
+      "post": {
+        "description": "Split text into chunks that each fit the token budget, cutting on sentence boundaries.\nCounts with the model's own tokenizer, so the budget is a hard limit.",
+        "operationId": "split",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "budget": 12,
+                "text": "Vertical slices keep a feature in one folder. Its contract is the only door. Consumers dispatch messages on the bus and get a Result back."
+              },
+              "schema": {
+                "$ref": "#/components/schemas/SplitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "budget": 12,
+                  "chunks": [
+                    "Vertical slices keep a feature in one folder.",
+                    "Its contract is the only door.",
+                    "Consumers dispatch messages on the bus and get a",
+                    "Result back."
+                  ],
+                  "token_counts": [
+                    11,
+                    8,
+                    12,
+                    3
+                  ],
+                  "tokenizer": "intfloat/multilingual-e5-large"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SplitOut"
+                }
+              }
+            },
+            "description": "The chunks in order, with the token count of each"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "empty_text": {
+                    "summary": "Request rejected",
+                    "value": {
+                      "detail": "empty text",
+                      "instance": "/chunking/split",
+                      "status": 422,
+                      "title": "Request rejected",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:domain-rejection"
+                    }
+                  },
+                  "validation_error": {
+                    "summary": "Request validation failed",
+                    "value": {
+                      "detail": "1 invalid field: body.text",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "text"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/chunking/split",
+                      "status": 422,
+                      "title": "Request validation failed",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:validation-error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The body does not fit the model (`errors` names each field), or it fits and the handler rejected it (`detail` says why)"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal_error": {
+                    "summary": "Internal Server Error",
+                    "value": {
+                      "instance": "/chunking/split",
+                      "status": 500,
+                      "title": "Internal Server Error",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "about:blank"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Any other error (RFC 9457 problem details)"
+          }
+        },
+        "summary": "Split text into chunks within a token budget",
+        "tags": [
+          "chunking"
+        ]
+      }
+    },
+    "/embeddings/passages": {
+      "post": {
+        "description": "Embed documents as *passage* vectors. A document over the model's window comes back\nas several chunks, each tagged with its source index and chunk position.",
+        "operationId": "embed_passages",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "texts": [
+                  "To reset your password, open Settings and choose Security.",
+                  "Opening hours: Monday to Friday, 9 to 17."
+                ]
+              },
+              "schema": {
+                "$ref": "#/components/schemas/PassagesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "chunks": [
+                    {
+                      "chunk_count": 1,
+                      "chunk_index": 0,
+                      "embedding": [
+                        0.042,
+                        -0.0136,
+                        -0.0274,
+                        -0.0513
+                      ],
+                      "source_index": 0,
+                      "text": "To reset your password, open Settings and choose Security."
+                    },
+                    {
+                      "chunk_count": 1,
+                      "chunk_index": 0,
+                      "embedding": [
+                        0.0354,
+                        -0.0374,
+                        -0.0323,
+                        -0.0333
+                      ],
+                      "source_index": 1,
+                      "text": "Opening hours: Monday to Friday, 9 to 17."
+                    }
+                  ],
+                  "dimensions": 1024,
+                  "model": "intfloat/multilingual-e5-large"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/PassagesOut"
+                }
+              }
+            },
+            "description": "One vector per chunk, tagged with its document and position"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "every_passage_must_be_non-empty": {
+                    "summary": "Request rejected",
+                    "value": {
+                      "detail": "every passage must be non-empty",
+                      "instance": "/embeddings/passages",
+                      "status": 422,
+                      "title": "Request rejected",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:domain-rejection"
+                    }
+                  },
+                  "validation_error": {
+                    "summary": "Request validation failed",
+                    "value": {
+                      "detail": "1 invalid field: body.texts",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "texts"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/embeddings/passages",
+                      "status": 422,
+                      "title": "Request validation failed",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:validation-error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The body does not fit the model (`errors` names each field), or it fits and the handler rejected it (`detail` says why)"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "model_busy": {
+                    "summary": "Embedding model busy",
+                    "value": {
+                      "detail": "embedding model is busy (waited 30s); retry in 5s",
+                      "instance": "/embeddings/passages",
+                      "retry_after": 5,
+                      "status": 503,
+                      "title": "Embedding model busy",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:model-busy"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The inference gate did not open in time; the request was fine, retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal_error": {
+                    "summary": "Internal Server Error",
+                    "value": {
+                      "instance": "/embeddings/passages",
+                      "status": 500,
+                      "title": "Internal Server Error",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "about:blank"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Any other error (RFC 9457 problem details)"
+          }
+        },
+        "summary": "Embed documents as passage vectors",
+        "tags": [
+          "embeddings"
+        ]
+      }
+    },
+    "/embeddings/query": {
+      "post": {
+        "description": "Embed a question as a *query* vector (unit-normalised), ready to be ranked against\npassage vectors. The model embeds; it does not answer.",
+        "operationId": "embed_question",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "question": "Hvordan nulstiller jeg min adgangskode?"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/QuestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "dimensions": 1024,
+                  "embedding": [
+                    0.0093,
+                    0.0194,
+                    -0.0111,
+                    -0.0416
+                  ],
+                  "model": "intfloat/multilingual-e5-large"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingOut"
+                }
+              }
+            },
+            "description": "The query vector, ready to rank passage vectors against"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "empty_question": {
+                    "summary": "Request rejected",
+                    "value": {
+                      "detail": "empty question",
+                      "instance": "/embeddings/query",
+                      "status": 422,
+                      "title": "Request rejected",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:domain-rejection"
+                    }
+                  },
+                  "validation_error": {
+                    "summary": "Request validation failed",
+                    "value": {
+                      "detail": "1 invalid field: body.question",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "question"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/embeddings/query",
+                      "status": 422,
+                      "title": "Request validation failed",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:validation-error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The body does not fit the model (`errors` names each field), or it fits and the handler rejected it (`detail` says why)"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "model_busy": {
+                    "summary": "Embedding model busy",
+                    "value": {
+                      "detail": "embedding model is busy (waited 30s); retry in 5s",
+                      "instance": "/embeddings/query",
+                      "retry_after": 5,
+                      "status": 503,
+                      "title": "Embedding model busy",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:model-busy"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The inference gate did not open in time; the request was fine, retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal_error": {
+                    "summary": "Internal Server Error",
+                    "value": {
+                      "instance": "/embeddings/query",
+                      "status": 500,
+                      "title": "Internal Server Error",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "about:blank"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Any other error (RFC 9457 problem details)"
+          }
+        },
+        "summary": "Embed a question as a query vector",
+        "tags": [
+          "embeddings"
+        ]
+      }
+    },
+    "/embeddings/similarity": {
+      "post": {
+        "description": "Rank candidate texts by how well they answer the question, best first. Cross-lingual:\na Danish question ranks an English answer on meaning, not on shared words. A long\ncandidate is scored by its best chunk, which is returned as ``text``.",
+        "operationId": "similarity",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "example": {
+                "candidates": [
+                  "To reset your password, open Settings and choose Security.",
+                  "Opening hours: Monday to Friday, 9 to 17."
+                ],
+                "question": "Hvordan nulstiller jeg min adgangskode?"
+              },
+              "schema": {
+                "$ref": "#/components/schemas/SimilarityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "matches": [
+                    {
+                      "chunk_count": 1,
+                      "chunk_index": 0,
+                      "score": 0.8112,
+                      "source_index": 0,
+                      "text": "To reset your password, open Settings and choose Security."
+                    },
+                    {
+                      "chunk_count": 1,
+                      "chunk_index": 0,
+                      "score": 0.7306,
+                      "source_index": 1,
+                      "text": "Opening hours: Monday to Friday, 9 to 17."
+                    }
+                  ],
+                  "model": "intfloat/multilingual-e5-large"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/SimilarityOut"
+                }
+              }
+            },
+            "description": "Every candidate scored, best first"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "empty_question": {
+                    "summary": "Request rejected",
+                    "value": {
+                      "detail": "empty question",
+                      "instance": "/embeddings/similarity",
+                      "status": 422,
+                      "title": "Request rejected",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:domain-rejection"
+                    }
+                  },
+                  "every_candidate_must_be_non-empty": {
+                    "summary": "Request rejected",
+                    "value": {
+                      "detail": "every candidate must be non-empty",
+                      "instance": "/embeddings/similarity",
+                      "status": 422,
+                      "title": "Request rejected",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:domain-rejection"
+                    }
+                  },
+                  "validation_error": {
+                    "summary": "Request validation failed",
+                    "value": {
+                      "detail": "2 invalid fields: body.candidates, body.question",
+                      "errors": [
+                        {
+                          "loc": [
+                            "body",
+                            "question"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        },
+                        {
+                          "loc": [
+                            "body",
+                            "candidates"
+                          ],
+                          "msg": "Field required",
+                          "type": "missing"
+                        }
+                      ],
+                      "instance": "/embeddings/similarity",
+                      "status": 422,
+                      "title": "Request validation failed",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:validation-error"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The body does not fit the model (`errors` names each field), or it fits and the handler rejected it (`detail` says why)"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "model_busy": {
+                    "summary": "Embedding model busy",
+                    "value": {
+                      "detail": "embedding model is busy (waited 30s); retry in 5s",
+                      "instance": "/embeddings/similarity",
+                      "retry_after": 5,
+                      "status": 503,
+                      "title": "Embedding model busy",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:model-busy"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "The inference gate did not open in time; the request was fine, retry after `Retry-After` seconds",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal_error": {
+                    "summary": "Internal Server Error",
+                    "value": {
+                      "instance": "/embeddings/similarity",
+                      "status": 500,
+                      "title": "Internal Server Error",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "about:blank"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Any other error (RFC 9457 problem details)"
+          }
+        },
+        "summary": "Rank candidate texts against a question",
+        "tags": [
+          "embeddings"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "description": "Liveness: the process answers. Says nothing about the model.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "status": "ok"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/HealthOut"
+                }
+              }
+            },
+            "description": "The process answers"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal_error": {
+                    "summary": "Internal Server Error",
+                    "value": {
+                      "instance": "/health",
+                      "status": 500,
+                      "title": "Internal Server Error",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "about:blank"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Any other error (RFC 9457 problem details)"
+          }
+        },
+        "summary": "Liveness",
+        "tags": [
+          "service"
+        ]
+      }
+    },
+    "/ready": {
+      "get": {
+        "description": "Readiness: every heavy component is loaded, so a request will be served without a\ncold start. 503 problem document while loading — route traffic elsewhere until 200.\nReads flags only; it never triggers a load itself.",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "components": {
+                    "embedding_model": true,
+                    "tokenizer": true
+                  },
+                  "status": "ready"
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ReadyOut"
+                }
+              }
+            },
+            "description": "Every heavy component is in memory; a request is served without a cold start"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "loading": {
+                    "summary": "Service not ready",
+                    "value": {
+                      "components": {
+                        "embedding_model": false,
+                        "tokenizer": true
+                      },
+                      "detail": "still loading: embedding_model",
+                      "instance": "/ready",
+                      "status": 503,
+                      "title": "Service not ready",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "urn:pfa-api:problem:not-ready"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Still loading: route traffic elsewhere and poll again after `Retry-After` seconds; `components` says what is pending",
+            "headers": {
+              "Cache-Control": {
+                "description": "`no-store`: a probe is never cached",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Retry-After": {
+                "description": "Seconds until the next poll",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "examples": {
+                  "internal_error": {
+                    "summary": "Internal Server Error",
+                    "value": {
+                      "instance": "/ready",
+                      "status": 500,
+                      "title": "Internal Server Error",
+                      "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                      "type": "about:blank"
+                    }
+                  }
+                },
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Any other error (RFC 9457 problem details)"
+          }
+        },
+        "summary": "Readiness",
+        "tags": [
+          "service"
+        ]
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "Probes for the orchestrator: route traffic on `/ready`, restart on `/health`.",
+      "name": "service"
+    },
+    {
+      "description": "Split text to a model-token budget on paragraph, sentence and word boundaries, counted with the model's own tokenizer. `POST /embeddings/passages` chunks for you; call this to see or control the cuts.",
+      "name": "chunking"
+    },
+    {
+      "description": "Passage vectors for documents, query vectors for questions, and the ranking of one against the other. Cross-lingual: a Danish question ranks an English answer on meaning. The model embeds; it does not answer.",
+      "name": "embeddings"
+    }
+  ]
+}
