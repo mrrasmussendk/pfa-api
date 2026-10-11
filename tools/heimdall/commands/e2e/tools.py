@@ -33,6 +33,14 @@ THEN = "then: "  # the prefix of every assertion's name; the rest is the clause,
 _JS_NAME = r"""\(\s*("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')"""
 # ``when`` in an API scenario names its request as ``<METHOD> /<path>``.
 _REQUEST = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) (/[^\s,;]*)")
+# A Postman request's method and URL, as the git-native collection writes them.
+_SENT_METHOD = re.compile(r"^method:\s*(\S+)", re.M)
+_SENT_URL = re.compile(r"^url:\s*'?\{\{base_url\}\}([^'\s]*)", re.M)
+
+
+def _path(url: str) -> str:
+    """The path a request goes to: no query, no full stop a sentence ended it with, ``/`` when empty."""
+    return url.split("?", 1)[0].split("#", 1)[0].rstrip(".") or "/"
 
 
 # A JavaScript escape: a code point by number, or one character, mapped through ``_CONTROL`` or standing for itself.
@@ -111,15 +119,15 @@ class Postman(Tool):
         named = [m.groups() for w in s.when for m in _REQUEST.finditer(w)]
         if len(named) != 1:
             return [*problems, "its When must name the one request it sends, as `<METHOD> /<path>`"]
-        method, path = named[0]
-        sent = re.search(r"^method:\s*(\S+)", test, re.M), re.search(r"^url:\s*'?\{\{base_url\}\}([^'\s?]*)", test, re.M)
-        sends = (sent[0].group(1) if sent[0] else None, (sent[1].group(1) or "/") if sent[1] else None)
+        method, path = named[0][0], _path(named[0][1])
+        sent_method, sent_url = _SENT_METHOD.search(test), _SENT_URL.search(test)
+        sends = (sent_method.group(1) if sent_method else None, _path(sent_url.group(1)) if sent_url else None)
         if sends != (method, path):
             problems.append(f"sends {sends[0]} {sends[1]}, but the When says {method} {path}")
         return problems
 
     def stub(self, s: Scenario) -> str:
-        named = next((m.groups() for w in s.when for m in _REQUEST.finditer(w)), ("GET", "/"))
+        named = next(((m.group(1), m.group(2).rstrip(".")) for w in s.when for m in _REQUEST.finditer(w)), ("GET", "/"))
         tests = "".join(
             f"      pm.test({_js(THEN + c)}, () => {{\n        pm.expect.fail({_js(NOT_WRITTEN)});\n      }});\n" for c in s.then
         )

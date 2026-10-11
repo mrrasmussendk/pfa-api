@@ -293,6 +293,29 @@ def test_an_assertion_name_is_read_whatever_escapes_javascript_allows(literal: s
     assert TOOLS["postman"].asserted(f"pm.test({literal}, () => {{}});") == [clause]
 
 
+@pytest.mark.parametrize(
+    ("when", "url"),
+    [
+        ("I send it to GET /items?limit=5", "/items?limit=5"),
+        ("I send it to GET /items?limit=5", "/items?limit=6"),
+        ("I send it to GET /items", "/items?limit=5"),
+        ("I send it to GET /items.", "/items"),
+    ],
+)
+def test_a_postman_test_is_held_to_the_path_its_when_names_not_the_query(when: str, url: str) -> None:
+    s = Scenario("kvad/q", "kvad", "API", ("postman",), ("g",), (when,), ("t",))
+    test = f"method: GET\nurl: '{{{{base_url}}}}{url}'\ncode: pm.test('then: t', () => {{}});\n"
+
+    assert TOOLS["postman"].check_test(s, test) == []
+
+
+def test_a_postman_test_sending_another_path_is_a_problem() -> None:
+    s = Scenario("kvad/q", "kvad", "API", ("postman",), ("g",), ("I send it to GET /items?limit=5",), ("t",))
+    test = "method: GET\nurl: '{{base_url}}/things?limit=5'\ncode: pm.test('then: t', () => {});\n"
+
+    assert TOOLS["postman"].check_test(s, test) == ["sends GET /things, but the When says GET /items"]
+
+
 def test_a_postman_stub_sends_the_request_its_when_names() -> None:
     s = Scenario("kvad/q", "kvad", "API", ("postman",), ("g",), ("I send it to PUT /kvad/rounds",), ("t",))
 
