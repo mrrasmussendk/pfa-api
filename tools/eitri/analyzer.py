@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from .compat import CompatError, analyze_compat
 from .context_budget import analyze_budgets
 from .core import EIT000, Diagnostic, EitriConfig
 from .graph import analyze_graph
@@ -32,7 +33,9 @@ def analyze(
     config: EitriConfig | None = None,
     *,
     slices_dir: Path | str | None = None,
+    base: str | None = None,
 ) -> list[Diagnostic]:
+    """Every diagnostic for the tree at ``root``; with ``base``, also EIT008 against the merge base with that ref."""
     root = Path(root).resolve()
     config = config or EitriConfig.read(root)
     if not config.enabled:
@@ -77,4 +80,9 @@ def analyze(
         police(own, None)
 
     diags.extend(analyze_budgets(slices, kernel_dir, config))
+    if base is not None:
+        try:
+            diags.extend(analyze_compat(root, slices, sd, config, base))
+        except CompatError as e:
+            raise EitriError(str(e)) from e
     return diags

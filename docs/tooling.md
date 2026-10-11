@@ -41,6 +41,7 @@ ruff check . && ruff format --check . && mypy    # what CI runs; `ruff check --f
 | **EIT005** | Error shape: no `HTTPException` from `fastapi`/`starlette` in the application outside the features, however imported or aliased — errors are RFC 9457 problem documents raised as `pfa.api.problems.Problem`. The module that defines the helper is exempt: it is the conversion point. | error |
 | **EIT006** | Features depend downward: nothing under `src/pfa/features/` outside `contract/` imports `fastapi`, `starlette`, `pfa.application` or `pfa.api`. Routes, request models and status codes live in `src/pfa/api/routes/<feature>.py`. | error |
 | **EIT007** | Dependency cycle: the features' `feature.json` dependencies must not loop (`a → b → a`). Each feature is understood through the contracts below it. | error |
+| **EIT008** | Breaking contract change, with `--base <ref>`: a contract member removed or changed while something outside its feature still used it at the merge base. Additions are free; removals wait for the migration. | error |
 | **EIT100** | **Context budget**: own source + dependency contract surfaces + kernel > budget → check fails. | error |
 | **EIT101** | Context budget report (the same number, always visible). | info |
 

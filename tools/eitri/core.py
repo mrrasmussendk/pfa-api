@@ -124,6 +124,18 @@ EIT007 = Descriptor(
     help_link=HELP_BASE + "EIT007.md",
 )
 
+EIT008 = Descriptor(
+    id="EIT008",
+    title="Breaking contract change",
+    message_format=(
+        "Contract of '{0}': {1}, but at {2} it is still used by {3} — change a contract in steps: add the "
+        "replacement, migrate every consumer, and remove the old member in a later change"
+    ),
+    category="Eitri.Architecture",
+    severity=Severity.ERROR,
+    help_link=HELP_BASE + "EIT008.md",
+)
+
 EIT100 = Descriptor(
     id="EIT100",
     title="Agent context budget exceeded",
@@ -145,7 +157,7 @@ EIT101 = Descriptor(
     help_link=HELP_BASE + "EIT100.md",
 )
 
-ALL_DESCRIPTORS: tuple[Descriptor, ...] = (EIT000, EIT001, EIT002, EIT003, EIT004, EIT005, EIT006, EIT007, EIT100, EIT101)
+ALL_DESCRIPTORS: tuple[Descriptor, ...] = (EIT000, EIT001, EIT002, EIT003, EIT004, EIT005, EIT006, EIT007, EIT008, EIT100, EIT101)
 
 
 @dataclass
