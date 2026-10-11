@@ -14,10 +14,13 @@ A task lives in one feature. This file says which guide to read for it; the guid
 
 | Task | Guide |
 |---|---|
+| Fix a bug, or change what existing code does | [Changing behaviour](harness/guides/changing-behaviour.md) |
 | Add an endpoint to an existing feature | [Adding a route](harness/guides/adding-a-route.md) |
 | Add a new capability with its own data and rules | [Adding a feature](harness/guides/adding-a-feature.md) |
 | Change what a feature's contract offers | [Changing a contract](harness/guides/changing-a-contract.md) |
 | Return an error from a route | [Returning errors](harness/guides/returning-errors.md) |
+| Add a setting (an environment variable) | [Adding a setting](harness/guides/adding-a-setting.md) |
+| Log something | [Logging](harness/guides/logging.md) |
 | Write or change tests | [Writing tests](harness/guides/writing-tests.md) |
 | Write or fix an end-to-end scenario | [End-to-end scenarios](harness/guides/e2e-scenarios.md) |
 | Act on a hook's feedback, or finish a change | [What the hooks tell you](harness/guides/hook-feedback.md) |

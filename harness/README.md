@@ -6,10 +6,13 @@ Start with the root [AGENTS.md](../AGENTS.md), then the owning slice's `AGENTS.m
 
 | Task | Feedforward instructions |
 |---|---|
+| Fix a bug or change existing behaviour | [Changing behaviour](guides/changing-behaviour.md) |
 | Add an endpoint | [Adding a route](guides/adding-a-route.md) |
 | Add a feature | [Adding a feature](guides/adding-a-feature.md) |
 | Change a contract | [Changing a contract](guides/changing-a-contract.md) |
 | Return an API error | [Returning errors](guides/returning-errors.md) |
+| Add a setting | [Adding a setting](guides/adding-a-setting.md) |
+| Log something | [Logging](guides/logging.md) |
 | Write or change tests | [Writing tests](guides/writing-tests.md) |
 | Write or fix an end-to-end scenario | [End-to-end scenarios](guides/e2e-scenarios.md) |
 | Act on a hook's feedback, or finish a change | [What the hooks tell you](guides/hook-feedback.md) |

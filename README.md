@@ -209,6 +209,7 @@ Read [docs/](docs/) to understand the project. Use [harness/](harness/) for inst
 | Understand slices, contracts, and message dispatch | [Architecture](docs/architecture.md) |
 | Understand how the agent harness works | [Full harness explanation](docs/tooling.md#heimdall--the-harness) |
 | Understand checks, token budgets, agent hooks, and CI | [Development tooling](docs/tooling.md) |
+| Fix a bug or change existing behaviour | [Changing behaviour](harness/guides/changing-behaviour.md) |
 | Add an endpoint | [Adding a route](harness/guides/adding-a-route.md) |
 | Return an API error | [Returning errors](harness/guides/returning-errors.md) |
 | Write or change tests | [Writing tests](harness/guides/writing-tests.md) |
