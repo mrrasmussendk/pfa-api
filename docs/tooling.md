@@ -26,6 +26,7 @@ ruff check . && ruff format --check . && mypy    # what CI runs; `ruff check --f
 
 - **Ruff** lints and formats, configured in `[tool.ruff]`: line length 140, Python 3.10 target, isort that knows the repo's first-party packages. Rule families: pycodestyle, pyflakes, isort, bugbear, pyupgrade, simplify, comprehensions, performance, pylint errors and warnings, implicit string concatenation, and a ban on stray `print` in the service (the tooling CLIs and tests are exempt — printing is their job). Each ignored rule has its reason beside it in the config.
 - **mypy** checks `src/` and the tooling, configured in `[tool.mypy]`. The service packages require typed definitions; the tooling is checked with `check_untyped_defs`. Torch and sentence-transformers ship no stubs and are ignored as missing.
+- **Links resolve.** `tests/tooling/test_docs_links.py` follows every relative link in the repository's Markdown (the vendored `postman/skills` aside) to a file that exists and, with a `#fragment`, to a heading in it. The guides are the agents' instructions, and a dead link leads nowhere.
 - **Warnings are errors** in pytest (`filterwarnings = ["error"]`): a deprecation anywhere fails the suite instead of scrolling past. The dev extra depends on `httpx2`, which Starlette's `TestClient` now expects.
 
 ## Eitri — the walls
@@ -314,6 +315,8 @@ Two workflows. `ci.yml` is the **gate**: facts, and a fact failing fails the bui
 [Mermaid source](diagrams/ci-build.mmd)
 
 **What the change job runs.** On a pull request only, the `change` job holds the PR to the same promises the Stop hook does, against the branch it merges into: `eitri check --base` (contracts change additively, EIT008), `tools/openapi_compat.py --base` (no change that breaks a client of `docs/openapi.json`; a higher major version declares one), and `tools/diff_coverage.py --base` (at least 90% of changed application lines run under the tests).
+
+**What the audit job runs.** `tools/dependency_audit.py` runs `pip-audit` over the service's installed dependencies, CPU torch included, as the image has them. An advisory with a fixed release fails the build, because it is an upgrade away. One with no fix yet is listed and passes.
 
 **What the scenarios job runs.** `heimdall e2e --all` runs every scenario on every pull request and every push to `main` or a tag, without Jev and without a remembered green run, so a human's change is held to the same promise as an agent's. The runner is the environment: Heimdall starts the service from `harness/e2e/system.json` on the runner, and the Postman CLI runs the requests from the checkout. Nothing is deployed and no Postman login is needed. The job caches the model weights and loads them before the run; on a failure it prints the service's log.
 

@@ -114,6 +114,22 @@ jobs:
         if: failure()
         run: cat .heimdall/e2e-service.log || true
 
+  # ------------------------------------------------------------------ 1c. the dependencies: nothing a release has fixed
+  audit:
+    name: dependency audit
+    needs: enforce
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - name: Install the API (CPU torch), as the image does
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e . pip-audit
+      - name: No installed package has an advisory a release has fixed
+        run: python tools/dependency_audit.py
+
   # ------------------------------------------------------------------ 2. the distribution must not carry the tooling
   wheel:
     name: wheel ships no tooling

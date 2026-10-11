@@ -86,7 +86,7 @@ ignore = [
 "tests/**" = ["T20", "PLW1510", "PLW0108"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["pfa", "eitri", "heimdall", "brokkr", "openapi_compat", "diff_coverage"]
+known-first-party = ["pfa", "eitri", "heimdall", "brokkr", "openapi_compat", "diff_coverage", "dependency_audit"]
 
 [tool.ruff.format]
 docstring-code-format = true
