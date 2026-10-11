@@ -3,6 +3,7 @@ tree, changes it in the working copy, and checks it against ``HEAD``."""
 
 from __future__ import annotations
 
+import io
 import subprocess
 
 import pytest
@@ -10,6 +11,7 @@ from conftest import TempProject
 
 from eitri import EitriConfig, analyze
 from eitri.analyzer import EitriError
+from eitri.cli import run
 
 CONTRACT = """
 from dataclasses import dataclass
@@ -116,3 +118,25 @@ def test_a_base_that_git_would_read_as_an_option_is_refused(project: TempProject
 
     with pytest.raises(EitriError, match="not an option"):
         analyze(project.root, EitriConfig(), base="--output=/tmp/x")
+
+
+# ---------------------------------------------------------------- through the CLI
+
+
+def test_eitri_check_base_reports_a_breaking_change_and_fails(project: TempProject) -> None:
+    _committed(project)
+    project.write("pfa/features/rune/contract/__init__.py", CONTRACT.replace("    budget: int\n", ""))
+    out, err = io.StringIO(), io.StringIO()
+
+    code = run(["check", "--root", str(project.root), "--base", "HEAD", "--no-info"], out, err)
+
+    assert code == 1 and "error EIT008" in out.getvalue() and "`Split.budget` removed" in out.getvalue()
+
+
+def test_eitri_check_base_outside_a_repository_fails_with_git_s_reason(project: TempProject) -> None:
+    project.slice("rune", **{"contract/__init__.py": CONTRACT})
+    out, err = io.StringIO(), io.StringIO()
+
+    code = run(["check", "--root", str(project.root), "--base", "HEAD"], out, err)
+
+    assert code == 1 and err.getvalue().startswith("eitri: git merge-base failed")

@@ -178,3 +178,29 @@ def test_a_base_without_a_snapshot_has_nothing_to_compare(tmp_path: Path, capsys
     (root / "docs" / "openapi.json").write_text(json.dumps(SPEC), encoding="utf-8")
 
     assert compare("HEAD", root) == 0 and "nothing to compare" in capsys.readouterr().out
+
+
+def test_a_base_that_git_would_read_as_an_option_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="not an option"):
+        compare("--output=/tmp/x", tmp_path)
+
+
+def test_a_change_inside_a_schema_referenced_through_all_of_is_found() -> None:
+    old = copy.deepcopy(SPEC)
+    _schemas(old)["Mode"] = {"type": "string", "enum": ["fast", "exact"]}
+    _schemas(old)["SplitRequest"]["properties"]["mode"] = {"allOf": [{"$ref": "#/components/schemas/Mode"}], "description": "How to cut"}
+    new = copy.deepcopy(old)
+    _schemas(new)["Mode"]["enum"] = ["fast"]
+
+    assert breaking_changes(old, new) == ["POST /split request.mode: no longer accepts ['exact']"]
+
+
+def test_a_response_that_may_return_a_new_enum_value_breaks_its_readers_and_one_that_returns_fewer_does_not() -> None:
+    old = copy.deepcopy(SPEC)
+    _schemas(old)["SplitOut"]["properties"]["state"] = {"type": "string", "enum": ["ok", "partial"]}
+    wider, narrower = copy.deepcopy(old), copy.deepcopy(old)
+    _schemas(wider)["SplitOut"]["properties"]["state"]["enum"] = ["ok", "partial", "failed"]
+    _schemas(narrower)["SplitOut"]["properties"]["state"]["enum"] = ["ok"]
+
+    assert breaking_changes(old, wider) == ["POST /split 200.state: may now return ['failed']"]
+    assert breaking_changes(old, narrower) == []

@@ -273,6 +273,8 @@ def _parse(args: list[str]) -> _Options:
         budget = int(values.get("budget", "15000"))
     except ValueError:
         raise _UsageError from None
+    if budget <= 0:
+        raise _UsageError
     return _Options(values["root"], budget, values.get("kernel"))
 
 

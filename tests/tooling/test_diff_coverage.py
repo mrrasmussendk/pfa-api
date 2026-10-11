@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from diff_coverage import FileReport, changed_lines, percent, report
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from diff_coverage import FileReport, changed_lines, diff_since, percent, report
 
 DIFF = (
     "diff --git a/src/pfa/a.py b/src/pfa/a.py\n--- a/src/pfa/a.py\n+++ b/src/pfa/a.py\n"
@@ -44,3 +49,30 @@ def test_a_change_without_executable_lines_is_fully_covered() -> None:
 
 def test_missed_lines_are_named_as_ranges() -> None:
     assert FileReport("a", frozenset(), frozenset({3, 4, 5, 9, 11, 12})).ranges == "3-5, 9, 11-12"
+
+
+# ---------------------------------------------------------------- the change, from git
+
+
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=root, check=True, capture_output=True)
+
+
+def test_the_change_holds_edited_tracked_lines_and_every_untracked_file_whatever_its_name(tmp_path: Path) -> None:
+    (tmp_path / "src/pfa").mkdir(parents=True)
+    (tmp_path / "src/pfa/old.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    (tmp_path / "src/pfa/old.py").write_text("a = 1\nb = 3\nc = 4\n", encoding="utf-8")
+    (tmp_path / "src/pfa/æble kage.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+    (tmp_path / "notes.py").write_text("outside = True\n", encoding="utf-8")
+
+    changed = changed_lines(diff_since("HEAD", tmp_path))
+
+    assert changed == {"src/pfa/old.py": {2, 3}, "src/pfa/æble kage.py": {1, 2}}
+
+
+def test_a_base_that_git_would_read_as_an_option_is_refused(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="not an option"):
+        diff_since("--output=/tmp/x", tmp_path)

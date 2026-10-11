@@ -46,14 +46,14 @@ def _hook(rest: list[str], io: IO, root: str) -> int:
 
 
 def _drift(rest: list[str], io: IO, root: str) -> int:
-    from .commands.drift import run
+    from .commands.drift import run_report, run_session
 
     if rest[:1] == ["--session"] and len(rest) == 2:
-        return run(io[1], io[2], root, session=rest[1])
+        return run_session(io[1], io[2], root, rest[1])
     if rest:
         io[2].write("usage: heimdall drift [--session <id>]\n")
         return 2
-    return run(io[1], io[2], root)
+    return run_report(io[1], io[2], root)
 
 
 def _review(rest: list[str], io: IO, root: str) -> int:

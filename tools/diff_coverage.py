@@ -77,21 +77,23 @@ def percent(reports: list[FileReport]) -> float:
     return 100.0 if total == 0 else 100.0 * (total - sum(len(r.missed) for r in reports)) / total
 
 
-def _diff(base: str) -> str:
+def _git(root: Path, *args: str) -> str:
+    """git's output in ``root``, with paths unquoted whatever characters they hold."""
+    cmd = ["git", "-C", str(root), "-c", "core.quotePath=false", *args]
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True).stdout
+
+
+def diff_since(base: str, root: Path = REPO) -> str:
+    """The change under ``SOURCE`` since the merge base with ``base``, as a ``--unified=0`` diff: tracked changes,
+    then each untracked file as wholly added."""
     if base.startswith("-"):
         raise SystemExit(f"--base {base!r} must be a ref, not an option")
-    git = ["git", "-C", str(REPO)]
-    rev = subprocess.run([*git, "merge-base", base, "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
-    tracked = subprocess.run(
-        [*git, "diff", "--no-color", "--unified=0", rev, "--", SOURCE], capture_output=True, text=True, check=True
-    ).stdout
-    untracked = subprocess.run(
-        [*git, "ls-files", "--others", "--exclude-standard", "--", SOURCE], capture_output=True, text=True, check=True
-    )
-    for path in untracked.stdout.split():
-        count = len((REPO / path).read_text(encoding="utf-8", errors="replace").splitlines())
-        tracked += f"+++ b/{path}\n@@ -0,0 +1,{count} @@\n"
-    return tracked
+    rev = _git(root, "merge-base", base, "HEAD").strip()
+    diff = _git(root, "diff", "--no-color", "--unified=0", rev, "--", SOURCE)
+    for path in (p for p in _git(root, "ls-files", "-z", "--others", "--exclude-standard", "--", SOURCE).split("\0") if p):
+        count = len((root / path).read_text(encoding="utf-8", errors="replace").splitlines())
+        diff += f"+++ b/{path}\n@@ -0,0 +1,{count} @@\n"
+    return diff
 
 
 def _coverage_files(path: Path) -> dict[str, dict[str, list[int]]]:
@@ -105,7 +107,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--floor", type=float, default=FLOOR, help=f"lowest share of changed lines tests must run (default {FLOOR:g})")
     p.add_argument("--coverage", default="coverage.json", help="coverage's JSON report (default coverage.json)")
     args = p.parse_args(argv)
-    reports = report(changed_lines(_diff(args.base)), _coverage_files(REPO / args.coverage))
+    reports = report(changed_lines(diff_since(args.base)), _coverage_files(REPO / args.coverage))
     share = percent(reports)
     lines = sum(len(r.executable) for r in reports)
     print(f"diff coverage: {share:.1f}% of {lines} changed application line(s) run under the tests (floor {args.floor:g}%)")

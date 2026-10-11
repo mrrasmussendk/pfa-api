@@ -129,14 +129,22 @@ def _slice_table(sessions: dict[str, _Session], m: MapModel, stdout: TextIO) -> 
     stdout.write(f"rule of thumb: sustained oob% > {OOB_RULE} on a slice = re-cut that seam\n")
 
 
-def run(stdout: TextIO, stderr: TextIO, root: str, session: str | None = None) -> int:
+def run_report(stdout: TextIO, stderr: TextIO, root: str) -> int:
+    """Every session, then every slice."""
     inputs = _inputs(root, stderr)
     if inputs is None:
         return 1
     sessions, m = inputs
-    if session is not None:
-        stdout.write(session_summary(sessions.get(session, _Session()), m) + "\n")
-        return 0
     _session_table(sessions, m, stdout)
     _slice_table(sessions, m, stdout)
+    return 0
+
+
+def run_session(stdout: TextIO, stderr: TextIO, root: str, session: str) -> int:
+    """One session's line."""
+    inputs = _inputs(root, stderr)
+    if inputs is None:
+        return 1
+    sessions, m = inputs
+    stdout.write(session_summary(sessions.get(session, _Session()), m) + "\n")
     return 0
