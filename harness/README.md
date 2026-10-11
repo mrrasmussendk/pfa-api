@@ -22,4 +22,4 @@ Start with the root [AGENTS.md](../AGENTS.md), then the owning slice's `AGENTS.m
 
 ⚠️ Eitri diagnostics link to `rules/`, and Heimdall reads each rule's `**Fix:**` line for review feedback. Preserve that marker when editing rule guidance.
 
-The executable enforcement and observation tools remain in [tools/](../tools/). Generated maps and per-checkout telemetry remain in `.heimdall/`. `e2e/system.json` tells `heimdall e2e` how to start the system under test. Root and slice `AGENTS.md` files stay at their discovery locations.
+The executable enforcement and observation tools remain in [tools/](../tools/). Generated maps and per-checkout telemetry remain in `.heimdall/`. `e2e/system.json` tells `heimdall e2e` how to start the system under test; the scenarios themselves live in `tests/e2e/<feature>.feature`, and their Postman tests in `postman/collections/e2e/`. Root and slice `AGENTS.md` files stay at their discovery locations.
