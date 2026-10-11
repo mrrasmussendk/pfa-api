@@ -88,3 +88,10 @@ def test_coverage_keys_become_repo_relative_posix_paths_however_coverage_wrote_t
     report_path.write_text(json.dumps({"files": keys}), encoding="utf-8")
 
     assert set(coverage_files(report_path, tmp_path)) == {"src/pfa/a.py", "src/pfa/b.py", "src/pfa/c.py", "/elsewhere/d.py"}
+
+
+def test_git_is_never_handed_an_option_it_was_not_written_to_pass(tmp_path: Path) -> None:
+    from diff_coverage import _git
+
+    with pytest.raises(SystemExit, match="refusing git diff"):
+        _git(tmp_path, "diff", "--output=/tmp/x")

@@ -25,7 +25,15 @@ class CompatError(Exception):
     """git could not answer: no repository, or an unknown ref."""
 
 
+# The only options this module passes to git. Anything else that starts with "-" (a ref someone handed in, say)
+# would be read by git as an option, so it is refused here, at the call, whatever the caller checked.
+_GIT_OPTIONS = frozenset({"-r", "--name-only", "--"})
+
+
 def _git(root: Path, *args: str) -> str:
+    unexpected = [a for a in args[1:] if a.startswith("-") and a not in _GIT_OPTIONS]
+    if unexpected:
+        raise CompatError(f"refusing git {args[0]} with {unexpected!r}: a ref or path, not an option, is expected there")
     try:
         p = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
     except OSError as e:

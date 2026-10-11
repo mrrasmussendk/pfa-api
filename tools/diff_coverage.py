@@ -77,8 +77,15 @@ def percent(reports: list[FileReport]) -> float:
     return 100.0 if total == 0 else 100.0 * (total - sum(len(r.missed) for r in reports)) / total
 
 
+# The only options this module passes to git; anything else starting with "-" is refused at the call.
+_GIT_OPTIONS = frozenset({"--no-color", "--unified=0", "-z", "--others", "--exclude-standard", "--"})
+
+
 def _git(root: Path, *args: str) -> str:
     """git's output in ``root``, with paths unquoted whatever characters they hold."""
+    unexpected = [a for a in args[1:] if a.startswith("-") and a not in _GIT_OPTIONS]
+    if unexpected:
+        raise SystemExit(f"refusing git {args[0]} with {unexpected!r}: a ref or path, not an option, is expected there")
     cmd = ["git", "-C", str(root), "-c", "core.quotePath=false", *args]
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", check=True).stdout
 

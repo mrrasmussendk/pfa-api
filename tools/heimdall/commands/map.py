@@ -88,16 +88,17 @@ def _scenarios_line(root_abs: str, name: str) -> str:
     return f"scenarios: `{SCENARIOS_DIR}/{name}.feature` — " + (", ".join(names) if names else "(none yet)")
 
 
-def _budget_used(root_abs: str, budget: int) -> dict[str, int]:
+def _budget_used(root_abs: str, budget: int) -> tuple[dict[str, int], str | None]:
     """Each feature's EIT100 working set as a percentage of ``budget``, rounded to 10: the headroom an agent
-    should know before it adds code, coarse enough that the generated line rarely changes. Empty when Eitri
-    cannot measure the tree (it has its own check for that)."""
+    should know before it adds code, coarse enough that the generated line rarely changes. When Eitri cannot
+    measure the tree, no percentages and the reason, for the map to report; the budget lines are then left
+    out, and ``eitri check`` names the problem itself."""
     try:
         from eitri.context_budget import measure
         from eitri.core import EitriConfig
         from eitri.project import discover_slices, find_kernel_dir, find_slices_dir
-    except ImportError:
-        return {}
+    except ImportError as e:
+        return {}, f"Eitri is not installed ({e})"
     from pathlib import Path
 
     root = Path(root_abs)
@@ -107,9 +108,9 @@ def _budget_used(root_abs: str, budget: int) -> dict[str, int]:
         slices = discover_slices(sd) if sd is not None else []
         kernel = find_kernel_dir(root, config, sd)
         by_name = {s.name: s for s in slices}
-        return {s.name: round(10 * measure(s, by_name, kernel, config).total / budget) * 10 for s in slices}
-    except (OSError, ValueError, SyntaxError):
-        return {}
+        return {s.name: round(10 * measure(s, by_name, kernel, config).total / budget) * 10 for s in slices}, None
+    except (OSError, ValueError, SyntaxError) as e:
+        return {}, f"Eitri could not measure the features ({e})"
 
 
 def _set_marker(txt: str, name: str, line: str, after: str | None) -> str:
@@ -381,7 +382,9 @@ def run(args: list[str], stdout: TextIO, stderr: TextIO, cwd: str) -> int:
     except _UnreadableManifest as e:
         stderr.write(f"heimdall map: unreadable {_rel(e.path, cwd)}: {e.reason}\n")
         return 1
-    used = _budget_used(lay.root, opts.budget)
+    used, unmeasured = _budget_used(lay.root, opts.budget)
+    if unmeasured:
+        stderr.write(f"heimdall map: budget lines left out: {unmeasured}\n")
     for name, refs in discovered:
         lines = _feature_lines(lay, name, refs, routes[name], used, opts.budget)
         _write_feature_agents(os.path.join(lay.slices_dir, name, "AGENTS.md"), name, lines)

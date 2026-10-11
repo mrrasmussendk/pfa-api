@@ -48,10 +48,8 @@ def check(root: Path, *extra: str) -> str:
 
 
 def main() -> int:
-    try:
+    if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # diagnostics contain em dashes
-    except (AttributeError, ValueError):
-        pass
     passed = failed = 0
 
     real = check(REPO)

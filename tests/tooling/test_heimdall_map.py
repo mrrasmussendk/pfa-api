@@ -241,7 +241,8 @@ def test_when_eitri_cannot_measure_the_tree_the_map_leaves_the_budget_out(repo: 
     _write_sample_tree(repo)
     repo.write_file("src/pfa/features/rune/feature.json", '{"depends_on": "kvad"}\n')
 
-    code, _, _ = repo.run("", "map", "--root", "src")
+    code, _, stderr = repo.run("", "map", "--root", "src")
 
     assert code == 0 and "budget:" not in repo.read_file("src/pfa/features/kvad/AGENTS.md")
+    assert stderr.startswith("heimdall map: budget lines left out: Eitri could not measure the features (")
     assert "| kvad | rune | 0 | ? |" in repo.read_file("AGENTS.md")

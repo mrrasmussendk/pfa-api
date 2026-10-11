@@ -155,3 +155,10 @@ def test_eitri_check_base_outside_a_repository_fails_with_git_s_reason(project: 
     code = run(["check", "--root", str(project.root), "--base", "HEAD"], out, err)
 
     assert code == 1 and err.getvalue().startswith("eitri: git merge-base failed")
+
+
+def test_git_is_never_handed_an_option_it_was_not_written_to_pass(project: TempProject) -> None:
+    from eitri.compat import CompatError, _git
+
+    with pytest.raises(CompatError, match="refusing git show"):
+        _git(project.root, "show", "--output=/tmp/x")
