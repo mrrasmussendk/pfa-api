@@ -128,3 +128,19 @@ def test_without_a_session_no_drift_is_asked_for(monkeypatch: pytest.MonkeyPatch
     _, ran = _stop(monkeypatch)
 
     assert "drift" not in ran
+
+
+def test_a_review_block_names_the_failures_even_when_unsure_rows_would_fill_the_tail(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    finish = _load()
+    review = "swallows_error (fail)   a.py:1 f   0.75\n" + "".join(f"untested (unsure)   b.py:{i} g   0.45\n" for i in range(100))
+    monkeypatch.setattr(finish, "_run", lambda cmd: (1, review) if "heimdall review" in " ".join(cmd) else (0, ""))
+    monkeypatch.setattr(finish, "_nothing_changed", lambda: False)
+    monkeypatch.setattr(finish, "_covered", lambda: False)
+    monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
+
+    code = finish.main()
+
+    err = capsys.readouterr().err
+    assert code == 2 and "swallows_error (fail)" in err and "(unsure)" not in err

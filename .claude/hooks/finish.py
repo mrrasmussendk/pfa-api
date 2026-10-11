@@ -62,6 +62,12 @@ def _tail(text: str) -> str:
     return "\n".join(text.splitlines()[-TAIL:])
 
 
+def _without_unsure(text: str) -> str:
+    """The review's output without its "(unsure)" rows: a block is about what failed, and on a large change the
+    unsure rows push the failing ones out of the tail the agent gets."""
+    return "\n".join(line for line in text.splitlines() if "(unsure)" not in line)
+
+
 def _nothing_changed() -> bool:
     _, status = _run(["git", "status", "--porcelain"])
     committed, _ = _run(["git", "diff", "--quiet", f"{BASE}...HEAD"])
@@ -128,7 +134,7 @@ def _review(e2e: str, drift: str) -> int:
     """Jev's review of the committed diff: a block, or a message for the user that leads with the e2e line."""
     code, out = _run(REVIEW)
     if code == EXIT_REQUEST_CHANGES:
-        return _block("Stop hook: heimdall review asked for changes. Fix what it names before finishing.\n\n" + _tail(out))
+        return _block("Stop hook: heimdall review asked for changes. Fix what it names before finishing.\n\n" + _tail(_without_unsure(out)))
     if code == EXIT_ESCALATE:
         return _tell(e2e + "\nheimdall review: escalate — the judge wants a human to look.\n" + _tail(out) + drift)
     if code == EXIT_ERROR:
