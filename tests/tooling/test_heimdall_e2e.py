@@ -335,3 +335,10 @@ def test_bad_arguments_are_a_usage_error(repo: TempRepo, args: list[str]) -> Non
     code, _, err = _run(repo, *args, seams=Seams())
 
     assert code == EXIT_ERROR and "usage" in err
+
+
+def test_a_base_that_git_would_read_as_an_option_is_refused(tmp_path) -> None:
+    from heimdall.commands.e2e import working_diff
+
+    with pytest.raises(E2EError, match="not an option"):
+        working_diff(str(tmp_path), "--output=/tmp/x")

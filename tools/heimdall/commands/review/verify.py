@@ -123,7 +123,9 @@ def _rule(check: Check | None, inquiry: Inquiry) -> list[Ruling]:
     """The rulings with every confirmation checked against the code; undecided for all when there is no verifier
     or it could not rule."""
     if check is None:
-        return [Ruling(UNDECIDED, "no verifier ran: set ANTHROPIC_API_KEY so Claude checks Jev's doubts")] * len(inquiry.doubts)
+        return [
+            Ruling(UNDECIDED, "Claude did not verify: it runs in the PR pipeline (heimdall review --claude, with ANTHROPIC_API_KEY)")
+        ] * len(inquiry.doubts)
     try:
         rulings = check(inquiry)
     except VerifyError as e:
@@ -141,7 +143,7 @@ def _believed(ruling: Ruling, sources: dict[str, str]) -> Ruling:
 
 
 def _where(r: Ruling) -> str:
-    return " ".join(f"{f.file}:{f.line} {f.function}: {f.problem}. Fix: {f.fix}." for f in r.findings)
+    return " ".join(f"{f.file}:{f.line} {f.function}: {f.problem.rstrip('.')}. Fix: {f.fix.rstrip('.')}." for f in r.findings)
 
 
 def _record(doubts: list[Doubt], rulings: list[Ruling]) -> list[dict[str, Any]]:
@@ -151,26 +153,44 @@ def _record(doubts: list[Doubt], rulings: list[Ruling]) -> list[dict[str, Any]]:
     ]
 
 
+def _doubts(v: Verdict) -> tuple[list[Doubt], list[Doubt]]:
+    """The checks to verify: those that failed (they block unless refuted) and those Jev was unsure of (they
+    block only if confirmed). Facts are never among them."""
+    failing = [Doubt(v.reasons[i], v.advice[i]) for i in v.judged] if v.outcome == "request_changes" else []
+    return failing, [Doubt(reason, advice) for reason, advice in v.unsure]
+
+
+def _facts_of(v: Verdict) -> list[tuple[str, str]]:
+    """The blocks that rest on a fact, kept whatever the verifier says."""
+    if v.outcome != "request_changes":
+        return []
+    return [(r, a) for i, (r, a) in enumerate(zip(v.reasons, v.advice, strict=True)) if i not in v.judged]
+
+
 def settle(v: Verdict, check: Check | None, evidence: Evidence) -> Verdict:
-    """Jev's verdict once the verifier has ruled on each of its judged blocks: facts and confirmed doubts block,
-    undecided doubts escalate, and with every doubt refuted the outcome is the one Jev gives without them."""
-    if v.outcome != "request_changes" or not v.judged or v.unblocked is None:
+    """Jev's verdict once the verifier has ruled on each failing and unsure check: facts and confirmed checks
+    block, an undecided failing check escalates, and with nothing confirmed the outcome is the one without them."""
+    failing, unsure = _doubts(v)
+    if not failing and not unsure:
         return v
-    doubts = [Doubt(v.reasons[i], v.advice[i]) for i in v.judged]
+    doubts = failing + unsure
     rulings = _rule(check, Inquiry(evidence.task, tuple(doubts), evidence.diff, evidence.sources))
     record = _record(doubts, rulings)
-    facts = [(r, a) for i, (r, a) in enumerate(zip(v.reasons, v.advice, strict=True)) if i not in v.judged]
-    confirmed = [(f"confirmed by Claude: {d.reason}", _where(r)) for d, r in zip(doubts, rulings, strict=True) if r.verdict == CONFIRMED]
-    if facts or confirmed:
-        reasons, advice = zip(*(facts + confirmed), strict=True)
-        return replace(v, reasons=list(reasons), advice=list(advice), judged=[], unblocked=None, verification=record)
+    confirmed = [(d.reason, _where(r)) for d, r in zip(doubts, rulings, strict=True) if r.verdict == CONFIRMED]
+    blocks = _facts_of(v) + confirmed
+    if blocks:
+        reasons, advice = zip(*blocks, strict=True)
+        return replace(
+            v, outcome="request_changes", reasons=list(reasons), advice=list(advice), judged=[], unblocked=None, verification=record
+        )
+    base = v.unblocked or v
     undecided = [
-        (f"unverified: {d.reason}", f"{r.reason}. Jev's advice: {d.advice}")
-        for d, r in zip(doubts, rulings, strict=True)
+        (f"unverified: {d.reason}", f"{r.reason}. Proposed fix: {d.advice}")
+        for d, r in zip(failing, rulings, strict=False)
         if r.verdict == UNDECIDED
     ]
     if undecided:
-        rest = list(zip(v.unblocked.reasons, v.unblocked.advice, strict=False)) if v.unblocked.outcome == "escalate" else []
+        rest = list(zip(base.reasons, base.advice, strict=False)) if base.outcome == "escalate" else []
         reasons, advice = zip(*(undecided + rest), strict=True)
         return replace(v, outcome="escalate", reasons=list(reasons), advice=list(advice), judged=[], unblocked=None, verification=record)
-    return replace(v.unblocked, verification=record)
+    return replace(base, verification=record)
