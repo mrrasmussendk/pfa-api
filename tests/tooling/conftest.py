@@ -4,6 +4,7 @@ import io
 import json
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -133,22 +134,26 @@ def project(tmp_path: Path) -> TempProject:
 
 # ---------------------------------------------------------------- heimdall e2e
 
-E2E_SCENARIO = {
-    "method": "API",
-    "tools": ["postman"],
-    "scenario": {"given": "I have a valid API key", "when": "I send a request to the API", "then": "I receive a response"},
-}
-E2E_REQUEST = "$kind: http-request\nscripts:\n  - type: afterResponse\n    code: pm.test('then', () => {});\n"
+E2E_THEN = ("I receive a response",)
+E2E_REQUEST = (
+    "$kind: http-request\nmethod: POST\nurl: '{{base_url}}/run'\nscripts:\n"
+    "  - type: afterResponse\n    code: pm.test('then: I receive a response', () => {});\n"
+)
 
 
-def e2e_scenario_json(**over: object) -> str:
-    """A scenario file, with ``over`` replacing top-level keys."""
-    return json.dumps({**E2E_SCENARIO, **over})
+def e2e_scenario_text(name: str, *, tags: str = "", then: tuple[str, ...] = E2E_THEN) -> str:
+    """One scenario as Gherkin, with ``tags`` on its own line above it when given."""
+    clauses = "".join(f"    {'Then' if i == 0 else 'And'} {c}\n" for i, c in enumerate(then))
+    head = f"  {tags}\n" if tags else ""
+    return f"\n{head}  Scenario: {name}\n    Given I have a valid API key\n    When I send a request to POST /run\n{clauses}"
 
 
-def write_e2e_scenario(repo: TempRepo, sid: str, request: str | None = E2E_REQUEST) -> None:
-    """The scenario file, and the Postman request that runs it unless ``request`` is None."""
-    repo.write_file(f"tests/e2e/{sid}.json", e2e_scenario_json())
+def write_e2e_scenario(repo: TempRepo, sid: str, request: str | None = E2E_REQUEST, **text: Any) -> None:
+    """The scenario, added to its feature's file, and the Postman request that runs it unless ``request`` is None."""
+    feature, name = sid.split("/")
+    path = repo.root / f"tests/e2e/{feature}.feature"
+    head = path.read_text(encoding="utf-8") if path.exists() else f"@API\nFeature: {feature}\n"
+    repo.write_file(f"tests/e2e/{feature}.feature", head + e2e_scenario_text(name, **text))
     if request is not None:
         repo.write_file(f"postman/collections/e2e/{sid}.request.yaml", request)
 
@@ -162,5 +167,5 @@ def write_e2e_project(repo: TempRepo) -> TempRepo:
     return repo
 
 
-def e2e_scenario(sid: str, tools: tuple[str, ...] = ("postman",)) -> Scenario:
-    return Scenario(id=sid, feature=sid.split("/")[0], method="API", tools=tools, given="g", when="w", then="t")
+def e2e_scenario(sid: str, tools: tuple[str, ...] = ("postman",), lines: tuple[int, int] = (4, 7)) -> Scenario:
+    return Scenario(sid, sid.split("/")[0], "API", tools, ("g",), ("w",), ("t",), lines)
