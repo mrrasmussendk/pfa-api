@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from diff_coverage import FileReport, changed_lines, diff_since, percent, report
+from diff_coverage import FileReport, changed_lines, coverage_files, diff_since, percent, report
 
 DIFF = (
     "diff --git a/src/pfa/a.py b/src/pfa/a.py\n--- a/src/pfa/a.py\n+++ b/src/pfa/a.py\n"
@@ -78,3 +79,12 @@ def test_the_change_holds_edited_tracked_lines_and_every_untracked_file_whatever
 def test_a_base_that_git_would_read_as_an_option_is_refused(tmp_path: Path) -> None:
     with pytest.raises(SystemExit, match="not an option"):
         diff_since("--output=/tmp/x", tmp_path)
+
+
+def test_coverage_keys_become_repo_relative_posix_paths_however_coverage_wrote_them(tmp_path: Path) -> None:
+    data = {"executed_lines": [1], "missing_lines": []}
+    keys = {"src/pfa/a.py": data, "src\\pfa\\b.py": data, str(tmp_path / "src" / "pfa" / "c.py"): data, "/elsewhere/d.py": data}
+    report_path = tmp_path / "coverage.json"
+    report_path.write_text(json.dumps({"files": keys}), encoding="utf-8")
+
+    assert set(coverage_files(report_path, tmp_path)) == {"src/pfa/a.py", "src/pfa/b.py", "src/pfa/c.py", "/elsewhere/d.py"}

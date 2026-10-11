@@ -96,9 +96,21 @@ def diff_since(base: str, root: Path = REPO) -> str:
     return diff
 
 
-def _coverage_files(path: Path) -> dict[str, dict[str, list[int]]]:
+def coverage_files(path: Path, root: Path = REPO) -> dict[str, dict[str, list[int]]]:
+    """Coverage's JSON ``files`` table keyed the way the diff names files: posix paths relative to ``root``.
+    Coverage writes relative paths with ``relative_files`` and absolute ones without; Windows writes backslashes."""
     files = json.loads(path.read_text(encoding="utf-8")).get("files", {})
-    return {Path(k).resolve().relative_to(REPO).as_posix() if Path(k).is_absolute() else k.replace("\\", "/"): v for k, v in files.items()}
+    return {_repo_path(key, root): data for key, data in files.items()}
+
+
+def _repo_path(key: str, root: Path) -> str:
+    posix = key.replace("\\", "/")
+    if not Path(posix).is_absolute():
+        return posix
+    try:
+        return Path(posix).resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return posix  # outside the repository: no changed line can match it
 
 
 def main(argv: list[str]) -> int:
@@ -107,7 +119,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--floor", type=float, default=FLOOR, help=f"lowest share of changed lines tests must run (default {FLOOR:g})")
     p.add_argument("--coverage", default="coverage.json", help="coverage's JSON report (default coverage.json)")
     args = p.parse_args(argv)
-    reports = report(changed_lines(diff_since(args.base)), _coverage_files(REPO / args.coverage))
+    reports = report(changed_lines(diff_since(args.base)), coverage_files(REPO / args.coverage))
     share = percent(reports)
     lines = sum(len(r.executable) for r in reports)
     print(f"diff coverage: {share:.1f}% of {lines} changed application line(s) run under the tests (floor {args.floor:g}%)")
