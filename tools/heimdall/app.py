@@ -11,7 +11,7 @@ USAGE = (
     "usage: heimdall <hook|map|drift|estimate|review|e2e> [args]\n"
     "  hook                      read a PostToolUse event on stdin, run sensors, exit 2 on feedback\n"
     "  map --root <dir> [--budget 15000] [--kernel <name>]\n"
-    "  drift                     telemetry vs map: per-session table, then per-slice aggregate\n"
+    "  drift [--session <id>]    telemetry vs map: per-session table, then per-slice aggregate; or one session's line\n"
     "  estimate <file-or-dir>    token estimate (same estimator Eitri checks with)\n"
     "  review [--base <ref>|--diff <file|->] [--task ..] [--json ..] [--markdown ..] [--dry-run]\n"
     "                            Jev (TypeSafe AI) judges the diff; policy in code; exit 0/1/2/3\n"
@@ -48,6 +48,11 @@ def _hook(rest: list[str], io: IO, root: str) -> int:
 def _drift(rest: list[str], io: IO, root: str) -> int:
     from .commands.drift import run
 
+    if rest[:1] == ["--session"] and len(rest) == 2:
+        return run(io[1], io[2], root, session=rest[1])
+    if rest:
+        io[2].write("usage: heimdall drift [--session <id>]\n")
+        return 2
     return run(io[1], io[2], root)
 
 

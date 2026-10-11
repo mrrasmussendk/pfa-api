@@ -51,6 +51,36 @@ jobs:
           git diff --exit-code -- AGENTS.md src/pfa/features/*/AGENTS.md \
             || { echo "::error::AGENTS.md is stale — run 'heimdall map --root .' and commit"; exit 1; }
 
+  # ------------------------------------------------------------------ 1a. the change: what it promises against the PR's base
+  # A pull request only. The same checks the Stop hook runs before an agent finishes, held against the branch the PR
+  # merges into: contracts change additively (EIT008), the HTTP API stays compatible, and changed lines are tested.
+  change:
+    name: the change (contracts, API, coverage)
+    if: github.event_name == 'pull_request'
+    needs: enforce
+    runs-on: ubuntu-latest
+    env:
+      BASE: origin/${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # each check compares with the merge base
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - name: Install the API (CPU torch) and the dev-only tooling
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]" -e ./tools
+      - name: Contracts change additively (EIT008)
+        run: eitri check --root . --base "$BASE" --no-info
+      - name: The HTTP API stays compatible (docs/openapi.json)
+        run: python tools/openapi_compat.py --base "$BASE"
+      - name: Changed application lines run under the tests (floor 90%)
+        run: |
+          python -m coverage run -m pytest -q
+          python -m coverage json -q
+          python tools/diff_coverage.py --base "$BASE"
+
   # ------------------------------------------------------------------ 1b. the scenarios: every one, against the started service
   # The runner is the environment: `heimdall e2e --all` starts `python -m pfa.api` from harness/e2e/system.json on a
   # free port, waits for /health, runs the Postman requests in postman/collections/e2e from the checkout, and stops it.

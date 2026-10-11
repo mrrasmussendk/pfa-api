@@ -86,3 +86,39 @@ def test_drift_treats_a_slices_route_module_as_the_slice_and_the_app_package_as_
     assert "s1        kvad                            4     1     25%" in stdout
     assert '"kind": "app"' in repo.telemetry and '"kind": "slice:kvad"' not in repo.telemetry
     assert '"event": "edit", "path": "src/pfa/api/routes/kvad.py", "slice": "kvad"' in repo.telemetry
+
+
+def test_one_session_s_line_names_the_reads_outside_its_working_set(repo: TempRepo) -> None:
+    _smoke_scenario(repo)
+
+    code, stdout, _ = repo.run("", "drift", "--session", "s2")
+
+    assert code == 0
+    assert stdout == (
+        "heimdall drift: 1 of 2 reads this session (50%) fell outside the working set: src/pfa/features/rune/internal/rune_engine.py"
+        " — if this feature keeps needing them, its seam or a contract is missing something\n"
+    )
+
+
+def test_a_session_inside_its_working_set_says_so_without_a_hint(repo: TempRepo) -> None:
+    _smoke_scenario(repo)
+
+    _, stdout, _ = repo.run("", "drift", "--session", "s1")
+
+    assert stdout == "heimdall drift: 0 of 3 reads this session (0%) fell outside the working set\n"
+
+
+def test_a_session_with_no_telemetry_has_no_reads(repo: TempRepo) -> None:
+    _smoke_scenario(repo)
+
+    _, stdout, _ = repo.run("", "drift", "--session", "nobody")
+
+    assert stdout == "heimdall drift: no reads recorded this session\n"
+
+
+def test_drift_refuses_arguments_it_does_not_know(repo: TempRepo) -> None:
+    _smoke_scenario(repo)
+
+    code, _, stderr = repo.run("", "drift", "--everything")
+
+    assert code == 2 and "usage: heimdall drift" in stderr

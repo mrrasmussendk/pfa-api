@@ -33,10 +33,10 @@ Load the feature's `AGENTS.md`, its `contract/`, `internal/` and `module.py`, it
 ## Before you finish
 
 ```bash
-ruff check . && ruff format --check . && mypy && pytest && eitri check --root .
+ruff check . && ruff format --check . && mypy && pytest && eitri check --root . --base origin/main
 ```
 
-Commit, then stop: the `Stop` hook runs the tests, the end-to-end scenarios the change reaches, and Jev's review of the committed diff.
+Commit, then stop: the `Stop` hook runs the tests under coverage, holds the change to its promises (changed lines tested, contracts additive, the HTTP API compatible), runs the end-to-end scenarios the change reaches, and Jev's review of the committed diff. When a route's shape changes, regenerate `docs/openapi.json` with `python tools/openapi_compat.py --write`.
 
 <API_TASKS>
 Before any non-trivial API engineering task (designing, implementing, mocking, testing, monitoring, documenting or deploying an API or Postman Flow), read `postman/skills/api-engineer/SKILL.md` and follow it.

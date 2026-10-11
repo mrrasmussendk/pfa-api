@@ -22,17 +22,42 @@ def _load() -> ModuleType:
     return module
 
 
-def _stop(monkeypatch: pytest.MonkeyPatch, event: dict[str, object] | None = None, **codes: int) -> tuple[int, list[str]]:
+# The checks of the change, in the order the hook runs them after a green suite.
+CHANGE = ["coverage-json", "diff-coverage", "eitri", "openapi"]
+
+
+def _name(cmd: list[str]) -> str:
+    """What a command is, by what it runs."""
+    text = " ".join(cmd)
+    for needle, name in (
+        ("pytest", "pytest"),
+        ("coverage json", "coverage-json"),
+        ("diff_coverage", "diff-coverage"),
+        ("eitri", "eitri"),
+        ("openapi_compat", "openapi"),
+        ("heimdall drift", "drift"),
+        ("heimdall e2e", "e2e"),
+        ("heimdall review", "review"),
+    ):
+        if needle in text:
+            return name
+    return "git"
+
+
+def _stop(
+    monkeypatch: pytest.MonkeyPatch, event: dict[str, object] | None = None, covered: bool = True, **codes: int
+) -> tuple[int, list[str]]:
     """Run the hook with each command answering ``codes[name]`` (0 when unnamed); the commands that ran, in order."""
     finish, ran = _load(), []
 
     def fake(cmd: list[str]) -> tuple[int, str]:
-        name = "pytest" if "pytest" in cmd else cmd[3] if cmd[:3] == finish.REVIEW[:3] else "git"
+        name = _name(cmd)
         ran.append(name)
-        return codes.get(name, 0), f"{name} output"
+        return codes.get(name.replace("-", "_"), 0), f"{name} output"
 
     monkeypatch.setattr(finish, "_run", fake)
     monkeypatch.setattr(finish, "_nothing_changed", lambda: False)
+    monkeypatch.setattr(finish, "_covered", lambda: covered)
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(event or {})))
     return finish.main(), ran
 
@@ -46,13 +71,13 @@ def test_a_red_suite_blocks_before_anything_else_runs(monkeypatch: pytest.Monkey
 def test_a_missing_scenario_blocks_before_the_review(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     code, ran = _stop(monkeypatch, e2e=2)
 
-    assert code == 2 and ran == ["pytest", "e2e"] and "asks for scenarios" in capsys.readouterr().err
+    assert code == 2 and ran == ["pytest", *CHANGE, "e2e"] and "asks for scenarios" in capsys.readouterr().err
 
 
 def test_request_changes_blocks_the_stop(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     code, ran = _stop(monkeypatch, review=1)
 
-    assert code == 2 and ran == ["pytest", "e2e", "review"] and "asked for changes" in capsys.readouterr().err
+    assert code == 2 and ran == ["pytest", *CHANGE, "e2e", "review"] and "asked for changes" in capsys.readouterr().err
 
 
 def test_escalate_is_told_to_the_user_without_blocking(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -71,3 +96,35 @@ def test_an_active_stop_hook_never_loops(monkeypatch: pytest.MonkeyPatch) -> Non
     code, ran = _stop(monkeypatch, {"stop_hook_active": True}, pytest=1)
 
     assert code == 0 and ran == []
+
+
+@pytest.mark.parametrize(
+    ("failing", "says"),
+    [("diff_coverage", "run under no test"), ("eitri", "contract change breaks"), ("openapi", "HTTP API breaks clients")],
+)
+def test_a_change_that_breaks_a_promise_blocks_before_the_scenarios(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failing: str, says: str
+) -> None:
+    code, ran = _stop(monkeypatch, **{failing: 1})
+
+    assert code == 2 and "e2e" not in ran and says in capsys.readouterr().err
+
+
+def test_without_coverage_the_suite_runs_plain_and_the_diff_coverage_check_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
+    code, ran = _stop(monkeypatch, covered=False)
+
+    assert code == 0 and ran[:3] == ["pytest", "eitri", "openapi"]
+
+
+def test_the_session_s_drift_is_told_to_the_user_with_the_review(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code, ran = _stop(monkeypatch, {"session_id": "s1"})
+
+    assert code == 0 and "drift" in ran and "drift output" in json.loads(capsys.readouterr().out)["systemMessage"]
+
+
+def test_without_a_session_no_drift_is_asked_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    _, ran = _stop(monkeypatch)
+
+    assert "drift" not in ran
