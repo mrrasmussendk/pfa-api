@@ -1,7 +1,8 @@
 """The entry point. ``heimdall e2e``: arguments → the change → the scenarios → the plan (Jev, or the slice
 map) → the runner → exit code; a green run is remembered by the change's fingerprint, so a stop with nothing
 new runs nothing. ``heimdall e2e --all``: every scenario, no change and no judge — what CI runs.
-``heimdall e2e new``: scaffold a scenario and the failing tests that will run it."""
+``heimdall e2e new``: scaffold a scenario and the failing tests that will run it. Whenever a scenario's text or
+test changes, Jev is also asked whether the two still agree."""
 
 from __future__ import annotations
 
@@ -9,6 +10,7 @@ import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, NamedTuple, TextIO
 
 from ...model import MapModel
@@ -18,7 +20,7 @@ from ..review.state import is_application
 from ..review.transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL
 from .base import EXIT_ERROR, EXIT_FAILED, EXIT_NEEDS_SCENARIOS, EXIT_OK, GUIDE, SCENARIOS_DIR, SYSTEM, E2EError
 from .change import Change, fingerprint, working_diff
-from .judge import Plan, T, decide, fallback, questions
+from .judge import Plan, T, decide, drifted, fallback, own_files_changed, questions
 from .runner import Runner, system_runner
 from .scaffold import NewScenario, Steps, new_advice, scaffold
 from .scenarios import Scenario, load_scenarios
@@ -28,6 +30,7 @@ USAGE = (
     "usage: heimdall e2e [--base <ref> | --diff <file>] [--task <text>] [--force]\n"
     "       heimdall e2e --all\n"
     "       heimdall e2e new <feature>/<name> --method <method> --given <text> --when <text> --then <text> [--tool <tool>]\n"
+    "  repeat --given, --when or --then for each further clause: it becomes an `And`, and each `then` clause one assertion\n"
     "  default change: uncommitted and untracked files; --base <ref> adds what is committed since <ref>\n"
     "  --force runs even when the change is the one the last green run saw\n"
     "  --all runs every scenario, whatever changed, without asking Jev (what CI runs)\n"
@@ -44,8 +47,9 @@ class Seams(NamedTuple):
     env: Mapping[str, str] | None = None
 
 
-def _options(args: list[str], flags: tuple[str, ...], values: tuple[str, ...]) -> dict[str, Any]:
-    """``--flag`` → True and ``--key value`` → value, by name without the dashes; anything else is a usage error."""
+def _options(args: list[str], flags: tuple[str, ...], values: tuple[str, ...], repeats: tuple[str, ...] = ()) -> dict[str, Any]:
+    """``--flag`` → True, ``--key value`` → value and ``--repeat value`` → every value given, by name without the
+    dashes; anything else is a usage error."""
     opts: dict[str, Any] = {}
     i = 0
     while i < len(args):
@@ -53,6 +57,9 @@ def _options(args: list[str], flags: tuple[str, ...], values: tuple[str, ...]) -
         if a[2:] in flags and a.startswith("--"):
             opts[a[2:]] = True
             i += 1
+        elif a[2:] in repeats and a.startswith("--") and nxt is not None:
+            opts.setdefault(a[2:], []).append(nxt)
+            i += 2
         elif a[2:] in values and a.startswith("--") and nxt is not None:
             opts[a[2:]] = nxt
             i += 2
@@ -73,10 +80,11 @@ def _parse_run(args: list[str]) -> dict[str, Any]:
 def _parse_new(args: list[str]) -> NewScenario:
     if not args or args[0].startswith("--"):
         raise E2EError(USAGE)
-    opts = _options(args[1:], (), ("method", "given", "when", "then", "tool"))
+    opts = _options(args[1:], (), ("method", "tool"), ("given", "when", "then"))
     if "method" not in opts:
         raise E2EError("--method is required\n" + USAGE)
-    return NewScenario(args[0], opts["method"], Steps(opts.get("given", ""), opts.get("when", ""), opts.get("then", "")), opts.get("tool"))
+    steps = Steps(*(tuple(opts.get(step, ())) for step in ("given", "when", "then")))
+    return NewScenario(args[0], opts["method"], steps, opts.get("tool"))
 
 
 def _read_diff(opts: dict[str, Any], cwd: str) -> str:
@@ -109,24 +117,33 @@ def _remember_green(cwd: str, fp: str) -> None:
 
 @dataclass
 class _Situation:
-    """Everything the plan is made from: the changed files, the slice map, the scenarios and the task."""
+    """Everything the plan is made from: the changed files, the slice map, the scenarios and the task, and the
+    scenarios whose own text or test the change touched."""
 
     files: list[FileChange]
     m: MapModel | None
     scenarios: list[Scenario]
     task: str | None
+    cwd: str
     change: Change = field(init=False)
+    edited: list[Scenario] = field(init=False)
 
     def __post_init__(self) -> None:
         self.change = Change.of(self.files, self.m)
+        self.edited = [s for s in self.scenarios if own_files_changed(s, self.change)]
+
+    def _tests(self, s: Scenario) -> dict[str, str]:
+        return {p: Path(self.cwd, p).read_text(encoding="utf-8", errors="replace") for p in sorted(s.test_paths)}
 
     def payload(self) -> dict[str, Any]:
         """The review's state with the hunks of application files only — docs, tests and tooling cannot change
-        what a client observes, and their hunks would crowd the judge's window — plus the scenarios."""
+        what a client observes, and their hunks would crowd the judge's window — plus the scenarios, and the
+        tests of each one whose text or test changed, for Jev to hold the two against each other."""
         state = build_state(self.files, self.m, self.task)
         state["files"] = [f if is_application(f["area"]) else {k: v for k, v in f.items() if k != "diff"} for f in state["files"]]
-        state["scenarios"] = [s.as_state() for s in self.scenarios]
-        return {"model": DEFAULT_MODEL, "state": state, "questions": questions(self.scenarios)}
+        state["scenarios"] = [s.as_state() | ({"tests": self._tests(s)} if s in self.edited else {}) for s in self.scenarios]
+        qs = questions(self.scenarios, self.edited, self.change.application)
+        return {"model": DEFAULT_MODEL, "state": state, "questions": qs}
 
 
 def _transport(seams: Seams, out: TextIO) -> Transport | None:
@@ -136,7 +153,10 @@ def _transport(seams: Seams, out: TextIO) -> Transport | None:
     key = env.get(API_KEY_ENV, "")
     if key:
         return http_transport(key, env.get(API_URL_ENV, API_URL))
-    out.write(f"heimdall e2e: {API_KEY_ENV} is not set — the slice map decides which scenarios rerun\n")
+    out.write(
+        f"heimdall e2e: {API_KEY_ENV} is not set — the slice map decides which scenarios rerun, "
+        "and only their clauses hold a scenario's text to its test\n"
+    )
     return None
 
 
@@ -153,13 +173,21 @@ def _ask(transport: Transport, sit: _Situation, out: TextIO) -> dict[str, Any] |
     return answers
 
 
+def _answers(sit: _Situation, seams: Seams, out: TextIO) -> dict[str, Any] | None:
+    transport = _transport(seams, out)
+    return _ask(transport, sit, out) if transport is not None else None
+
+
 def _plan(sit: _Situation, seams: Seams, out: TextIO) -> Plan:
-    """Jev's plan, or the slice map's when no application code changed, there is no key, or Jev gives no verdict."""
+    """Jev's plan, or the slice map's when no application code changed, there is no key, or Jev gives no verdict.
+    Without application code, Jev is asked only whether each edited scenario's text still says what its test does."""
     if not sit.change.application:
         out.write("heimdall e2e: no application code changed — only scenarios whose own files changed rerun\n")
-        return fallback(sit.scenarios, sit.change)
-    transport = _transport(seams, out)
-    answers = _ask(transport, sit, out) if transport is not None else None
+        plan = fallback(sit.scenarios, sit.change)
+        answers = _answers(sit, seams, out) if sit.edited else None
+        plan.drifted = drifted(answers, sit.scenarios, sit.edited) if answers is not None else []
+        return plan
+    answers = _answers(sit, seams, out)
     if answers is None:
         out.write("heimdall e2e: the slice map decides which scenarios rerun\n")
         return fallback(sit.scenarios, sit.change)
@@ -184,6 +212,11 @@ def _owed_lines(plan: Plan, problems: list[str], system: System) -> list[str]:
             f"Jev: the change adds observable behaviour no scenario describes (p={plan.unnamed:.2f} ≥ {T['new_scenario']:.2f}): "
             + new_advice("<feature>", system)
         )
+    lines += [
+        f"Jev: {s.id}'s text and its test disagree (p={p:.2f} ≥ {T['drift']:.2f}): make the scenario in {s.spec_path} "
+        f"say what {', '.join(sorted(s.test_paths))} does, or the test do what the scenario says"
+        for s, p in plan.drifted
+    ]
     return lines
 
 
@@ -230,7 +263,7 @@ def _execute(opts: dict[str, Any], io: Streams, cwd: str, seams: Seams) -> int:
         return EXIT_OK
     system = load_system(cwd)
     scenarios, problems = load_scenarios(cwd, system)
-    plan = _plan(_Situation(files, _load_map(cwd, io.stderr), scenarios, opts.get("task")), seams, io.stdout)
+    plan = _plan(_Situation(files, _load_map(cwd, io.stderr), scenarios, opts.get("task"), cwd), seams, io.stdout)
     if not plan.rerun:
         io.stdout.write("heimdall e2e: no scenario is reached by this change\n")
     code = _verdict(plan.rerun, _owed_lines(plan, problems, system), seams.runner or system_runner(cwd, system), io.stdout)

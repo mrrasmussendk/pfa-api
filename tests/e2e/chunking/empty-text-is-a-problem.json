@@ -1,9 +1,0 @@
-{
-  "method": "API",
-  "tools": ["postman"],
-  "scenario": {
-    "given": "a text that is only whitespace",
-    "when": "I send it to POST /chunking/split",
-    "then": "I receive 422 as an application/problem+json document whose detail says the text is empty"
-  }
-}

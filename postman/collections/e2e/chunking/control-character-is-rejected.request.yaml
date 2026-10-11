@@ -18,17 +18,17 @@ scripts:
     code: |-
       const problem = pm.response.json();
       const fields = (problem.errors || []).map(e => e.loc.join("."));
-      pm.test("then: 422", () => pm.response.to.have.status(422));
-      pm.test("then: a problem document", () => {
+      pm.test("then: I receive 422", () => pm.response.to.have.status(422));
+      pm.test("then: the body is an application/problem+json document", () => {
         pm.expect(pm.response.headers.get("Content-Type")).to.include("application/problem+json");
       });
-      pm.test("then: a validation-error", () => {
+      pm.test("then: its type is validation-error", () => {
         pm.expect(problem.type).to.equal("urn:pfa-api:problem:validation-error");
       });
-      pm.test("then: errors name body.text", () => {
+      pm.test("then: its errors name body.text", () => {
         pm.expect(fields).to.include("body.text");
       });
-      pm.test("then: it says the text contains a control character", () => {
+      pm.test("then: the error on body.text says it contains a control character", () => {
         const msgs = problem.errors.filter(e => e.loc.join(".") === "body.text").map(e => e.msg);
         pm.expect(msgs.join(" ")).to.match(/control character/i);
       });
