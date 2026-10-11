@@ -23,6 +23,9 @@ sys.path.insert(0, str(TOOLS))
 from fixtures import write_fixture_tree  # noqa: E402
 
 HEIMDALL = [sys.executable, "-m", "heimdall"]
+# The hook runs on every agent tool call. Typically ~25 ms locally and a few hundred on a cold Windows runner; an
+# accidental import of the service, torch or a model costs seconds.
+LATENCY_CEILING_MS = 750
 
 
 def main() -> int:
@@ -82,6 +85,7 @@ def main() -> int:
             run("hook", stdin=event)
         ms = (time.perf_counter() - start) * 1000 / n
         print(f"hook latency: {ms:.1f} ms/event (n={n}, full interpreter start-up included)")
+        check(ms <= LATENCY_CEILING_MS, f"hook latency within {LATENCY_CEILING_MS} ms (an import of the service or a model would blow it)")
 
     print("--- heimdall smoke: all green" if ok else "--- heimdall smoke: FAILED")
     return 0 if ok else 1

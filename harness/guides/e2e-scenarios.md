@@ -25,15 +25,18 @@ The harness does not assume an API. A scenario's tags say what it is:
 {
   "start": ["{python}", "-m", "pfa.api"],
   "port_env": "PFA_PORT",
-  "ready": "/health",
+  "env": {"PFA_WARMUP": "1"},
+  "ready": "/ready",
+  "ready_seconds": 300,
   "tools": {"API": "postman"}
 }
 ```
 
-- `start`, `port_env` and `ready` are optional.
+- `start`, `port_env`, `env`, `ready` and `ready_seconds` are optional.
   - `start` is the command that starts the system under test.
   - `{python}` is the interpreter running Heimdall, and `{port}` is the free port picked for the run; `port_env` passes that port to the system.
-  - `ready` is the path polled until the system answers.
+  - `env` adds variables to the system's environment. Here it warms the model up at start.
+  - `ready` is the path polled until the system answers 2xx, for up to `ready_seconds` (default 60). Here it is `/ready`, so every scenario meets a loaded model and a response-time clause measures the request, not the load.
 - Leave `start` out when the scenarios start what they need, as a CLI or a library's do.
 - `tools` maps each method to the tool that runs its scenarios. It is also the set of tools the project's scenarios may use, and its keys the method tags. An API and frontend project might say `{"API": "postman", "UI": "playwright"}`; a background service might say `{"service": "pytest"}`.
 

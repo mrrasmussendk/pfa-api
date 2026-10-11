@@ -299,7 +299,7 @@ heimdall e2e new chunking/<name> --method API --given "…" --when "I send it to
 pip install -e ./tools            # the hook needs `python -m heimdall` to resolve
 heimdall map --root .             # feedforward: regenerate the maps (do this first)
 heimdall drift                    # feedback: the report, once there is telemetry
-python tools/smoke_test.py        # the whole loop end to end through the real hook, prints latency
+python tools/smoke_test.py        # the whole loop end to end through the real hook; fails if a hook call takes over 750 ms
 pytest tests/tooling              # behavioral scenarios, format parity, the review's policy — against a synthetic tree
 ```
 

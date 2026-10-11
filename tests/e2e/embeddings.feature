@@ -27,6 +27,7 @@ Feature: embeddings
     And the body names the model and 1024 dimensions
     And the embedding has as many values as the dimensions
     And the embedding is unit-normalised
+    And it answers within 5 seconds, with the model already loaded
 
   Scenario: documents-become-passage-vectors-in-order
     Given two short English documents

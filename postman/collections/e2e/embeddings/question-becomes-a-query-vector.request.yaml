@@ -26,3 +26,6 @@ scripts:
         pm.expect(body.embedding).to.have.lengthOf(body.dimensions);
       });
       pm.test("then: the embedding is unit-normalised", () => pm.expect(norm).to.be.closeTo(1, 1e-3));
+      pm.test("then: it answers within 5 seconds, with the model already loaded", () => {
+        pm.expect(pm.response.responseTime).to.be.below(5000);
+      });
