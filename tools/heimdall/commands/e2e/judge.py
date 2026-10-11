@@ -48,11 +48,9 @@ def drift_questions(scenarios: list[Scenario], edited: list[Scenario]) -> dict[s
     }
 
 
-def questions(scenarios: list[Scenario], edited: list[Scenario] | None = None, application: bool = True) -> dict[str, dict[str, Any]]:
-    """The drift question for each ``edited`` scenario; when application code changed, also one rerun question
-    per scenario, by its index in ``state.scenarios``, and one about the scenarios not yet written."""
-    if not application:
-        return drift_questions(scenarios, edited or [])
+def questions(scenarios: list[Scenario], edited: list[Scenario] | None = None) -> dict[str, dict[str, Any]]:
+    """One rerun question per scenario, by its index in ``state.scenarios``, one about the scenarios not yet
+    written, and the drift question for each ``edited`` scenario."""
     qs: dict[str, dict[str, Any]] = {
         f"rerun_{i}": {
             "type": "noul",

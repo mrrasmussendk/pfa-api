@@ -36,8 +36,13 @@ _REQUEST = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) (/[^\s,;]*)")
 
 
 def _unquote(literal: str) -> str:
+    """The text of a quoted literal. JSON decodes the common double-quoted case, ``\\uXXXX`` included; an escape
+    JSON lacks (``\\'`` is valid JavaScript) falls back to dropping each backslash."""
     if literal.startswith('"'):
-        return str(json.loads(literal))
+        try:
+            return str(json.loads(literal))
+        except ValueError:
+            pass
     return re.sub(r"\\(.)", r"\1", literal[1:-1])
 
 

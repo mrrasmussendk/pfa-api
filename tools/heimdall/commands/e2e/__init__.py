@@ -26,7 +26,7 @@ from ..review import Streams
 from .base import EXIT_ERROR, EXIT_FAILED, EXIT_NEEDS_SCENARIOS, EXIT_OK, GUIDE, SCENARIOS_DIR, SYSTEM, E2EError
 from .change import Change, fingerprint, working_diff
 from .command import USAGE, Seams, run
-from .judge import Plan, T, decide, fallback, questions
+from .judge import Plan, T, decide, drift_questions, fallback, questions
 from .runner import Runner, RunResult, by_tool, system_runner
 from .scaffold import NewScenario, Steps, new_advice, scaffold
 from .scenarios import Scenario, load_scenarios, parse_feature
@@ -59,6 +59,7 @@ __all__ = [
     "Tool",
     "by_tool",
     "decide",
+    "drift_questions",
     "fallback",
     "fingerprint",
     "load_scenarios",

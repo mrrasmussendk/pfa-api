@@ -22,6 +22,7 @@ from heimdall.commands.e2e import (
     Scenario,
     Seams,
     decide,
+    drift_questions,
     fallback,
     questions,
 )
@@ -92,10 +93,10 @@ def test_a_scenario_whose_text_or_test_changed_is_asked_whether_the_two_still_ag
     assert "`scenarios[1].tests`" in qs["drifted_1"]["instructions"]
 
 
-def test_without_application_code_only_the_drift_questions_are_asked() -> None:
+def test_the_drift_question_alone_names_only_the_edited_scenarios() -> None:
     scenarios = [e2e_scenario("kvad/squares"), e2e_scenario("rune/carves")]
 
-    assert list(questions(scenarios, [scenarios[0]], application=False)) == ["drifted_0"]
+    assert list(drift_questions(scenarios, [scenarios[0]])) == ["drifted_0"]
 
 
 # ---------------------------------------------------------------- the policy
