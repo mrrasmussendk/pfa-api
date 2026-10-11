@@ -20,7 +20,7 @@ from ..review.state import is_application
 from ..review.transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL
 from .base import EXIT_ERROR, EXIT_FAILED, EXIT_NEEDS_SCENARIOS, EXIT_OK, GUIDE, SCENARIOS_DIR, SYSTEM, E2EError
 from .change import Change, fingerprint, working_diff
-from .judge import Plan, T, decide, drifted, fallback, own_files_changed, questions
+from .judge import Plan, T, decide, drift_questions, drifted, fallback, own_files_changed, questions
 from .runner import Runner, system_runner
 from .scaffold import NewScenario, Steps, new_advice, scaffold
 from .scenarios import Scenario, load_scenarios
@@ -142,7 +142,11 @@ class _Situation:
         state = build_state(self.files, self.m, self.task)
         state["files"] = [f if is_application(f["area"]) else {k: v for k, v in f.items() if k != "diff"} for f in state["files"]]
         state["scenarios"] = [s.as_state() | ({"tests": self._tests(s)} if s in self.edited else {}) for s in self.scenarios]
-        qs = questions(self.scenarios, self.edited, self.change.application)
+        # Without application code nothing a client observes changed: only whether text and test still agree is asked.
+        if self.change.application:
+            qs = questions(self.scenarios, self.edited)
+        else:
+            qs = drift_questions(self.scenarios, self.edited)
         return {"model": DEFAULT_MODEL, "state": state, "questions": qs}
 
 

@@ -277,6 +277,14 @@ def test_a_pytest_stub_stays_valid_python_whatever_the_steps_say() -> None:
     assert TOOLS["pytest"].asserted(stub) == ['it says "hi" \\o/']
 
 
+@pytest.mark.parametrize(
+    ("literal", "clause"),
+    [(r'"then: it\'s fine"', "it's fine"), (r"'then: it\'s fine'", "it's fine"), (r'"then: \u00f8re"', "øre")],
+)
+def test_an_assertion_name_is_read_whatever_escapes_javascript_allows(literal: str, clause: str) -> None:
+    assert TOOLS["postman"].asserted(f"pm.test({literal}, () => {{}});") == [clause]
+
+
 def test_a_postman_stub_sends_the_request_its_when_names() -> None:
     s = Scenario("kvad/q", "kvad", "API", ("postman",), ("g",), ("I send it to PUT /kvad/rounds",), ("t",))
 
