@@ -279,7 +279,15 @@ def test_a_pytest_stub_stays_valid_python_whatever_the_steps_say() -> None:
 
 @pytest.mark.parametrize(
     ("literal", "clause"),
-    [(r'"then: it\'s fine"', "it's fine"), (r"'then: it\'s fine'", "it's fine"), (r'"then: \u00f8re"', "øre")],
+    [
+        (r'"then: it\'s fine"', "it's fine"),
+        (r"'then: it\'s fine'", "it's fine"),
+        (r'"then: \u00f8re"', "øre"),
+        (r"'then: \u00f8re'", "øre"),
+        (r'"then: it\'s \u00f8re"', "it's øre"),
+        (r"'then: \x41\u{1F600} \\ \"q\"'", 'A😀 \\ "q"'),
+        (r'"then: \ud83d\ude00"', "😀"),
+    ],
 )
 def test_an_assertion_name_is_read_whatever_escapes_javascript_allows(literal: str, clause: str) -> None:
     assert TOOLS["postman"].asserted(f"pm.test({literal}, () => {{}});") == [clause]
