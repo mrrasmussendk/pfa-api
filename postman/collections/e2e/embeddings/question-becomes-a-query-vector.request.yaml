@@ -1,0 +1,31 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/embeddings/query'
+order: 3000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "question": "Hvordan nulstiller jeg min adgangskode?"
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test("then: I receive 200", () => pm.response.to.have.status(200));
+      const body = pm.response.json();
+      const norm = Math.sqrt((body.embedding || []).reduce((sum, x) => sum + x * x, 0));
+      pm.test("then: the body names the model and 1024 dimensions", () => {
+        pm.expect(body.model).to.be.a("string").and.not.empty;
+        pm.expect(body.dimensions).to.eql(1024);
+      });
+      pm.test("then: the embedding has as many values as the dimensions", () => {
+        pm.expect(body.embedding).to.have.lengthOf(body.dimensions);
+      });
+      pm.test("then: the embedding is unit-normalised", () => pm.expect(norm).to.be.closeTo(1, 1e-3));
+      pm.test("then: it answers within 5 seconds, with the model already loaded", () => {
+        pm.expect(pm.response.responseTime).to.be.below(5000);
+      });

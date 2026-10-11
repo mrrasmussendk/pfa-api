@@ -1,0 +1,40 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/embeddings/passages'
+order: 4000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "texts": [
+        "To reset your password, open Settings and choose Security.",
+        "Opening hours: Monday to Friday, 9 to 17."
+      ]
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test("then: I receive 200", () => pm.response.to.have.status(200));
+      const body = pm.response.json();
+      const sent = [
+        "To reset your password, open Settings and choose Security.",
+        "Opening hours: Monday to Friday, 9 to 17."
+      ];
+      const chunks = body.chunks || [];
+      const norm = (v) => Math.sqrt(v.reduce((sum, x) => sum + x * x, 0));
+      pm.test("then: each document comes back as one chunk, in the order sent", () => {
+        pm.expect(chunks.map((c) => [c.source_index, c.chunk_index, c.chunk_count])).to.eql([[0, 0, 1], [1, 0, 1]]);
+      });
+      pm.test("then: every chunk carries its document's text", () => {
+        pm.expect(chunks.map((c) => c.text)).to.eql(sent);
+      });
+      pm.test("then: every chunk's embedding has 1024 values and is unit-normalised", () => {
+        chunks.forEach((c) => {
+          pm.expect(c.embedding).to.have.lengthOf(1024);
+          pm.expect(norm(c.embedding)).to.be.closeTo(1, 1e-3);
+        });
+      });

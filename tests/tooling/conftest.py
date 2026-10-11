@@ -158,9 +158,12 @@ def write_e2e_scenario(repo: TempRepo, sid: str, request: str | None = E2E_REQUE
         repo.write_file(f"postman/collections/e2e/{sid}.request.yaml", request)
 
 
-def write_e2e_project(repo: TempRepo) -> TempRepo:
-    """The sample map (kvad depends on rune), an API-only project, one scenario per feature."""
+def write_e2e_project(repo: TempRepo, kvad_routes: tuple[str, ...] = ("POST /run",)) -> TempRepo:
+    """The sample map (kvad depends on rune, kvad serving ``kvad_routes``), an API-only project, one scenario per feature."""
     repo.write_sample_map()
+    m = json.loads(repo.read_file(".heimdall/map.json"))
+    m["slices"]["kvad"]["routes"] = list(kvad_routes)
+    repo.write_file(".heimdall/map.json", json.dumps(m))
     repo.write_file("harness/e2e/system.json", json.dumps({"tools": {"API": "postman"}}))
     write_e2e_scenario(repo, "kvad/squares")
     write_e2e_scenario(repo, "rune/carves")

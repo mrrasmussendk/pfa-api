@@ -17,9 +17,10 @@ def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="eitri", description="Compile-time-style architecture enforcement for agent-ready Python.")
     sub = p.add_subparsers(dest="command")
 
-    check = sub.add_parser("check", help="run the walls (EIT001-EIT005) and the context budget (EIT100/EIT101)")
+    check = sub.add_parser("check", help="run the walls (EIT001-EIT007) and the context budget (EIT100/EIT101)")
     _common(check)
     check.add_argument("--no-info", action="store_true", help="print only errors (hides EIT101 budget reports)")
+    check.add_argument("--base", default=None, help="also hold every contract to its shape at the merge base with this ref (EIT008)")
 
     surface = sub.add_parser("surface", help="print the reconstructed public surface of a slice's Contract (or the kernel)")
     _common(surface)
@@ -52,7 +53,7 @@ def run(argv: list[str], stdout: TextIO, stderr: TextIO) -> int:
         return _surface(args, root, config, stdout, stderr)
 
     try:
-        diags = analyze(root, config, slices_dir=args.slices_dir)
+        diags = analyze(root, config, slices_dir=args.slices_dir, base=args.base)
     except EitriError as e:
         stderr.write(f"eitri: {e}\n")
         return 1

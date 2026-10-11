@@ -31,6 +31,8 @@ class System:
     start: tuple[str, ...] = ()  # argv; "{python}" is this interpreter, "{port}" the free port picked for the run
     port_env: str = ""  # the variable the started system reads its port from
     ready: str = "/"  # the path that answers once the system is up
+    env: tuple[tuple[str, str], ...] = ()  # extra variables the started system gets, e.g. to warm up before it is ready
+    ready_seconds: float = STARTUP_SECONDS  # how long ``ready`` may take to answer
 
     @property
     def methods(self) -> list[str]:
@@ -70,7 +72,21 @@ def load_system(root: str) -> System:
         ) from None
     if not isinstance(data, dict):
         raise E2EError(f"{SYSTEM}: not a JSON object")
-    return System(_tools(data), _start(data), str(data.get("port_env", "")), str(data.get("ready", "/")))
+    return System(_tools(data), _start(data), str(data.get("port_env", "")), str(data.get("ready", "/")), _env(data), _ready_seconds(data))
+
+
+def _env(data: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    env = data.get("env", {})
+    if not isinstance(env, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in env.items()):
+        raise E2EError(f'{SYSTEM}: `env` must map variable names to strings, e.g. {{"PFA_WARMUP": "1"}}')
+    return tuple(sorted(env.items()))
+
+
+def _ready_seconds(data: dict[str, Any]) -> float:
+    value = data.get("ready_seconds", STARTUP_SECONDS)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise E2EError(f"{SYSTEM}: `ready_seconds` must be a positive number of seconds")
+    return float(value)
 
 
 def _free_port() -> int:
@@ -79,8 +95,13 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def _wait_ready(url: str, proc: subprocess.Popen[bytes]) -> None:
-    deadline = time.monotonic() + STARTUP_SECONDS
+def system_environment(system: System, port: str) -> dict[str, str]:
+    """What the started system runs with: this environment, the project's ``env``, and the port when it reads one."""
+    return {**os.environ, **dict(system.env), **({system.port_env: port} if system.port_env else {})}
+
+
+def _wait_ready(url: str, proc: subprocess.Popen[bytes], seconds: float) -> None:
+    deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             raise E2EError(f"the system exited with {proc.returncode} before {url} answered; see {SERVICE_LOG}")
@@ -89,7 +110,7 @@ def _wait_ready(url: str, proc: subprocess.Popen[bytes]) -> None:
                 return
         except (urllib.error.URLError, OSError):
             time.sleep(0.25)
-    raise E2EError(f"{url} did not answer within {STARTUP_SECONDS:.0f}s; see {SERVICE_LOG}")
+    raise E2EError(f"{url} did not answer within {seconds:.0f}s; see {SERVICE_LOG}")
 
 
 def _stop(proc: subprocess.Popen[bytes]) -> None:
@@ -108,7 +129,7 @@ def running(system: System, cwd: str) -> Iterator[str]:
         return
     port = str(_free_port())
     argv = [a.replace("{python}", sys.executable).replace("{port}", port) for a in system.start]
-    env = {**os.environ, **({system.port_env: port} if system.port_env else {})}
+    env = system_environment(system, port)
     os.makedirs(os.path.join(cwd, os.path.dirname(SERVICE_LOG)), exist_ok=True)
     with open(os.path.join(cwd, SERVICE_LOG), "wb") as log:
         try:
@@ -117,7 +138,7 @@ def running(system: System, cwd: str) -> Iterator[str]:
             raise E2EError(f"cannot start {argv[0]}: {e}") from None
         try:
             base_url = f"http://127.0.0.1:{port}"
-            _wait_ready(base_url + system.ready, proc)
+            _wait_ready(base_url + system.ready, proc, system.ready_seconds)
             yield base_url
         finally:
             _stop(proc)

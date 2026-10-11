@@ -9,3 +9,7 @@ out/
 .idea/
 .pytest_cache/
 .heimdall/
+
+# tools/diff_coverage.py's input
+.coverage
+coverage.json

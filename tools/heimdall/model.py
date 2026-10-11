@@ -57,15 +57,18 @@ class SliceInfo:
     depends_on: list[str] = field(default_factory=list)
     budget: int = 0
     fan_in: int = 0
+    routes: list[str] = field(default_factory=list)  # ``METHOD /path`` for each route its HTTP edge serves
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SliceInfo:
         deps = d.get("depends_on") or []
+        routes = d.get("routes") or []
         return cls(
             path=str(d.get("path", "")),
             depends_on=[str(x) for x in deps] if isinstance(deps, list) else [],
             budget=int(d.get("budget", 0) or 0),
             fan_in=int(d.get("fan_in", 0) or 0),
+            routes=[str(r) for r in routes] if isinstance(routes, list) else [],
         )
 
 

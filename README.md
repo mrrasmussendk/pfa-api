@@ -12,12 +12,15 @@ Read the [harness overview](#the-agent-harness) below or the [full harness expla
 
 ## Quick start
 
-Requires **Python 3.10+**. Run these commands from the repository root, inside an activated virtual environment:
+Requires **Python 3.10+**. Run these commands from the repository root:
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -e ".[dev]" -e ./tools
 python -m pfa.api
 ```
+
+Name the environment `.venv`: the Claude Code hooks (`.claude/hooks/python.sh`) run with `.venv/bin/python` when it exists, and fall back to `python`, then `python3`.
 
 Open **[the interactive API docs](http://127.0.0.1:8000/docs)** to try a request. The OpenAPI schema is at `/openapi.json`.
 
@@ -209,6 +212,7 @@ Read [docs/](docs/) to understand the project. Use [harness/](harness/) for inst
 | Understand slices, contracts, and message dispatch | [Architecture](docs/architecture.md) |
 | Understand how the agent harness works | [Full harness explanation](docs/tooling.md#heimdall--the-harness) |
 | Understand checks, token budgets, agent hooks, and CI | [Development tooling](docs/tooling.md) |
+| Fix a bug or change existing behaviour | [Changing behaviour](harness/guides/changing-behaviour.md) |
 | Add an endpoint | [Adding a route](harness/guides/adding-a-route.md) |
 | Return an API error | [Returning errors](harness/guides/returning-errors.md) |
 | Write or change tests | [Writing tests](harness/guides/writing-tests.md) |

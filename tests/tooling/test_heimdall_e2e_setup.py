@@ -437,3 +437,58 @@ def test_new_refuses_an_id_that_is_not_feature_slash_name(repo: TempRepo, sid: s
 
     with pytest.raises(E2EError, match="is not <feature>/<name>"):
         scaffold(str(repo.root), NewScenario(sid, "API", STEPS), API_ONLY)
+
+
+def test_the_system_settings_may_give_the_system_variables_and_time_to_get_ready(repo: TempRepo) -> None:
+    repo.write_file(
+        e2e.SYSTEM,
+        json.dumps({"start": ["x", "{port}"], "env": {"WARM": "1"}, "ready": "/ready", "ready_seconds": 300, "tools": {"API": "postman"}}),
+    )
+
+    system = load_system(str(repo.root))
+
+    assert (system.env, system.ready, system.ready_seconds) == ((("WARM", "1"),), "/ready", 300.0)
+
+
+@pytest.mark.parametrize(("key", "value"), [("env", {"WARM": 1}), ("env", ["WARM"]), ("ready_seconds", 0), ("ready_seconds", "60")])
+def test_system_settings_with_a_malformed_env_or_timeout_cannot_run(repo: TempRepo, key: str, value: object) -> None:
+    repo.write_file(e2e.SYSTEM, json.dumps({"tools": {"API": "postman"}, key: value}))
+
+    with pytest.raises(E2EError, match=f"`{key}` must"):
+        load_system(str(repo.root))
+
+
+def test_a_started_system_runs_with_the_project_s_variables_and_its_port() -> None:
+    system = System(tools={"API": "postman"}, start=("x",), port_env="PORT", env=(("WARM", "1"),))
+
+    env = e2e.system.system_environment(system, "4321")
+
+    assert (env["WARM"], env["PORT"]) == ("1", "4321") and "PATH" in env
+
+
+def test_a_project_that_starts_nothing_gets_no_base_url(repo: TempRepo) -> None:
+    with e2e.system.running(System(tools={"service": "pytest"}), str(repo.root)) as base_url:
+        assert base_url == ""
+
+
+def test_a_system_that_exits_before_it_is_ready_cannot_run_and_says_where_its_log_is(repo: TempRepo) -> None:
+    system = System(tools={"API": "postman"}, start=("{python}", "-c", "import sys; sys.exit(3)"), port_env="PORT", ready_seconds=30)
+
+    with pytest.raises(E2EError, match=re.escape("the system exited with 3 before")) as caught, e2e.system.running(system, str(repo.root)):
+        pass
+
+    assert ".heimdall/e2e-service.log" in str(caught.value) and repo.has_file(".heimdall/e2e-service.log")
+
+
+def test_a_system_that_does_not_answer_in_time_cannot_run_and_is_stopped(repo: TempRepo) -> None:
+    system = System(tools={"API": "postman"}, start=("{python}", "-c", "import time; time.sleep(60)"), port_env="PORT", ready_seconds=0.01)
+
+    with pytest.raises(E2EError, match=r"did not answer within 0s"), e2e.system.running(system, str(repo.root)):
+        pass
+
+
+def test_a_start_command_that_does_not_exist_cannot_run(repo: TempRepo) -> None:
+    system = System(tools={"API": "postman"}, start=("no-such-program-xyz", "{port}"))
+
+    with pytest.raises(E2EError, match="cannot start no-such-program-xyz"), e2e.system.running(system, str(repo.root)):
+        pass

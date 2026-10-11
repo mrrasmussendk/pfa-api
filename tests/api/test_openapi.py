@@ -5,6 +5,8 @@ over the real app; no model is loaded (an empty body and a blank text are reject
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -169,3 +171,10 @@ def test_swagger_ui_is_served_with_try_it_out_on_and_the_schema_list_hidden(clie
     assert page.status_code == 200
     assert '"tryItOutEnabled": true' in page.text
     assert '"defaultModelsExpandDepth": -1' in page.text
+
+
+def test_the_committed_snapshot_is_the_spec_the_app_serves(spec: Spec) -> None:
+    # The PR check compares this file with main's to catch breaking changes, so it must be exactly what is served.
+    snapshot = Path(__file__).resolve().parents[2] / "docs" / "openapi.json"
+
+    assert json.loads(snapshot.read_text(encoding="utf-8")) == spec, "regenerate it: python tools/openapi_compat.py --write"

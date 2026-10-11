@@ -51,6 +51,36 @@ jobs:
           git diff --exit-code -- AGENTS.md src/pfa/features/*/AGENTS.md \
             || { echo "::error::AGENTS.md is stale — run 'heimdall map --root .' and commit"; exit 1; }
 
+  # ------------------------------------------------------------------ 1a. the change: what it promises against the PR's base
+  # A pull request only. The same checks the Stop hook runs before an agent finishes, held against the branch the PR
+  # merges into: contracts change additively (EIT008), the HTTP API stays compatible, and changed lines are tested.
+  change:
+    name: the change (contracts, API, coverage)
+    if: github.event_name == 'pull_request'
+    needs: enforce
+    runs-on: ubuntu-latest
+    env:
+      BASE: origin/${{ github.base_ref }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # each check compares with the merge base
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - name: Install the API (CPU torch) and the dev-only tooling
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev]" -e ./tools
+      - name: Contracts change additively (EIT008)
+        run: eitri check --root . --base "$BASE" --no-info
+      - name: The HTTP API stays compatible (docs/openapi.json)
+        run: python tools/openapi_compat.py --base "$BASE"
+      - name: Changed application lines run under the tests (floor 90%)
+        run: |
+          python -m coverage run -m pytest -q
+          python -m coverage json -q
+          python tools/diff_coverage.py --base "$BASE"
+
   # ------------------------------------------------------------------ 1b. the scenarios: every one, against the started service
   # The runner is the environment: `heimdall e2e --all` starts `python -m pfa.api` from harness/e2e/system.json on a
   # free port, waits for /health, runs the Postman requests in postman/collections/e2e from the checkout, and stops it.
@@ -76,11 +106,32 @@ jobs:
           key: hf-intfloat-multilingual-e5-large
       - name: Fetch the model before the run, so no request waits on a download
         run: python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"
+      - name: The map, so every route is held to a scenario
+        run: heimdall map --root .
       - name: Every scenario
         run: heimdall e2e --all
       - name: The service's log, when a scenario failed
         if: failure()
         run: cat .heimdall/e2e-service.log || true
+
+  # ------------------------------------------------------------------ 1c. the dependencies: nothing a release has fixed
+  audit:
+    name: dependency audit
+    needs: enforce
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12", cache: pip }
+      - name: Install the API (CPU torch), as the image does
+        # The runner's Python ships an old setuptools that the image (python:*-slim, 3.12+) does not have;
+        # upgrade the installers so the audit judges the service's dependencies, not the runner's.
+        run: |
+          python -m pip install --upgrade pip setuptools
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e . pip-audit
+      - name: No installed package has an advisory a release has fixed
+        run: python tools/dependency_audit.py
 
   # ------------------------------------------------------------------ 2. the distribution must not carry the tooling
   wheel:

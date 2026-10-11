@@ -14,10 +14,13 @@ A task lives in one feature. This file says which guide to read for it; the guid
 
 | Task | Guide |
 |---|---|
+| Fix a bug, or change what existing code does | [Changing behaviour](harness/guides/changing-behaviour.md) |
 | Add an endpoint to an existing feature | [Adding a route](harness/guides/adding-a-route.md) |
 | Add a new capability with its own data and rules | [Adding a feature](harness/guides/adding-a-feature.md) |
 | Change what a feature's contract offers | [Changing a contract](harness/guides/changing-a-contract.md) |
 | Return an error from a route | [Returning errors](harness/guides/returning-errors.md) |
+| Add a setting (an environment variable) | [Adding a setting](harness/guides/adding-a-setting.md) |
+| Log something | [Logging](harness/guides/logging.md) |
 | Write or change tests | [Writing tests](harness/guides/writing-tests.md) |
 | Write or fix an end-to-end scenario | [End-to-end scenarios](harness/guides/e2e-scenarios.md) |
 | Act on a hook's feedback, or finish a change | [What the hooks tell you](harness/guides/hook-feedback.md) |
@@ -33,10 +36,10 @@ Load the feature's `AGENTS.md`, its `contract/`, `internal/` and `module.py`, it
 ## Before you finish
 
 ```bash
-ruff check . && ruff format --check . && mypy && pytest && eitri check --root .
+ruff check . && ruff format --check . && mypy && pytest && eitri check --root . --base origin/main
 ```
 
-Commit, then stop: the `Stop` hook runs the tests, the end-to-end scenarios the change reaches, and Jev's review of the committed diff.
+Commit, then stop: the `Stop` hook runs the tests under coverage, holds the change to its promises (changed lines tested, contracts additive, the HTTP API compatible), runs the end-to-end scenarios the change reaches, and Jev's review of the committed diff. When a route's shape changes, regenerate `docs/openapi.json` with `python tools/openapi_compat.py --write`.
 
 <API_TASKS>
 Before any non-trivial API engineering task (designing, implementing, mocking, testing, monitoring, documenting or deploying an API or Postman Flow), read `postman/skills/api-engineer/SKILL.md` and follow it.
@@ -47,8 +50,8 @@ Before any non-trivial API engineering task (designing, implementing, mocking, t
 <!--heimdall:map-->
 features: `src/pfa/features` · kernel: `src/pfa/kernel` · routes: `src/pfa/api/routes/<feature>.py` · budget: 15000 tokens per feature · regenerate with `heimdall map --root .`
 
-| feature | depends on | fan-in | contract | routes |
-|---|---|---|---|---|
-| chunking | (none) | 1 | `src/pfa/features/chunking/contract/` | `POST /chunking/split` |
-| embeddings | chunking | 0 | `src/pfa/features/embeddings/contract/` | `POST /embeddings/query`<br>`POST /embeddings/passages`<br>`POST /embeddings/similarity` |
+| feature | depends on | fan-in | budget used | contract | routes |
+|---|---|---|---|---|---|
+| chunking | (none) | 1 | ≈10% | `src/pfa/features/chunking/contract/` | `POST /chunking/split` |
+| embeddings | chunking | 0 | ≈30% | `src/pfa/features/embeddings/contract/` | `POST /embeddings/query`<br>`POST /embeddings/passages`<br>`POST /embeddings/similarity` |
 <!--/heimdall:map-->

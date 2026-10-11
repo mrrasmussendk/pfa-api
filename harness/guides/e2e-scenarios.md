@@ -25,15 +25,18 @@ The harness does not assume an API. A scenario's tags say what it is:
 {
   "start": ["{python}", "-m", "pfa.api"],
   "port_env": "PFA_PORT",
-  "ready": "/health",
+  "env": {"PFA_WARMUP": "1"},
+  "ready": "/ready",
+  "ready_seconds": 300,
   "tools": {"API": "postman"}
 }
 ```
 
-- `start`, `port_env` and `ready` are optional.
+- `start`, `port_env`, `env`, `ready` and `ready_seconds` are optional.
   - `start` is the command that starts the system under test.
   - `{python}` is the interpreter running Heimdall, and `{port}` is the free port picked for the run; `port_env` passes that port to the system.
-  - `ready` is the path polled until the system answers.
+  - `env` adds variables to the system's environment. Here it warms the model up at start.
+  - `ready` is the path polled until the system answers 2xx, for up to `ready_seconds` (default 60). Here it is `/ready`, so every scenario meets a loaded model and a response-time clause measures the request, not the load.
 - Leave `start` out when the scenarios start what they need, as a CLI or a library's do.
 - `tools` maps each method to the tool that runs its scenarios. It is also the set of tools the project's scenarios may use, and its keys the method tags. An API and frontend project might say `{"API": "postman", "UI": "playwright"}`; a background service might say `{"service": "pytest"}`.
 
@@ -97,7 +100,7 @@ A failed check blocks the stop (exit 2) with the scenario, the file and what dis
 2. **The questions.** Jev is asked one yes/no question per scenario: *could this change alter what the scenario observes?* It is also asked whether the change adds observable behaviour that no scenario describes, and, for each scenario whose text or test changed, whether the two still agree; it reads those tests in full. Otherwise Jev reads the hunks of application files only; docs, tests and tooling are listed by path. When no application code changed, Jev is asked only the agreement questions, and only the scenarios whose own files changed run.
 3. **The policy.** The thresholds live in `tools/heimdall/commands/e2e/judge.py` (`T`). As in the review, facts come first:
    - A scenario whose own files changed (its lines of the feature file, or any of its tests) always runs, and Jev is asked whether its text still says what its test does (`drift ≥ 0.50` asks for a fix).
-   - A feature that changed and has no scenario always asks for one.
+   - A feature that changed and has no scenario always asks for one, and so does each of its routes that no scenario's `When` sends a request to. `heimdall e2e --all` holds every route in the map to a scenario.
    - Otherwise, a scenario runs at `rerun ≥ 0.30`, and a new one is requested at `needs_new_scenario ≥ 0.60`.
 4. **The run.** The hook starts the system from `system.json` and runs each tool's batch against it, then stops the system. The system's log is kept in `.heimdall/e2e-service.log`.
 

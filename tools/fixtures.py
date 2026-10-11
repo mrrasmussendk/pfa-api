@@ -213,7 +213,9 @@ FILES: dict[str, str] = {
     "pfa/kernel/__init__.py": _KERNEL,
     "pfa/features/__init__.py": "",
     "pfa/features/rune/feature.json": json.dumps({"depends_on": []}, indent=2) + "\n",
-    "pfa/features/rune/AGENTS.md": "# rune\n<!--heimdall:deps-->depends on: (none) + kernel<!--/heimdall:deps-->\n<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n",
+    "pfa/features/rune/AGENTS.md": "# rune\n<!--heimdall:deps-->depends on: (none) + kernel<!--/heimdall:deps-->\n<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n"
+    "<!--heimdall:scenarios-->scenarios: (none) — add them with `heimdall e2e new rune/<name>`<!--/heimdall:scenarios-->\n"
+    "<!--heimdall:budget-->budget: ≈0% of 15,000 tokens used — `eitri check` has the exact count<!--/heimdall:budget-->\n",
     "pfa/features/rune/__init__.py": "",
     "pfa/features/rune/contract/__init__.py": "from .rune_service import Clarity, RuneReading, RuneService\n",
     "pfa/features/rune/contract/rune_service.py": _RUNE_CONTRACT,
@@ -222,7 +224,9 @@ FILES: dict[str, str] = {
     "pfa/features/rune/internal/rune_service.py": _RUNE_SERVICE,
     "pfa/features/rune/module.py": _RUNE_MODULE,
     "pfa/features/kvad/feature.json": json.dumps({"depends_on": ["rune"]}, indent=2) + "\n",
-    "pfa/features/kvad/AGENTS.md": "# kvad\n<!--heimdall:deps-->depends on: rune + kernel<!--/heimdall:deps-->\n<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n",
+    "pfa/features/kvad/AGENTS.md": "# kvad\n<!--heimdall:deps-->depends on: rune + kernel<!--/heimdall:deps-->\n<!--heimdall:routes-->routes: (none)<!--/heimdall:routes-->\n"
+    "<!--heimdall:scenarios-->scenarios: (none) — add them with `heimdall e2e new kvad/<name>`<!--/heimdall:scenarios-->\n"
+    "<!--heimdall:budget-->budget: ≈0% of 15,000 tokens used — `eitri check` has the exact count<!--/heimdall:budget-->\n",
     "pfa/features/kvad/__init__.py": "",
     "pfa/features/kvad/contract/__init__.py": "from .kvad_service import KvadService, Verse\n",
     "pfa/features/kvad/contract/kvad_service.py": _KVAD_CONTRACT,

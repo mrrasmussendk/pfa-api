@@ -26,6 +26,7 @@ from heimdall.commands.e2e import (
     fallback,
     questions,
 )
+from heimdall.commands.e2e.tools import serves
 from heimdall.commands.review import parse_unified_diff
 from heimdall.model import MapModel
 
@@ -364,7 +365,7 @@ def test_all_runs_every_scenario_without_a_change_or_jev(repo: TempRepo) -> None
 
 
 def test_all_without_scenarios_says_there_are_none(repo: TempRepo) -> None:
-    write_e2e_project(repo)
+    write_e2e_project(repo, kvad_routes=())
     (repo.root / "tests/e2e/kvad.feature").unlink()
     (repo.root / "tests/e2e/rune.feature").unlink()
 
@@ -406,3 +407,60 @@ def test_a_base_that_git_would_read_as_an_option_is_refused(tmp_path) -> None:
 
     with pytest.raises(E2EError, match="not an option"):
         working_diff(str(tmp_path), "--output=/tmp/x")
+
+
+# ---------------------------------------------------------------- every route has a scenario
+
+
+@pytest.mark.parametrize(
+    ("route", "request_", "served"),
+    [
+        ("POST /run", ("POST", "/run"), True),
+        ("GET /run", ("POST", "/run"), False),
+        ("GET /kvad/{id}", ("GET", "/kvad/42"), True),
+        ("GET /kvad/{id}", ("GET", "/kvad/42/more"), False),
+        ("GET /kvad/{id}/runes", ("GET", "/kvad/7/runes"), True),
+    ],
+)
+def test_a_route_template_is_served_by_the_requests_it_matches(route: str, request_: tuple[str, str], served: bool) -> None:
+    assert serves(route, *request_) is served
+
+
+def test_all_asks_for_a_scenario_for_every_route_none_sends_a_request_to(repo: TempRepo) -> None:
+    write_e2e_project(repo, kvad_routes=("POST /run", "GET /kvad/{id}"))
+
+    code, out, _ = _run(repo, "--all", seams=Seams(runner=_runner(GREEN)))
+
+    assert code == EXIT_NEEDS_SCENARIOS
+    assert "route `GET /kvad/{id}` of `kvad` has no scenario: heimdall e2e new kvad/<name>" in out and "POST /run" not in out
+
+
+def test_all_without_a_map_says_routes_were_not_checked(repo: TempRepo) -> None:
+    write_e2e_project(repo, kvad_routes=("GET /kvad/{id}",))
+    (repo.root / ".heimdall/map.json").unlink()
+
+    code, out, _ = _run(repo, "--all", seams=Seams(runner=_runner(GREEN)))
+
+    assert code == EXIT_OK and "run `heimdall map --root .`" in out
+
+
+def test_the_stop_hook_asks_for_the_unserved_routes_of_the_features_the_change_touched(repo: TempRepo) -> None:
+    write_e2e_project(repo, kvad_routes=("POST /run", "GET /kvad/{id}"))
+    repo.write_file("change.diff", _diff("src/pfa/features/kvad/internal/a.py"))
+
+    code, out, _ = _run(
+        repo, "--diff", "change.diff", seams=Seams(transport=_transport(_answers(rerun_0=0.0, rerun_1=0.0)), runner=_runner(GREEN))
+    )
+
+    assert code == EXIT_NEEDS_SCENARIOS and "route `GET /kvad/{id}` of `kvad` has no scenario" in out
+
+
+def test_the_stop_hook_leaves_the_routes_of_untouched_features_to_ci(repo: TempRepo) -> None:
+    write_e2e_project(repo, kvad_routes=("POST /run", "GET /kvad/{id}"))
+    repo.write_file("change.diff", _diff("src/pfa/features/rune/internal/a.py"))
+
+    code, out, _ = _run(
+        repo, "--diff", "change.diff", seams=Seams(transport=_transport(_answers(rerun_0=0.0, rerun_1=0.0)), runner=_runner(GREEN))
+    )
+
+    assert code == EXIT_OK and "GET /kvad/{id}" not in out
