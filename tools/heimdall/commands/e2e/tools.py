@@ -35,15 +35,21 @@ _JS_NAME = r"""\(\s*("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')"""
 _REQUEST = re.compile(r"\b(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) (/[^\s,;]*)")
 
 
+# A JavaScript escape: a code point by number, or one character, mapped through ``_CONTROL`` or standing for itself.
+_ESCAPE = re.compile(r"\\(?:u\{([0-9a-fA-F]{1,6})\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(.))", re.S)
+_CONTROL = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f", "v": "\v", "0": "\0"}
+
+
+def _unescape(m: re.Match[str]) -> str:
+    code = m.group(1) or m.group(2) or m.group(3)
+    return chr(int(code, 16)) if code else _CONTROL.get(m.group(4), m.group(4))
+
+
 def _unquote(literal: str) -> str:
-    """The text of a quoted literal. JSON decodes the common double-quoted case, ``\\uXXXX`` included; an escape
-    JSON lacks (``\\'`` is valid JavaScript) falls back to dropping each backslash."""
-    if literal.startswith('"'):
-        try:
-            return str(json.loads(literal))
-        except ValueError:
-            pass
-    return re.sub(r"\\(.)", r"\1", literal[1:-1])
+    """The text of a JavaScript string literal in either quote, its escapes decoded; a surrogate pair written as
+    two ``\\uXXXX`` escapes is joined into its one character."""
+    text = _ESCAPE.sub(_unescape, literal[1:-1])
+    return text.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
 
 
 def _js(name: str) -> str:
