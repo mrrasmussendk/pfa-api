@@ -206,6 +206,14 @@ class _Tally:
     state_tokens: int = 0  # what the judge gets after the caps
     not_shown: int = 0  # files counted in the facts but left out of ``files``: the budget ran out before them
 
+    @classmethod
+    def of(cls, files: list[FileChange], m: MapModel | None) -> _Tally:
+        tally = cls()
+        for f in files:
+            tally.count(area_of(f.path, m), f, m)
+            tally.diff_tokens += 0 if f.binary else estimate(f.text)
+        return tally
+
     def count(self, area: str, f: FileChange, m: MapModel | None) -> None:
         if is_application(area) and f.status != "deleted" and norm(f.path).endswith(".py"):
             self.code_changed = True
@@ -233,8 +241,6 @@ def _entries(files: list[FileChange], m: MapModel | None, tally: _Tally, budget:
     entries: list[dict[str, Any]] = []
     classified = sorted(((area_of(f.path, m), f) for f in files), key=lambda pair: priority(pair[0]))
     for area, f in classified:
-        tally.count(area, f, m)
-        tally.diff_tokens += 0 if f.binary else estimate(f.text)
         entry: dict[str, Any] = {"path": norm(f.path), "status": f.status, "area": area, "added": f.added, "removed": f.removed, "diff": ""}
         cost = estimate(json.dumps(entry, ensure_ascii=False))
         if cost >= budget:
@@ -317,8 +323,11 @@ def build_state(files: list[FileChange], m: MapModel | None, task: str | None, k
     facts grow with every file cut), the files' share shrinks by the overshoot and they are laid out again."""
     known = known or Known()
     budget = MAX_STATE_TOKENS
+    tally = _Tally.of(files, m)
     while True:
-        tally = _Tally()
+        tally.truncated = []
+        tally.state_tokens = 0
+        tally.not_shown = 0
         entries = _entries(files, m, tally, budget)
         state = {
             "task": task or "(no task statement given)",

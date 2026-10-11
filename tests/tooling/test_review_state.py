@@ -99,6 +99,7 @@ def test_the_whole_state_fits_the_budget_however_many_files(monkeypatch: pytest.
 
     assert estimate(json.dumps(state, ensure_ascii=False)) <= 3_000
     assert state["facts"]["files_changed"] == 304 and state["facts"]["files_not_shown"] > 0
+    assert state["facts"]["docs_changed"] is True
     assert any(e["path"] == "src/pfa/api/routes/kvad.py" for e in state["files"])  # the code is the last to go
 
 

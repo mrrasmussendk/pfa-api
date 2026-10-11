@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+from heimdall.commands import review
 from heimdall.commands.review import build_state
 from heimdall.commands.review.comment import render_comment
 from heimdall.commands.review.policy import FAIL, PASS, UNSURE, Judgment, Row, decide
@@ -99,3 +101,22 @@ def test_a_check_about_the_change_as_a_whole_says_so_in_the_table() -> None:
     md = _comment(_verdict(Row("docs_stale", "docs_stale", "the change", 0.57, UNSURE)))
 
     assert "| the change | may change behaviour with no doc updated | 0.57 |" in md
+
+
+def test_comment_explains_truncated_diff_and_craft_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(review.state, "MAX_FILE_TOKENS", 1)
+    diff = (
+        "diff --git a/src/pfa/features/kvad/internal/change.py b/src/pfa/features/kvad/internal/change.py\n"
+        "--- a/src/pfa/features/kvad/internal/change.py\n"
+        "+++ b/src/pfa/features/kvad/internal/change.py\n"
+        "@@ -1 +1,2 @@\n-old\n+new\n+another line\n"
+    )
+    state = build_state(review.parse_unified_diff(diff), None, None)
+    state["facts"]["craft_files"] = ["src/pfa/features/kvad/internal/change.py", "src/pfa/api/routes/kvad.py"]
+    state["facts"]["craft_truncated"] = ["src/pfa/features/kvad/internal/change.py"]
+
+    md = render_comment(_verdict(), state)
+
+    assert "were cut and the craft scores rate what the judge saw" in md
+    assert "- judged whole for clean code, one call each: src/pfa/features/kvad/internal/change.py, src/pfa/api/routes/kvad.py" in md
+    assert "- cut at the token budget when judged whole: src/pfa/features/kvad/internal/change.py" in md
