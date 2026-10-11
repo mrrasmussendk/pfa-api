@@ -32,7 +32,7 @@ def changed_lines(diff: str) -> dict[str, set[int]]:
     path = None
     for line in diff.splitlines():
         if m := _FILE.match(line):
-            new = m.group(1) or ""
+            new = (m.group(1) or "").rstrip("\t")  # git ends the header with a tab when the name holds a space
             path = new if new.startswith(SOURCE) and new.endswith(".py") else None
         elif (m := _HUNK.match(line)) and path:
             start, count = int(m.group(1)), int(m.group(2) or 1)

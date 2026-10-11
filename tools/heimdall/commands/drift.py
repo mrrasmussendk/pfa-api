@@ -110,7 +110,8 @@ def _session_table(sessions: dict[str, _Session], m: MapModel, stdout: TextIO) -
     stdout.write("\n")
 
 
-def _slice_table(sessions: dict[str, _Session], m: MapModel, stdout: TextIO) -> None:
+def _slice_counts(sessions: dict[str, _Session], m: MapModel) -> tuple[dict[str, int], dict[str, int]]:
+    """Reads and out-of-bounds reads per slice, each session's reads counted against the first slice it edited."""
     total_by_slice: dict[str, int] = {}
     oob_by_slice: dict[str, int] = {}
     for s in sessions.values():
@@ -121,6 +122,11 @@ def _slice_table(sessions: dict[str, _Session], m: MapModel, stdout: TextIO) -> 
             oob_by_slice.setdefault(target, 0)
             if not _in_bounds(kind, s, allowed):
                 oob_by_slice[target] += 1
+    return total_by_slice, oob_by_slice
+
+
+def _slice_table(sessions: dict[str, _Session], m: MapModel, stdout: TextIO) -> None:
+    total_by_slice, oob_by_slice = _slice_counts(sessions, m)
     stdout.write("slice".ljust(22) + "reads".rjust(7) + "out-of-bounds".rjust(15) + "oob %".rjust(8) + "\n")
     for sl in sorted(total_by_slice, key=lambda x: -oob_by_slice[x]):  # stable: ties keep first-seen order
         oob, total = oob_by_slice[sl], total_by_slice[sl]

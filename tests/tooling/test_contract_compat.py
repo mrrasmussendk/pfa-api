@@ -60,6 +60,20 @@ def test_changing_a_signature_a_consumer_uses_is_breaking(project: TempProject) 
     assert len(hits) == 1 and "`count` changed" in hits[0]
 
 
+def test_adding_a_required_keyword_only_parameter_is_breaking(project: TempProject) -> None:
+    hits = _breaks(_committed(project), CONTRACT.replace("def count(text: str)", "def count(text: str, *, strict: bool)"))
+
+    assert len(hits) == 1 and "`count` changed" in hits[0]
+
+
+def test_a_consumer_reaching_a_name_through_the_contract_package_counts(project: TempProject) -> None:
+    consumer = "from pfa.features.rune import contract\n\nx = contract.count('a')\n"
+
+    hits = _breaks(_committed(project, consumer=consumer), CONTRACT.split("\n\ndef count")[0])
+
+    assert len(hits) == 1 and "`count` removed" in hits[0] and "kvad/internal/use.py" in hits[0]
+
+
 def test_adding_a_required_field_is_breaking(project: TempProject) -> None:
     hits = _breaks(_committed(project), CONTRACT.replace("    budget: int\n", "    budget: int\n    model: str\n"))
 
@@ -73,8 +87,9 @@ def test_adding_a_required_field_is_breaking(project: TempProject) -> None:
         ("def count(text: str)", "def count(text: str, strict: bool = False)"),
         ("\n\ndef count", "\n\nclass Joined:\n    parts: list[str]\n\n\ndef count"),
         ("    budget: int\n", "    budget: int = 512\n"),
+        ("def count(text: str)", "def count(text: str, *, strict: bool = False)"),
     ],
-    ids=["field-with-default", "trailing-defaulted-parameter", "new-class", "field-gains-default"],
+    ids=["field-with-default", "trailing-defaulted-parameter", "new-class", "field-gains-default", "keyword-only-with-default"],
 )
 def test_additions_are_free(project: TempProject, change: tuple[str, str]) -> None:
     assert _breaks(_committed(project), CONTRACT.replace(*change)) == []

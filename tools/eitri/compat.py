@@ -101,36 +101,38 @@ def _class_member(member: ast.stmt) -> dict[str, str]:
 
 
 def _additive(old: str, new: str) -> bool:
-    """Whether ``new`` only extends ``old``: a field gaining a default, or a signature gaining defaulted
-    keyword-compatible parameters at its end."""
+    """Whether ``new`` only extends ``old``: a field gaining a default, or a signature gaining parameters that all
+    have defaults (positional ones at its end, keyword-only ones anywhere) with the same return type."""
     if old == new or (not old.endswith(" = …") and new == old + " = …"):
         return True
     if not (old.startswith("def ") and new.startswith("def ")):
         return False
     a, b = ast.parse(old).body[0], ast.parse(new).body[0]
     assert isinstance(a, ast.FunctionDef) and isinstance(b, ast.FunctionDef)
-    added = len(b.args.args) - len(a.args.args)
-    kept = ast.unparse(a.args) == ast.unparse(_trim(b.args, added))
-    return (
-        added > 0
-        and kept
-        and len(b.args.defaults) >= added
-        and ast.unparse(a.returns or ast.Constant(None)) == ast.unparse(b.returns or ast.Constant(None))
-    )
+    same_return = ast.unparse(a.returns or ast.Constant(None)) == ast.unparse(b.returns or ast.Constant(None))
+    return same_return and _extends(a.args, b.args)
 
 
-def _trim(args: ast.arguments, added: int) -> ast.arguments:
-    """``args`` without its last ``added`` positional parameters and their defaults."""
-    keep = len(args.args) - added
-    return ast.arguments(
-        args.posonlyargs,
-        args.args[:keep],
-        args.vararg,
-        args.kwonlyargs,
-        args.kw_defaults,
-        args.kwarg,
-        args.defaults[: max(0, len(args.defaults) - added)],
+def _extends(old: ast.arguments, new: ast.arguments) -> bool:
+    """Whether ``new`` is ``old`` plus parameters a caller of ``old`` never has to pass."""
+    added = len(new.args) - len(old.args)
+    if added < 0 or added > len(new.defaults):
+        return False
+    known = {a.arg for a in old.kwonlyargs}
+    kwonly = list(zip(new.kwonlyargs, new.kw_defaults, strict=True))  # one default (or None) per keyword-only
+    if any(d is None for a, d in kwonly if a.arg not in known):
+        return False
+    kept = [(a, d) for a, d in kwonly if a.arg in known]
+    trimmed = ast.arguments(
+        new.posonlyargs,
+        new.args[: len(new.args) - added],
+        new.vararg,
+        [a for a, _ in kept],
+        [d for _, d in kept],
+        new.kwarg,
+        new.defaults[: len(new.defaults) - added],
     )
+    return ast.unparse(trimmed) == ast.unparse(old)
 
 
 def _breaks(old: dict[str, str], new: dict[str, str]) -> list[tuple[str, str]]:

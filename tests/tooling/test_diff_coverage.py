@@ -61,16 +61,18 @@ def _git(root: Path, *args: str) -> None:
 def test_the_change_holds_edited_tracked_lines_and_every_untracked_file_whatever_its_name(tmp_path: Path) -> None:
     (tmp_path / "src/pfa").mkdir(parents=True)
     (tmp_path / "src/pfa/old.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+    (tmp_path / "src/pfa/two words.py").write_text("a = 1\n", encoding="utf-8")
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "add", "-A")
     _git(tmp_path, "commit", "-q", "-m", "base")
     (tmp_path / "src/pfa/old.py").write_text("a = 1\nb = 3\nc = 4\n", encoding="utf-8")
     (tmp_path / "src/pfa/æble kage.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
+    (tmp_path / "src/pfa/two words.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
     (tmp_path / "notes.py").write_text("outside = True\n", encoding="utf-8")
 
     changed = changed_lines(diff_since("HEAD", tmp_path))
 
-    assert changed == {"src/pfa/old.py": {2, 3}, "src/pfa/æble kage.py": {1, 2}}
+    assert changed == {"src/pfa/old.py": {2, 3}, "src/pfa/two words.py": {2}, "src/pfa/æble kage.py": {1, 2}}
 
 
 def test_a_base_that_git_would_read_as_an_option_is_refused(tmp_path: Path) -> None:
