@@ -18,6 +18,7 @@ A hook exit 2 flags an edit that:
 
 - touches a second feature in the same session: check the dependency boundary;
 - touches a frozen contract (fan-in 10 or more): follow [Changing a contract](changing-a-contract.md);
+- is the session's first edit of the kernel: every feature pays for what you add there, so read `src/pfa/kernel/AGENTS.md` first;
 - leaves a function over the shape limit (40 lines or 5 parameters): split it.
 
 ⚠️ **Check:** shell reads are invisible to the hook, and without a map nothing is observed. Eitri is the enforcement; the hook is a warning.
