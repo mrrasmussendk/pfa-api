@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import TextIO
+from typing import Any, TextIO
 
 from ..model import MapModel
 
@@ -33,23 +33,32 @@ def _pct(oob: int, total: int) -> str:
     return f"{100.0 * oob / total:.0f}"
 
 
-def _load(tele_p: str) -> dict[str, _Session]:
-    """Each session's edited slices and reads, in the order sessions first appear."""
+def _record(line: str) -> dict[str, Any] | None:
+    """One telemetry line as a record, or None when it is not one (a line cut short by a killed hook, say)."""
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def _load(tele_p: str) -> tuple[dict[str, _Session], int]:
+    """Each session's edited slices and reads, in the order sessions first appear, and how many lines were not
+    records."""
     sessions: dict[str, _Session] = {}
+    unreadable = 0
     with open(tele_p, encoding="utf-8") as f:
         for line in f:
-            try:
-                rec = json.loads(line)
-            except ValueError:
+            rec = _record(line)
+            if rec is None:
+                unreadable += 1
                 continue
-            if not isinstance(rec, dict):
-                continue
-            s = sessions.setdefault(rec.get("session") or "?", _Session())
+            s = sessions.setdefault(str(rec.get("session") or "?"), _Session())
             if rec.get("event") == "edit" and rec.get("slice") is not None:
                 s.edits.add(str(rec["slice"]))
             elif rec.get("event") == "read":
                 s.reads.append((str(rec.get("kind") or ""), str(rec.get("path") or "")))
-    return sessions
+    return sessions, unreadable
 
 
 def _allowed_for(s: _Session, m: MapModel) -> set[str]:
@@ -77,7 +86,10 @@ def _inputs(root: str, stderr: TextIO) -> tuple[dict[str, _Session], MapModel] |
     if not (os.path.isfile(tele_p) and os.path.isfile(map_p)):
         stderr.write("need telemetry + map\n")
         return None
-    return _load(tele_p), MapModel.load(map_p)
+    sessions, unreadable = _load(tele_p)
+    if unreadable:
+        stderr.write(f"heimdall drift: left out {unreadable} telemetry line(s) that are not records\n")
+    return sessions, MapModel.load(map_p)
 
 
 def session_summary(s: _Session, m: MapModel) -> str:

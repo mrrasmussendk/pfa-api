@@ -47,59 +47,67 @@ def check(root: Path, *extra: str) -> str:
     return out.getvalue() + err.getvalue()
 
 
+def _bites(root: Path, rule: str, rel: str, code: str) -> bool:
+    """Whether writing ``code`` at ``rel`` makes ``rule`` fail the check; the file is put back as it was."""
+    target = root / rel
+    original = target.read_text(encoding="utf-8") if target.exists() else None  # a canary may overwrite a manifest
+    target.write_text(code, encoding="utf-8")
+    try:
+        return f"error {rule}" in check(root)
+    finally:
+        if original is None:
+            target.unlink()
+        else:
+            target.write_text(original, encoding="utf-8")
+
+
+def _disarmed(root: Path) -> bool:
+    """Whether ``enabled = false`` lets a violation through: the footgun Brokkr exists for."""
+    (root / "pyproject.toml").write_text("[tool.eitri]\nenabled = false\n", encoding="utf-8")
+    (root / "pfa/features/kvad/internal/_c.py").write_text(CANARIES[0][2], encoding="utf-8")
+    return "error EIT001" not in check(root)
+
+
+def _report(ok: bool, passed: str, failed: str) -> bool:
+    print(passed if ok else failed)
+    return ok
+
+
+def _fixture_canaries(root: Path) -> list[bool]:
+    """Every canary against the fixture tree, in order, each printed as it runs."""
+    results = [
+        _report(_bites(root, rule, rel, code), f"canary ok:   {rule} bit", f"CANARY FAIL: {rule} did not bite")
+        for rule, rel, code in CANARIES
+    ]
+    results.append(_report("error EIT100" in check(root, "--budget", "100"), "canary ok:   EIT100 bit", "CANARY FAIL: EIT100"))
+    results.append(
+        _report(
+            _disarmed(root),
+            "canary note: 'enabled = false' silently disarms every wall — keep Brokkr in CI",
+            "CANARY FAIL: enabled=false did not disarm (config not honored?)",
+        )
+    )
+    return results
+
+
 def main() -> int:
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # diagnostics contain em dashes
-    passed = failed = 0
-
     real = check(REPO)
     if " error " in real:
         print("CANARY FAIL: the real repo does not pass eitri check — fix that first:\n" + real)
         return 1
     print("canary ok:   real repo passes (walls do not bite on clean work)")
-    passed += 1
-
     with tempfile.TemporaryDirectory(prefix="brokkr-") as tmp:
         root = write_fixture_tree(Path(tmp))
         baseline = check(root)
         if " error " in baseline:
             print("CANARY FAIL: the fixture tree does not pass — fix that first:\n" + baseline)
             return 1
-
-        for rule, rel, code in CANARIES:
-            target = root / rel
-            original = target.read_text(encoding="utf-8") if target.exists() else None  # a canary may overwrite a manifest
-            target.write_text(code, encoding="utf-8")
-            if f"error {rule}" in check(root):
-                print(f"canary ok:   {rule} bit")
-                passed += 1
-            else:
-                print(f"CANARY FAIL: {rule} did not bite")
-                failed += 1
-            if original is None:
-                target.unlink()
-            else:
-                target.write_text(original, encoding="utf-8")
-
-        if "error EIT100" in check(root, "--budget", "100"):
-            print("canary ok:   EIT100 bit")
-            passed += 1
-        else:
-            print("CANARY FAIL: EIT100")
-            failed += 1
-
-        # disarming the config is the footgun Brokkr exists for
-        (root / "pyproject.toml").write_text("[tool.eitri]\nenabled = false\n", encoding="utf-8")
-        (root / "pfa/features/kvad/internal/_c.py").write_text(CANARIES[0][2], encoding="utf-8")
-        if "error EIT001" not in check(root):
-            print("canary note: 'enabled = false' silently disarms every wall — keep Brokkr in CI")
-            passed += 1
-        else:  # pragma: no cover
-            print("CANARY FAIL: enabled=false did not disarm (config not honored?)")
-            failed += 1
-
+        results = [True, *_fixture_canaries(root)]
+    failed = results.count(False)
     print("---")
-    print(f"canary: {passed} passed, {failed} failed")
+    print(f"canary: {len(results) - failed} passed, {failed} failed")
     return failed
 
 

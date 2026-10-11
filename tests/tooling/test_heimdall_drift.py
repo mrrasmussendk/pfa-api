@@ -54,9 +54,10 @@ def test_drift_skips_malformed_telemetry_lines(repo: TempRepo) -> None:
     repo.hook(TempRepo.ev("s1", "Read", "src/pfa/features/kvad/internal/kvad_engine.py"))
     with open(repo.root / ".heimdall" / "telemetry.jsonl", "a", encoding="utf-8") as f:
         f.write("{garbage\n")
-    code, stdout, _ = repo.run("", "drift")
+    code, stdout, stderr = repo.run("", "drift")
     assert code == 0
     assert "s1        kvad                            1     0      0%" in stdout
+    assert stderr == "heimdall drift: left out 1 telemetry line(s) that are not records\n"
 
 
 def test_drift_counts_shared_package_reads_as_in_bounds(repo: TempRepo) -> None:
