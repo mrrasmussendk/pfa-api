@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import NamedTuple, TextIO
 
 EXIT_OK, EXIT_REQUEST_CHANGES, EXIT_ESCALATE, EXIT_ERROR = 0, 1, 2, 3
-OUTCOMES = ("approve", "comment", "request_changes", "escalate")
+OUTCOMES = ("comment", "request_changes", "escalate")  # no approve: a person always decides the merge
 
 
 class Streams(NamedTuple):

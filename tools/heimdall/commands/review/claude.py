@@ -5,12 +5,14 @@ quoted from the file, which ``verify`` checks before believing it."""
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from .verify import Inquiry, Ruling, VerifyError, parse_rulings
 
 MODEL = "claude-sonnet-5-5"
 KEY_ENVS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+WORKSPACE_ENV = "ANTHROPIC_WORKSPACE_ID"  # required by a key that is not scoped to a workspace
 # A refused request is retried server-side on the model Anthropic picks for the refusal's category.
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
@@ -79,11 +81,20 @@ def prompt(inquiry: Inquiry) -> str:
     return f"<task>\n{inquiry.task or '(no task statement given)'}\n</task>\n\n<doubts>\n{doubts}\n</doubts>\n\n<diff>\n{diff}\n</diff>\n\n<files>\n{files}\n</files>"
 
 
+def make_client() -> Any:
+    """The SDK client. A key not scoped to a workspace must name one on every request, and the SDK reads
+    ``ANTHROPIC_WORKSPACE_ID`` only for profiles and workload identity, not for an ``ANTHROPIC_API_KEY``."""
+    import anthropic
+
+    workspace = os.environ.get(WORKSPACE_ENV)
+    return anthropic.Anthropic(default_headers={"anthropic-workspace-id": workspace} if workspace else None)
+
+
 def claude_check(inquiry: Inquiry, client: Any = None) -> list[Ruling]:
     """One ruling per doubt from Claude; ``VerifyError`` when it does not answer, declines, or answers out of shape."""
     import anthropic
 
-    client = client or anthropic.Anthropic()
+    client = client or make_client()
     try:
         response = client.beta.messages.create(
             model=MODEL,

@@ -28,7 +28,7 @@ The `Stop` hook (`.claude/hooks/finish.py`) runs, whenever the tree differs from
 
 1. `pytest`.
 2. `heimdall e2e --base origin/main`: the scenarios the change reaches, and whether one is missing. See [End-to-end scenarios](e2e-scenarios.md).
-3. `heimdall review --base origin/main`: Jev's judgment of the committed diff, with each of its blocks confirmed or refuted by Claude. See [PR review with Jev](pr-review.md).
+3. `heimdall review --base origin/main`: the agent pipeline. Jev checks each changed function for faults, and a failing check blocks, naming the function and the fix. Claude verifies only on the PR. See [PR review](pr-review.md).
 
 A failing suite, a failing or missing scenario, or a `request_changes` verdict blocks the stop and hands you the output. `escalate`, or a review that could not run because `TYPESAFE_API_KEY` is unset, is reported to the user instead.
 

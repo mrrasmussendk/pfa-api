@@ -41,6 +41,8 @@ def _as_added(cwd: str, path: str) -> str:
 
 def working_diff(cwd: str, base: str | None) -> str:
     """Tracked changes against the merge base with ``base`` (or ``HEAD``), then every untracked file."""
+    if base and base.startswith("-"):  # git would read it as an option, not a ref
+        raise E2EError(f"--base {base!r} must be a ref, not an option")
     against = _git(cwd, "merge-base", base, "HEAD").strip() if base else "HEAD"
     tracked = _git(cwd, "diff", "--no-color", "--unified=3", "--no-ext-diff", against)
     untracked = [p for p in _git(cwd, "ls-files", "--others", "--exclude-standard", "-z").split("\0") if p]
