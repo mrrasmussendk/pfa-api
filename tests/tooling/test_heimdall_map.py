@@ -234,3 +234,14 @@ def test_map_arguments_it_cannot_use_are_a_usage_error(repo: TempRepo, args: lis
     code, _, stderr = repo.run("", "map", *args)
 
     assert code == 2 and stderr.startswith("usage: heimdall map")
+
+
+def test_when_eitri_cannot_measure_the_tree_the_map_leaves_the_budget_out(repo: TempRepo) -> None:
+    # Eitri refuses a manifest whose depends_on is not a list; the map reads it as no dependencies and goes on.
+    _write_sample_tree(repo)
+    repo.write_file("src/pfa/features/rune/feature.json", '{"depends_on": "kvad"}\n')
+
+    code, _, _ = repo.run("", "map", "--root", "src")
+
+    assert code == 0 and "budget:" not in repo.read_file("src/pfa/features/kvad/AGENTS.md")
+    assert "| kvad | rune | 0 | ? |" in repo.read_file("AGENTS.md")

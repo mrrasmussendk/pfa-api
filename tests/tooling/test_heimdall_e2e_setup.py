@@ -464,3 +464,31 @@ def test_a_started_system_runs_with_the_project_s_variables_and_its_port() -> No
     env = e2e.system.system_environment(system, "4321")
 
     assert (env["WARM"], env["PORT"]) == ("1", "4321") and "PATH" in env
+
+
+def test_a_project_that_starts_nothing_gets_no_base_url(repo: TempRepo) -> None:
+    with e2e.system.running(System(tools={"service": "pytest"}), str(repo.root)) as base_url:
+        assert base_url == ""
+
+
+def test_a_system_that_exits_before_it_is_ready_cannot_run_and_says_where_its_log_is(repo: TempRepo) -> None:
+    system = System(tools={"API": "postman"}, start=("{python}", "-c", "import sys; sys.exit(3)"), port_env="PORT", ready_seconds=30)
+
+    with pytest.raises(E2EError, match=re.escape("the system exited with 3 before")) as caught, e2e.system.running(system, str(repo.root)):
+        pass
+
+    assert ".heimdall/e2e-service.log" in str(caught.value) and repo.has_file(".heimdall/e2e-service.log")
+
+
+def test_a_system_that_does_not_answer_in_time_cannot_run_and_is_stopped(repo: TempRepo) -> None:
+    system = System(tools={"API": "postman"}, start=("{python}", "-c", "import time; time.sleep(60)"), port_env="PORT", ready_seconds=0.01)
+
+    with pytest.raises(E2EError, match=r"did not answer within 0s"), e2e.system.running(system, str(repo.root)):
+        pass
+
+
+def test_a_start_command_that_does_not_exist_cannot_run(repo: TempRepo) -> None:
+    system = System(tools={"API": "postman"}, start=("no-such-program-xyz", "{port}"))
+
+    with pytest.raises(E2EError, match="cannot start no-such-program-xyz"), e2e.system.running(system, str(repo.root)):
+        pass
