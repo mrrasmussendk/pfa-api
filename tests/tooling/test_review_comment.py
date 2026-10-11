@@ -7,6 +7,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+
 from heimdall.commands import review
 from heimdall.commands.review import build_state
 from heimdall.commands.review.comment import render_comment
