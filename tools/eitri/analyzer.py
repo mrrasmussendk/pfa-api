@@ -1,4 +1,4 @@
-"""The analysis entry point: discover slices, run the walls on every module, meter the budgets."""
+"""The analysis entry point: discover slices, check their graph, run the walls on every module, meter the budgets."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .context_budget import analyze_budgets
 from .core import EIT000, Diagnostic, EitriConfig
+from .graph import analyze_graph
 from .imports import under
 from .project import (
     ManifestError,
@@ -48,7 +49,7 @@ def analyze(
     except ManifestError as e:
         raise EitriError(str(e)) from e
 
-    diags: list[Diagnostic] = []
+    diags: list[Diagnostic] = analyze_graph(slices)
 
     def police(files: list[Path], owner: Slice | None) -> None:
         for f in files:

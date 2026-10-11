@@ -37,6 +37,7 @@ CANARIES = [
     ),
     ("EIT006", "pfa/features/rune/internal/_c.py", "from fastapi import APIRouter\n\nrouter = APIRouter()\n"),
     ("EIT001", "pfa/api/_c.py", "from pfa.features.rune.internal.rune_engine import RuneEngine\n"),
+    ("EIT007", "pfa/features/rune/feature.json", '{"depends_on": ["kvad"]}\n'),
 ]
 
 
@@ -69,6 +70,7 @@ def main() -> int:
 
         for rule, rel, code in CANARIES:
             target = root / rel
+            original = target.read_text(encoding="utf-8") if target.exists() else None  # a canary may overwrite a manifest
             target.write_text(code, encoding="utf-8")
             if f"error {rule}" in check(root):
                 print(f"canary ok:   {rule} bit")
@@ -76,7 +78,10 @@ def main() -> int:
             else:
                 print(f"CANARY FAIL: {rule} did not bite")
                 failed += 1
-            target.unlink()
+            if original is None:
+                target.unlink()
+            else:
+                target.write_text(original, encoding="utf-8")
 
         if "error EIT100" in check(root, "--budget", "100"):
             print("canary ok:   EIT100 bit")

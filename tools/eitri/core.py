@@ -112,6 +112,18 @@ EIT006 = Descriptor(
     help_link=HELP_BASE + "EIT006.md",
 )
 
+EIT007 = Descriptor(
+    id="EIT007",
+    title="Feature dependency cycle",
+    message_format=(
+        "Features depend on each other in a cycle: {0} — a feature must be understandable and changeable "
+        "through the contracts below it; move what both need into one of them, or into a new feature both depend on"
+    ),
+    category="Eitri.Architecture",
+    severity=Severity.ERROR,
+    help_link=HELP_BASE + "EIT007.md",
+)
+
 EIT100 = Descriptor(
     id="EIT100",
     title="Agent context budget exceeded",
@@ -133,7 +145,7 @@ EIT101 = Descriptor(
     help_link=HELP_BASE + "EIT100.md",
 )
 
-ALL_DESCRIPTORS: tuple[Descriptor, ...] = (EIT000, EIT001, EIT002, EIT003, EIT004, EIT005, EIT006, EIT100, EIT101)
+ALL_DESCRIPTORS: tuple[Descriptor, ...] = (EIT000, EIT001, EIT002, EIT003, EIT004, EIT005, EIT006, EIT007, EIT100, EIT101)
 
 
 @dataclass

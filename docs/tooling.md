@@ -40,6 +40,7 @@ ruff check . && ruff format --check . && mypy    # what CI runs; `ruff check --f
 | **EIT004** | Undeclared dependency: importing `pfa.features.x.contract` requires `x` in your `feature.json`. | error |
 | **EIT005** | Error shape: no `HTTPException` from `fastapi`/`starlette` in the application outside the features, however imported or aliased — errors are RFC 9457 problem documents raised as `pfa.api.problems.Problem`. The module that defines the helper is exempt: it is the conversion point. | error |
 | **EIT006** | Features depend downward: nothing under `src/pfa/features/` outside `contract/` imports `fastapi`, `starlette`, `pfa.application` or `pfa.api`. Routes, request models and status codes live in `src/pfa/api/routes/<feature>.py`. | error |
+| **EIT007** | Dependency cycle: the features' `feature.json` dependencies must not loop (`a → b → a`). Each feature is understood through the contracts below it. | error |
 | **EIT100** | **Context budget**: own source + dependency contract surfaces + kernel > budget → check fails. | error |
 | **EIT101** | Context budget report (the same number, always visible). | info |
 
@@ -139,16 +140,16 @@ Eitri says whether the code passes. Brokkr says whether Eitri **still bites**. I
 
 The ways a wall gets disarmed are all quiet. Someone sets `enabled = false` "for now". A refactor of the tooling changes how imports are resolved and a rule silently stops matching. A config key is renamed and the budget falls back to its default. `eitri check` prints `0 error(s)` in every one of those cases, and the green looks exactly like a real green.
 
-`python tools/brokkr_canary.py` runs eight checks, in order, one line each:
+`python tools/brokkr_canary.py` runs eleven checks, in order, one line each:
 
 | # | Check | What it proves |
 |---|---|---|
 | 1 | The real `src/` passes `eitri check` clean | The walls do not bite on clean work. |
-| 2–6 | EIT001, EIT002, EIT003, EIT004, EIT005 bite | One minimal violating file per rule, written into a synthetic tree, fails the check. |
-| 7 | EIT100 bites | With `--budget 100`, the budget rule fails on a tree that passes at 15000. |
-| 8 | `enabled = false` disarms everything | The config switch really does switch the walls off — so you know what that line means if you ever see it in a diff. |
+| 2–9 | EIT001–EIT007 bite | One minimal violating file per rule (EIT001 twice: from a feature and from the application; for EIT007, a manifest that closes a loop), written into a synthetic tree, fails the check. |
+| 10 | EIT100 bites | With `--budget 100`, the budget rule fails on a tree that passes at 15000. |
+| 11 | `enabled = false` disarms everything | The config switch really does switch the walls off — so you know what that line means if you ever see it in a diff. |
 
-Checks 2 to 8 run against a **synthetic two-slice tree** written to a temp directory by `tools/fixtures.py`, not against the real service, so the canaries keep meaning the same thing as the real slices change. The exit code is the number of canaries that failed to bite.
+Checks 2 to 11 run against a **synthetic two-slice tree** written to a temp directory by `tools/fixtures.py`, not against the real service, so the canaries keep meaning the same thing as the real slices change. The exit code is the number of canaries that failed to bite.
 
 ```
 canary ok:   real repo passes (walls do not bite on clean work)
@@ -157,10 +158,13 @@ canary ok:   EIT002 bit
 canary ok:   EIT003 bit
 canary ok:   EIT004 bit
 canary ok:   EIT005 bit
+canary ok:   EIT006 bit
+canary ok:   EIT001 bit
+canary ok:   EIT007 bit
 canary ok:   EIT100 bit
 canary note: 'enabled = false' silently disarms every wall — keep Brokkr in CI
 ---
-canary: 8 passed, 0 failed
+canary: 11 passed, 0 failed
 ```
 
 **Reading a failure.** `CANARY FAIL: EIT003 did not bite` means the rule is broken, not your code: look at `tools/eitri/walls.py`, `imports.py`, `core.py`. The one exception is check 1 — `the real repo does not pass` means the service has a violation, and Brokkr stops there.
