@@ -38,6 +38,18 @@ _SENT_METHOD = re.compile(r"^method:\s*(\S+)", re.M)
 _SENT_URL = re.compile(r"^url:\s*'?\{\{base_url\}\}([^'\s]*)", re.M)
 
 
+def named_requests(s: Scenario) -> list[tuple[str, str]]:
+    """Each ``(METHOD, /path)`` the scenario's When names."""
+    return [(m.group(1), _path(m.group(2))) for w in s.when for m in _REQUEST.finditer(w)]
+
+
+def serves(route: str, method: str, path: str) -> bool:
+    """Whether ``route`` (``METHOD /path``, with ``{param}`` segments) is the one a request to ``method path`` reaches."""
+    route_method, _, template = route.partition(" ")
+    pattern = "".join("[^/]+" if part.startswith("{") else re.escape(part) for part in re.split(r"(\{[^}]*\})", template))
+    return route_method == method and re.fullmatch(pattern, path) is not None
+
+
 def _path(url: str) -> str:
     """The path a request goes to: no query, no full stop a sentence ended it with, ``/`` when empty."""
     return url.split("?", 1)[0].split("#", 1)[0].rstrip(".") or "/"

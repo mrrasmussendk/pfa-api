@@ -271,7 +271,7 @@ Unit tests prove a piece against fakes. A scenario proves the promise from outsi
 **Which scenarios run.** A run costs a service start and a model load, so the `Stop` hook runs only what a change can reach (`heimdall e2e --base origin/main`):
 
 1. The change is everything since the merge base: committed, uncommitted and untracked. The slice map says which features it touched and which depend on them.
-2. A scenario whose own lines of its feature file, or whose test, changed always runs. A feature that changed with no scenario always gets one asked for.
+2. A scenario whose own lines of its feature file, or whose test, changed always runs. A feature that changed with no scenario always gets one asked for, and so does each of its routes that no scenario's `When` sends a request to. In CI, `--all` holds every route in the map to a scenario.
 3. Otherwise Jev answers one question per scenario, *could this change alter what it observes?*, and the scenario runs at `p ≥ 0.30`. Jev is also asked whether the change adds behaviour no scenario describes (`p ≥ 0.60` asks for a new one). Without a key, the slice map decides instead.
 4. A green run is remembered by the change's fingerprint, so stopping again on the same change runs nothing.
 

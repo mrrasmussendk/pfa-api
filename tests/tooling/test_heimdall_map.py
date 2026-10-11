@@ -23,11 +23,23 @@ def test_map_emits_indent2_map_json(repo: TempRepo) -> None:
         "app_dir": "src/pfa",
         "routes_dir": "src/pfa/api/routes",
         "slices": {
-            "kvad": {"path": "src/pfa/features/kvad", "depends_on": ["rune"], "budget": 15000, "fan_in": 0},
-            "rune": {"path": "src/pfa/features/rune", "depends_on": [], "budget": 15000, "fan_in": 1},
+            "kvad": {"path": "src/pfa/features/kvad", "depends_on": ["rune"], "budget": 15000, "fan_in": 0, "routes": []},
+            "rune": {"path": "src/pfa/features/rune", "depends_on": [], "budget": 15000, "fan_in": 1, "routes": []},
         },
     }
     assert repo.read_file(".heimdall/map.json") == json.dumps(expected, indent=2)
+
+
+def test_the_map_records_each_feature_s_routes(repo: TempRepo) -> None:
+    _write_sample_tree(repo)
+    repo.write_file(
+        "src/pfa/api/routes/kvad.py",
+        'router = APIRouter(prefix="/kvad")\n\n\n@router.post("/squares")\ndef squares(): ...\n\n\n@router.get("/{id}")\ndef one(): ...\n',
+    )
+
+    repo.run("", "map", "--root", "src")
+
+    assert json.loads(repo.read_file(".heimdall/map.json"))["slices"]["kvad"]["routes"] == ["POST /kvad/squares", "GET /kvad/{id}"]
 
 
 def test_map_injects_and_refreshes_agents_md_markers_idempotently(repo: TempRepo) -> None:

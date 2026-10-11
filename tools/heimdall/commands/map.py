@@ -268,6 +268,7 @@ def run(args: list[str], stdout: TextIO, stderr: TextIO, cwd: str) -> int:
                 "depends_on": deps,
                 "budget": budget,
                 "fan_in": fan_in[name],
+                "routes": routes[name],
             }
             for name, deps in discovered
         },

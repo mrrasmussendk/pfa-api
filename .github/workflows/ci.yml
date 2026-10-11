@@ -76,6 +76,8 @@ jobs:
           key: hf-intfloat-multilingual-e5-large
       - name: Fetch the model before the run, so no request waits on a download
         run: python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"
+      - name: The map, so every route is held to a scenario
+        run: heimdall map --root .
       - name: Every scenario
         run: heimdall e2e --all
       - name: The service's log, when a scenario failed

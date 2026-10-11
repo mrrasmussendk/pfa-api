@@ -8,8 +8,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ...model import MapModel
 from .change import Change
 from .scenarios import Scenario
+from .tools import named_requests, serves
 
 # Thresholds. A needless rerun costs a minute; a missed regression costs a release, so rerun is set low.
 T = {
@@ -25,6 +27,20 @@ class Plan:
     uncovered: list[str]  # features that changed with no scenario: a fact
     unnamed: float | None = None  # Jev's p that client-visible behaviour has no scenario, when over the threshold
     drifted: list[tuple[Scenario, float]] = field(default_factory=list)  # text and test disagree, with Jev's p
+    unserved: list[tuple[str, str]] = field(default_factory=list)  # (feature, route) no scenario's When sends: a fact
+
+
+def unserved_routes(scenarios: list[Scenario], m: MapModel | None, features: frozenset[str] | None = None) -> list[tuple[str, str]]:
+    """Each ``(feature, route)`` in the map, of ``features`` when given, that no scenario's When sends a request to."""
+    sent = [r for s in scenarios for r in named_requests(s)]
+    slices = m.slices.items() if m is not None else ()
+    return [
+        (name, route)
+        for name, info in sorted(slices)
+        if features is None or name in features
+        for route in info.routes
+        if not any(serves(route, method, path) for method, path in sent)
+    ]
 
 
 def drift_questions(scenarios: list[Scenario], edited: list[Scenario]) -> dict[str, dict[str, Any]]:

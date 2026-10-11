@@ -20,7 +20,7 @@ from ..review.state import is_application
 from ..review.transport import API_KEY_ENV, API_URL, API_URL_ENV, DEFAULT_MODEL
 from .base import EXIT_ERROR, EXIT_FAILED, EXIT_NEEDS_SCENARIOS, EXIT_OK, GUIDE, SCENARIOS_DIR, SYSTEM, E2EError
 from .change import Change, fingerprint, working_diff
-from .judge import Plan, T, decide, drift_questions, drifted, fallback, own_files_changed, questions
+from .judge import Plan, T, decide, drift_questions, drifted, fallback, own_files_changed, questions, unserved_routes
 from .runner import Runner, system_runner
 from .scaffold import NewScenario, Steps, new_advice, scaffold
 from .scenarios import Scenario, load_scenarios
@@ -211,6 +211,7 @@ def _owed_lines(plan: Plan, problems: list[str], system: System) -> list[str]:
     """One line per scenario still to fix or write, each ending in what to do about it."""
     lines = [f"fix {p}" for p in problems]
     lines += [f"feature `{f}` changed and has no scenario: {new_advice(f, system)}" for f in plan.uncovered]
+    lines += [f"route `{r}` of `{f}` has no scenario: {new_advice(f, system)}" for f, r in plan.unserved if f not in plan.uncovered]
     if plan.unnamed is not None:
         lines.append(
             f"Jev: the change adds observable behaviour no scenario describes (p={plan.unnamed:.2f} ≥ {T['new_scenario']:.2f}): "
@@ -267,7 +268,9 @@ def _execute(opts: dict[str, Any], io: Streams, cwd: str, seams: Seams) -> int:
         return EXIT_OK
     system = load_system(cwd)
     scenarios, problems = load_scenarios(cwd, system)
-    plan = _plan(_Situation(files, _load_map(cwd, io.stderr), scenarios, opts.get("task"), cwd), seams, io.stdout)
+    sit = _Situation(files, _load_map(cwd, io.stderr), scenarios, opts.get("task"), cwd)
+    plan = _plan(sit, seams, io.stdout)
+    plan.unserved = unserved_routes(scenarios, sit.m, sit.change.touched)
     if not plan.rerun:
         io.stdout.write("heimdall e2e: no scenario is reached by this change\n")
     code = _verdict(plan.rerun, _owed_lines(plan, problems, system), seams.runner or system_runner(cwd, system), io.stdout)
@@ -282,7 +285,12 @@ def _execute_all(io: Streams, cwd: str, seams: Seams) -> int:
     scenarios, problems = load_scenarios(cwd, system)
     if not scenarios:
         io.stdout.write(f"heimdall e2e: no scenarios under {SCENARIOS_DIR}\n")
-    return _verdict(scenarios, [f"fix {p}" for p in problems], seams.runner or system_runner(cwd, system), io.stdout)
+    m = _load_map(cwd, io.stderr)
+    if m is None:
+        io.stdout.write("heimdall e2e: no .heimdall/map.json — run `heimdall map --root .` so every route is held to a scenario\n")
+    owed = [f"fix {p}" for p in problems]
+    owed += [f"route `{r}` of `{f}` has no scenario: {new_advice(f, system)}" for f, r in unserved_routes(scenarios, m)]
+    return _verdict(scenarios, owed, seams.runner or system_runner(cwd, system), io.stdout)
 
 
 def _new(args: list[str], io: Streams, cwd: str) -> int:
