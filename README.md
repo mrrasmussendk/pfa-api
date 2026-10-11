@@ -106,11 +106,36 @@ This creates pressure to keep features focused, contracts small, and shared prim
 
 **Brokkr** supplies the shared token estimator. Its canary suite deliberately injects rule violations into a synthetic project and verifies that Eitri rejects them. This catches a rule that has been accidentally disabled or broken even when the real application still passes its checks.
 
+### Prove the behaviour from outside
+
+Unit tests prove each piece against fakes. **End-to-end scenarios** prove the promise a client relies on: the real service, started the way a client meets it, with the real model. Each feature's use cases are written in Gherkin, one file per feature:
+
+```gherkin
+@API
+Feature: chunking
+
+  Scenario: empty-text-is-a-problem
+    Given a text that is only whitespace
+    And a budget of 12 tokens
+    When I send them to POST /chunking/split
+    Then I receive 422
+    And the body is an application/problem+json document
+    And its detail says the text is empty
+```
+
+The steps are prose, not code. A Postman request in `postman/collections/e2e/<feature>/<name>.request.yaml` does what they say and asserts each `Then` clause by name. `heimdall e2e` keeps the text and the test from drifting apart:
+
+- each clause must have exactly one assertion named `then: <clause>`, and no assertion may say more;
+- the request must use the method and path the `When` names;
+- when a scenario's text or test changes, Jev is asked whether the two still agree.
+
+When the agent stops, the `Stop` hook runs the scenarios the change can reach and asks for a new one when a feature changed without one. CI runs every scenario on every pull request and every push to `main`.
+
 ### Review the finished change
 
 **Jev**, called through `heimdall review`, evaluates the bounded diff alongside the task, slice map, and computed facts about the change. It answers typed questions about correctness, scope, tests, security, and architectural fit. It then reads each edited application file whole and scores its clean code, so a shortfall names the file. Policy in code turns those answers into `approve`, `comment`, `request_changes`, or `escalate` for human review.
 
-CI runs the deterministic checks separately: lint, types, tests, Eitri, canaries, and the harness smoke test. The PR review requires `TYPESAFE_API_KEY`; without it, the workflow reports that review was skipped.
+CI runs the deterministic checks separately: lint, types, tests, Eitri, canaries, the harness smoke test, and every end-to-end scenario against the started service. The PR review requires `TYPESAFE_API_KEY`; without it, the workflow reports that review was skipped.
 
 ### Run the harness
 
@@ -124,13 +149,23 @@ python tools/smoke_test.py     # Exercise the harness through the real hook
 heimdall drift                # Inspect recorded sessions, once available
 ```
 
+Run the end-to-end scenarios against the started service. This needs the [Postman CLI](https://learning.postman.com/docs/postman-cli/postman-cli-installation/) and the model weights:
+
+```bash
+heimdall e2e --all                           # Every scenario, as CI runs them
+heimdall e2e --base origin/main              # Only the scenarios your change reaches, as the Stop hook runs them
+heimdall e2e new chunking/<name> --method API \
+  --given "…" --when "I send it to POST /chunking/split" --then "…" --then "…"
+                                             # Add a scenario and a failing test to fill in
+```
+
 With `TYPESAFE_API_KEY` set in your environment, review a change locally:
 
 ```bash
 heimdall review --base origin/main --task "Describe the intended change"
 ```
 
-See [Development tooling](docs/tooling.md) for the rule table, budget calculation, sensors, and CI details, or [PR review with Jev](harness/guides/pr-review.md) for the review questions and policy.
+See [Development tooling](docs/tooling.md) for the rule table, budget calculation, sensors, scenarios, and CI details, [End-to-end scenarios](harness/guides/e2e-scenarios.md) for writing one, or [PR review with Jev](harness/guides/pr-review.md) for the review questions and policy.
 
 ## Development
 
@@ -144,6 +179,8 @@ See [Development tooling](docs/tooling.md) for the rule table, budget calculatio
 | `src/pfa/api/` | The entry point: `create_app()`, one routes module per feature, problem details, request validation |
 | `tools/` | Development tooling; never deployed |
 | `tests/api/` | Service tests |
+| `tests/e2e/` | End-to-end scenarios: one Gherkin `<feature>.feature` per feature |
+| `postman/collections/e2e/` | The Postman requests that run the scenarios |
 | `tests/tooling/` | Architecture and tooling tests |
 | `harness/` | Agent task guides and rule instructions (feedforward) |
 | `docs/` | Explanatory reference pages and diagrams |
@@ -158,7 +195,7 @@ pytest
 eitri check --root .
 ```
 
-The default tests use fake model components, so they do not download or load the embedding model.
+The default tests use fake model components, so they do not download or load the embedding model. The end-to-end scenarios do load it; run them with `heimdall e2e` (see [Run the harness](#run-the-harness)).
 
 Read [AGENTS.md](AGENTS.md) before changing code. After adding slices or routes, changing slice dependencies, or changing `[tool.heimdall]`, regenerate the maps with `heimdall map --root .`.
 
@@ -175,6 +212,7 @@ Read [docs/](docs/) to understand the project. Use [harness/](harness/) for inst
 | Add an endpoint | [Adding a route](harness/guides/adding-a-route.md) |
 | Return an API error | [Returning errors](harness/guides/returning-errors.md) |
 | Write or change tests | [Writing tests](harness/guides/writing-tests.md) |
+| Write or fix an end-to-end scenario | [End-to-end scenarios](harness/guides/e2e-scenarios.md) |
 | Run or understand the PR review | [PR review with Jev](harness/guides/pr-review.md) |
 | Investigate an architecture violation | [Eitri rule reference](harness/rules/) |
 | Check the token estimator | [Calibration](docs/calibration.md) |
