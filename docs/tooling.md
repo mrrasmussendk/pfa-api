@@ -8,7 +8,7 @@
 - [Heimdall — the harness](#heimdall--the-harness)
 - [CI/CD — the gate and the judgment](#cicd--the-gate-and-the-judgment)
 
-Four layers, each catching what the one before cannot:
+Five layers, each catching what the one before cannot:
 
 | Layer | Tool | Answers | Runs |
 |---|---|---|---|
@@ -16,6 +16,7 @@ Four layers, each catching what the one before cannot:
 | The walls | Eitri | Does the code respect the architecture? | `eitri check`, CI |
 | The canary | Brokkr | Does Eitri still bite? | CI |
 | The harness | Heimdall (+ Jev on PRs) | What did the agent actually do, and is the change sound? | every tool call; every PR |
+| The promise | `heimdall e2e` (Postman) | Does the running service still do what its scenarios say? | when the agent stops; every PR and push to `main` |
 
 ## Code quality — Ruff, mypy, and warnings as errors
 
@@ -242,7 +243,42 @@ heimdall review --diff change.diff --dry-run    # print every call, call nothing
 
 Jev's call is stdlib only, retrying on 429/529 and never on 401; Claude's uses the `anthropic` SDK (a dependency of the tooling, never of the service). The thresholds are a starting point — measure them against your own merges (`heimdall review --json` on past PRs). Full detail in [guides/pr-review.md](../harness/guides/pr-review.md).
 
-### 5 · Estimate — the shared ruler
+### 5 · Scenarios — the promise, checked from outside
+
+Unit tests prove a piece against fakes. A scenario proves the promise from outside: the real service, started the way a client meets it, with the real model. The guide for writing one is [End-to-end scenarios](../harness/guides/e2e-scenarios.md); this is how the machinery fits together.
+
+**Where things live.**
+
+| File | What it holds |
+|---|---|
+| `tests/e2e/<feature>.feature` | The feature's use cases in Gherkin, one `Scenario:` each. A tag names the method (`@API`); `@tool:<tool>` overrides the tool. The steps are prose: nothing binds or executes them. |
+| `postman/collections/e2e/<feature>/<name>.request.yaml` | The test: the request the `Given` and `When` describe, and one `pm.test("then: <clause>")` per `Then` clause. Playwright and pytest tests live beside the feature file instead. |
+| `harness/e2e/system.json` | The project's part: how to start the service (`python -m pfa.api` on a free port, ready at `/health`) and which tool tests each method. |
+
+**The text is held to the test.** A scenario only tells the truth if its test does what it says, so Heimdall checks that on every load and refuses a scenario that fails:
+
+| Check | When | Catches |
+|---|---|---|
+| Clause for clause | always | A `Then` clause with no assertion of that name, an assertion no clause states, one asserted twice |
+| The request | always, Postman | A request whose method or path is not the `<METHOD> /<path>` the `When` names |
+| Jev | the scenario's own lines or its test changed, and `TYPESAFE_API_KEY` is set | A test that sends or asserts what the text does not say, or leaves out what it does |
+
+**Which scenarios run.** A run costs a service start and a model load, so the `Stop` hook runs only what a change can reach (`heimdall e2e --base origin/main`):
+
+1. The change is everything since the merge base: committed, uncommitted and untracked. The slice map says which features it touched and which depend on them.
+2. A scenario whose own lines of its feature file, or whose test, changed always runs. A feature that changed with no scenario always gets one asked for.
+3. Otherwise Jev answers one question per scenario, *could this change alter what it observes?*, and the scenario runs at `p ≥ 0.30`. Jev is also asked whether the change adds behaviour no scenario describes (`p ≥ 0.60` asks for a new one). Without a key, the slice map decides instead.
+4. A green run is remembered by the change's fingerprint, so stopping again on the same change runs nothing.
+
+Exit codes: `0` green · `1` a scenario failed · `2` a scenario is missing, malformed, or disagrees with its test · `3` could not run (no Postman CLI, the service did not start). The hook blocks on 1 and 2 and reports 3 to the user. The service's log is kept in `.heimdall/e2e-service.log`.
+
+```bash
+heimdall e2e --all                    # every scenario: what CI runs
+heimdall e2e --base origin/main       # what the Stop hook runs; --force reruns a remembered green change
+heimdall e2e new chunking/<name> --method API --given "…" --when "I send it to POST /chunking/split" --then "…" --then "…"
+```
+
+### 6 · Estimate — the shared ruler
 
 `heimdall estimate <file-or-dir>` prints the token estimate using the same `brokkr` estimator Eitri's EIT100 uses, so a human can ask "how big is this slice to an agent?" with the ruler the gate applies. Calibration against a real tokenizer: [calibration.md](calibration.md).
 
@@ -251,7 +287,7 @@ Jev's call is stdlib only, retrying on 429/529 and never on 401; Claude's uses t
 - It does not enforce. The walls are Eitri's; Heimdall observes, advises, and on PRs judges. An agent can ignore the warning; the check and the review catch it later.
 - It does not see Bash. Reads done with `cat` or `grep` in a shell are invisible to the hook.
 - It does not know what the agent *intended*. Bounds are computed over the whole session.
-- It does not call the network from the hook. Only `heimdall review` does, and only when asked.
+- It does not call the network from the hook. Only `heimdall review` and `heimdall e2e` do, and only when asked or when the agent stops.
 - It does not run itself. If `.heimdall/map.json` is missing the hook exits silently — the first thing to check when the harness seems quiet.
 
 ```bash
@@ -271,6 +307,8 @@ Two workflows. `ci.yml` is the **gate**: facts, and a fact failing fails the bui
 ![CI build and publication](diagrams/ci-build.svg)
 
 [Mermaid source](diagrams/ci-build.mmd)
+
+**What the scenarios job runs.** `heimdall e2e --all` runs every scenario on every pull request and every push to `main` or a tag, without Jev and without a remembered green run, so a human's change is held to the same promise as an agent's. The runner is the environment: Heimdall starts the service from `harness/e2e/system.json` on the runner, and the Postman CLI runs the requests from the checkout. Nothing is deployed and no Postman login is needed. The job caches the model weights and loads them before the run; on a failure it prints the service's log.
 
 ### Review a pull request (`pr-review.yml`)
 

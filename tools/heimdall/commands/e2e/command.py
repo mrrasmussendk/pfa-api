@@ -288,7 +288,7 @@ def _execute_all(io: Streams, cwd: str, seams: Seams) -> int:
 def _new(args: list[str], io: Streams, cwd: str) -> int:
     written = scaffold(cwd, _parse_new(args), load_system(cwd))
     io.stdout.write("heimdall e2e new: wrote\n" + "".join(f"  {p}\n" for p in written))
-    io.stdout.write("Each test fails until it asserts the `then`: write it, then let the Stop hook run it.\n")
+    io.stdout.write("Each test fails until it asserts each `then` clause under its name: write it, then let the Stop hook run it.\n")
     return EXIT_OK
 
 

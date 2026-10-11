@@ -57,7 +57,7 @@ def _e2e() -> int | str:
         return _block("Stop hook: an e2e scenario failed. Fix the behaviour, or the scenario if the change is meant.\n\n" + _tail(out))
     if code == E2E_NEEDS_SCENARIOS:
         return _block(
-            "Stop hook: heimdall e2e asks for scenarios. Run the `heimdall e2e new` it names (or fix the file it names), then make the test it writes assert the `then`.\n\n"
+            "Stop hook: heimdall e2e asks for scenarios. Run the `heimdall e2e new` it names (or fix the file it names), then make the test it writes assert each `then` clause under its name.\n\n"
             + _tail(out)
         )
     if code == E2E_ERROR:

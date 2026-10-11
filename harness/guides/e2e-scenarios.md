@@ -117,7 +117,7 @@ heimdall e2e --base origin/main --force    # run again even when the last green 
 
 ## In CI
 
-The Stop hook runs only the scenarios a change reaches, and only when an agent stops. CI runs all of them on every push and pull request, so a human's change is held to the same promise. The `e2e scenarios` job in `.github/workflows/ci.yml` runs:
+The Stop hook runs only the scenarios a change reaches, and only when an agent stops. CI runs all of them on every pull request and every push to `main` or a tag, so a human's change is held to the same promise. The `e2e scenarios` job in `.github/workflows/ci.yml` runs:
 
 ```bash
 heimdall e2e --all    # every scenario: no change, no Jev, no remembered green run
