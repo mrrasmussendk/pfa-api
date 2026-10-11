@@ -16,9 +16,10 @@ from typing import Any
 
 def findings(report: dict[str, Any]) -> tuple[list[str], list[str]]:
     """``(fixable, unfixed)`` lines from ``pip-audit --format json``: package, version, advisory, and the fix."""
-    fixable, unfixed = [], []
+    fixable: list[str] = []
+    unfixed: list[str] = []
     for dep in report.get("dependencies", []):
-        for vuln in dep.get("vulns", []):
+        for vuln in {v["id"]: v for v in dep.get("vulns", [])}.values():  # pip-audit may list one advisory twice
             line = f"{dep['name']} {dep['version']}: {vuln['id']}"
             fixes = vuln.get("fix_versions") or []
             if fixes:

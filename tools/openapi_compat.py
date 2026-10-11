@@ -143,20 +143,22 @@ def major(doc: Schema) -> int:
         return 0
 
 
-def _base_snapshot(ref: str) -> Schema | None:
+def _base_snapshot(ref: str, root: Path) -> Schema | None:
+    """The snapshot at the merge base with ``ref``, or None when the base has none."""
     if ref.startswith("-"):
         raise SystemExit(f"--base {ref!r} must be a ref, not an option")
-    rev = subprocess.run(["git", "merge-base", ref, "HEAD"], cwd=REPO, capture_output=True, text=True, check=True).stdout.strip()
-    shown = subprocess.run(["git", "show", f"{rev}:{SNAPSHOT}"], cwd=REPO, capture_output=True, text=True, encoding="utf-8", check=False)
+    rev = subprocess.run(["git", "merge-base", ref, "HEAD"], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+    shown = subprocess.run(["git", "show", f"{rev}:{SNAPSHOT}"], cwd=root, capture_output=True, text=True, encoding="utf-8", check=False)
     return json.loads(shown.stdout) if shown.returncode == 0 else None
 
 
-def compare(ref: str) -> int:
-    old = _base_snapshot(ref)
+def compare(ref: str, root: Path = REPO) -> int:
+    """0 when the working tree's snapshot breaks no client of the base's, or declares the break; 1 otherwise."""
+    old = _base_snapshot(ref, root)
     if old is None:
         print(f"openapi compat: no {SNAPSHOT} at the merge base with {ref}; nothing to compare")
         return 0
-    new = json.loads((REPO / SNAPSHOT).read_text(encoding="utf-8"))
+    new = json.loads((root / SNAPSHOT).read_text(encoding="utf-8"))
     breaks = breaking_changes(old, new)
     if not breaks:
         print(f"openapi compat: compatible with {ref}")

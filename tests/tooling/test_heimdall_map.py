@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from conftest import TempRepo
 
 
@@ -213,3 +214,23 @@ def test_map_takes_the_layout_from_pyproject_and_reads_routes_there(repo: TempRe
     assert "depends on: (none) + core<!--" in repo.read_file("src/svc/slices/rune/AGENTS.md")
     assert "routes: GET /rune/x<!--" in repo.read_file("src/svc/slices/rune/AGENTS.md")
     assert "routes: `src/svc/http/<feature>.py`" in repo.read_file("AGENTS.md")
+
+
+def test_an_unreadable_manifest_is_named_and_stops_the_map(repo: TempRepo) -> None:
+    _write_sample_tree(repo)
+    repo.write_file("src/pfa/features/rune/feature.json", "{not json")
+
+    code, _, stderr = repo.run("", "map", "--root", "src")
+
+    assert code == 1 and stderr.startswith("heimdall map: unreadable src/pfa/features/rune/feature.json:")
+
+
+@pytest.mark.parametrize(
+    "args", [["--budget", "9000"], ["--root", "src", "--budget", "lots"], ["--root"], ["--root", "src", "--colour", "x"]]
+)
+def test_map_arguments_it_cannot_use_are_a_usage_error(repo: TempRepo, args: list[str]) -> None:
+    _write_sample_tree(repo)
+
+    code, _, stderr = repo.run("", "map", *args)
+
+    assert code == 2 and stderr.startswith("usage: heimdall map")
