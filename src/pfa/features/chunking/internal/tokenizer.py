@@ -4,11 +4,15 @@ hard guarantee rather than an estimate."""
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
+import time
 from typing import Any
 
 DEFAULT_TOKENIZER_ID = "intfloat/multilingual-e5-large"
+
+log = logging.getLogger(__name__)
 
 
 class ModelTokenizer:
@@ -33,10 +37,17 @@ class ModelTokenizer:
         if self._tok is None:
             with self._lock:
                 if self._tok is None:
-                    from transformers import AutoTokenizer  # heavy import: first use only
-
-                    self._tok = AutoTokenizer.from_pretrained(self._id)
+                    started = time.perf_counter()
+                    self._tok = self.build_tokenizer()
+                    load_ms = round((time.perf_counter() - started) * 1000.0, 1)
+                    log.info("tokenizer loaded", extra={"msgid": "load", "tokenizer_id": self._id, "load_ms": load_ms})
         return self._tok
+
+    def build_tokenizer(self) -> Any:
+        """Fetch the tokenizer itself; a test overrides this to stand in for the download."""
+        from transformers import AutoTokenizer  # heavy import: first use only
+
+        return AutoTokenizer.from_pretrained(self._id)
 
     def count(self, text: str) -> int:
         return len(self._load().encode(text, add_special_tokens=False))

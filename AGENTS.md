@@ -52,6 +52,6 @@ features: `src/pfa/features` · kernel: `src/pfa/kernel` · routes: `src/pfa/api
 
 | feature | depends on | fan-in | budget used | contract | routes |
 |---|---|---|---|---|---|
-| chunking | (none) | 1 | ≈10% | `src/pfa/features/chunking/contract/` | `POST /chunking/split` |
+| chunking | (none) | 1 | ≈20% | `src/pfa/features/chunking/contract/` | `POST /chunking/split` |
 | embeddings | chunking | 0 | ≈30% | `src/pfa/features/embeddings/contract/` | `POST /embeddings/query`<br>`POST /embeddings/passages`<br>`POST /embeddings/similarity` |
 <!--/heimdall:map-->

@@ -42,7 +42,7 @@ python tools/download_model.py
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `PFA_EMBED_MODEL` | `intfloat/multilingual-e5-large` | model id or local path; names the tokenizer too, so chunking and embedding agree |
+| `PFA_EMBED_MODEL` | `intfloat/multilingual-e5-large` | model id or local path; names the tokenizer too, so chunking and embedding agree; chunks counted for another model fail the request (`500`) rather than overflow the window |
 | `PFA_EMBED_DEVICE` | CUDA if available, else CPU | `cuda`, `cuda:1`, `cpu` |
 | `PFA_EMBED_MAX_TOKENS` | `500` | hard ceiling per encoded text, prefix and special tokens included (the model's window is 512) |
 | `HF_HOME` | `~/.cache/huggingface` | where the weights live |
@@ -151,7 +151,7 @@ Traceback (most recent call last):
 | `request` | info (debug for `/health`, `/ready`; err for a `5xx`) | `method`, `path`, `status`, `ms`, `client` | every request, when the response is done |
 | `encode` | info | `side`, `texts`, `chars`, `wait_ms`, `encode_ms`, `device` | every inference; `wait_ms` is time queued on `PFA_EMBED_CONCURRENCY`, `encode_ms` time in the model |
 | `busy` | warning | `side`, `texts`, `wait_ms` | the gate did not open within `PFA_EMBED_QUEUE_TIMEOUT`; the route answers `503 model-busy` |
-| `load` | info | `model_id`, `device`, `max_seq_length`, `load_ms` | the one-time model load |
+| `load` | info | `model_id`, `device`, `max_seq_length`, `load_ms`; or `tokenizer_id`, `load_ms` | the one-time load of the model, or of the chunking tokenizer |
 | `warmup` | info / error | `load_ms`, each component's readiness | start-up warm-up finished or failed |
 | `error` | err | `method`, `path`; the traceback as the message | an unhandled exception; the client got a `500` with no detail |
 

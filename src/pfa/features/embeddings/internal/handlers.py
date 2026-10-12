@@ -48,13 +48,18 @@ class _Base:
 
     def _budget(self, prefix: str) -> int:
         """Tokens left for caller text once the prefix and special tokens are accounted for."""
-        prefix_tokens = self._bus.dispatch(CountTokens(prefix)).value or 0
-        return max(1, self._engine.max_tokens - prefix_tokens - SPECIAL_TOKENS)
+        r = self._bus.dispatch(CountTokens(prefix))
+        if not r.ok or r.value is None:
+            raise RuntimeError(f"token count failed: {r.error}")  # a bug, not a domain outcome
+        return max(1, self._engine.max_tokens - r.value - SPECIAL_TOKENS)
 
     def _split(self, text: str, budget: int) -> list[str]:
         r = self._bus.dispatch(SplitText(text=text, budget=budget))
         if not r.ok or r.value is None:
             raise RuntimeError(f"chunking failed: {r.error}")  # a bug, not a domain outcome
+        if r.value.tokenizer != self._engine.model_id:
+            # budgets counted by another model's tokenizer would not fit this model's window
+            raise RuntimeError(f"chunking counted with {r.value.tokenizer}, but the engine encodes with {self._engine.model_id}")
         return list(r.value.chunks)
 
     def _embedding(self, vector: Sequence[float]) -> Embedding:
