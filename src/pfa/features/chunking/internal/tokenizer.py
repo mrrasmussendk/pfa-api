@@ -1,6 +1,6 @@
-"""The model's tokenizer, loaded lazily and alone (a few MB — the weights stay with the
-embeddings feature). Counting with the real tokenizer is what makes the 500-token budget a
-hard guarantee rather than an estimate."""
+"""The model's tokenizer, loaded alone: a few MB, where the weights are 2 GB, so chunking can
+count without the embeddings feature's model. Counting with the model's own tokenizer, not
+characters or words, is what makes a caller's token budget a guarantee rather than an estimate."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ class ModelTokenizer:
 
     @property
     def tokenizer_id(self) -> str:
+        """Stamped on every ``Chunks``, so a consumer can refuse counts made for another model."""
         return self._id
 
     @property
@@ -35,7 +36,7 @@ class ModelTokenizer:
         return self._tok is not None
 
     def warmup(self) -> None:
-        """Load now (startup), so the first split does not pay for it."""
+        """Load now, at startup, so the first request does not wait seconds for the download."""
         self._load()
 
     def _load(self) -> Any:
@@ -50,7 +51,7 @@ class ModelTokenizer:
 
     def build_tokenizer(self) -> Any:
         """Fetch the tokenizer itself; a test overrides this to stand in for the download."""
-        from transformers import AutoTokenizer  # heavy import: first use only
+        from transformers import AutoTokenizer  # pulls in torch, seconds of import: only when a load is due
 
         try:
             return AutoTokenizer.from_pretrained(self._id)

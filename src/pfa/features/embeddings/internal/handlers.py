@@ -1,9 +1,9 @@
-"""One handler per query. Each is a small callable built around the engine and the bus;
-``module.py`` registers them. Handlers return ``Result``, never raise for domain reasons,
-and never know about HTTP.
+"""One handler per query, so ``grep EmbedQuery`` finds the one place that use case is served.
+Handlers return ``Result`` for what a caller got wrong and raise only for bugs, so the route,
+not the handler, decides what a rejection means on the wire.
 
-Chunking is another feature's capability: the handlers dispatch ``SplitText`` / ``CountTokens``
-from ``pfa.features.chunking.contract`` on the bus — declared in ``feature.json``, consumed by contract.
+Chunking is reached through its contract on the bus, not imported: the model's window is a
+chunking concern, and embeddings must not grow its own copy of the tokenizer to fit it.
 """
 
 from __future__ import annotations
@@ -67,6 +67,8 @@ class _Base:
         return max(1, self._engine.max_tokens - prefix_tokens - SPECIAL_TOKENS)
 
     def _split(self, text: str, budget: int) -> list[str]:
+        """The text cut to fit the window: the model truncates silently, so an unsplit long text would
+        lose its tail without anyone noticing."""
         chunks: Chunks = self._chunking(SplitText(text=text, budget=budget))
         if chunks.tokenizer != self._engine.model_id:
             # budgets counted by another model's tokenizer would not fit this model's window
@@ -74,6 +76,7 @@ class _Base:
         return list(chunks.chunks)
 
     def _embedding(self, vector: Sequence[float]) -> Embedding:
+        """Dimensions are read off the vector, not assumed to be 1024, so another model id just works."""
         return Embedding(model=self._engine.model_id, dimensions=len(vector), vector=tuple(vector))
 
     def _query_vector(self, text: str) -> list[float]:
@@ -115,6 +118,8 @@ def _mean_pool(vectors: list[list[float]]) -> list[float]:
 
 
 class EmbedQueryHandler(_Base):
+    """A question as one query vector, to rank stored passage vectors against."""
+
     def __call__(self, q: EmbedQuery) -> Result[Embedding]:
         if not q.text.strip():  # the edge bounds length; whether blank text means anything is this feature's call
             return Result.failure("empty question")
@@ -122,6 +127,9 @@ class EmbedQueryHandler(_Base):
 
 
 class EmbedPassagesHandler(_Base):
+    """A vector per chunk, not per document: a caller stores them for retrieval, and a long document
+    pooled into one vector would match nothing in particular."""
+
     def __call__(self, q: EmbedPassages) -> Result[tuple[PassageEmbedding, ...]]:
         texts = _stripped(q.texts)
         if texts is None:
@@ -135,6 +143,9 @@ class EmbedPassagesHandler(_Base):
 
 
 class RankCandidatesHandler(_Base):
+    """A candidate scores as its best chunk: one relevant paragraph in a long text is a good answer,
+    and averaging it with the rest would bury it."""
+
     def __call__(self, q: RankCandidates) -> Result[Ranking]:
         question = q.question.strip()
         texts = _stripped(q.candidates)
@@ -150,6 +161,5 @@ class RankCandidatesHandler(_Base):
             score = sum(a * b for a, b in zip(query, v, strict=True))
             if i not in best or score > best[i].score:
                 best[i] = Match(source_index=i, text=text, score=score, chunk_index=j, chunk_count=n)
-        # best first is the contract's promise; source_index lets a caller map back to its own order
         matches = sorted(best.values(), key=lambda m: m.score, reverse=True)
         return Result.success(Ranking(model=self._engine.model_id, matches=tuple(matches)))
