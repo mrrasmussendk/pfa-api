@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import types
 from typing import Any
@@ -137,15 +138,25 @@ def test_app_startup_does_not_load_the_tokenizer() -> None:
 
 
 class _Encoding:
-    def encode(self, text: str, add_special_tokens: bool = False) -> list[str]:
+    """Stands in for a transformers tokenizer: a word is a token, and it remembers how it was asked."""
+
+    def __init__(self) -> None:
+        self.asked: dict[str, bool] = {}
+
+    def encode(self, text: str, **options: bool) -> list[str]:
+        self.asked = options
         return text.split()
 
 
 class _StandInTokenizer(ModelTokenizer):
     """The real ``ModelTokenizer`` with the download replaced: everything but the weights is real."""
 
+    def __init__(self, tokenizer_id: str) -> None:
+        super().__init__(tokenizer_id)
+        self.encoder = _Encoding()
+
     def build_tokenizer(self) -> Any:
-        return _Encoding()
+        return self.encoder
 
 
 def test_the_tokenizer_defaults_to_the_e5_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,6 +178,18 @@ def test_the_tokenizer_load_is_logged_with_its_duration(caplog: pytest.LogCaptur
 
 def test_a_loaded_tokenizer_counts_without_special_tokens() -> None:
     assert _StandInTokenizer("fake/whitespace").count("one two three") == 3
+
+
+def test_counting_a_text_over_the_models_window_does_not_warn_of_indexing_errors() -> None:
+    tok = _StandInTokenizer("fake/whitespace")
+    tok.count("a text chunking counts but never feeds to the model")
+    assert tok.encoder.asked == {"add_special_tokens": False, "verbose": False}
+
+
+@pytest.mark.skipif(os.environ.get("PFA_RUN_MODEL_TESTS") != "1", reason="set PFA_RUN_MODEL_TESTS=1 to load the real tokenizer")
+def test_the_real_tokenizer_counts_a_long_text_without_a_warning(capfd: pytest.CaptureFixture[str]) -> None:
+    n = ModelTokenizer(DEFAULT_TOKENIZER_ID).count("word " * 1000)  # transformers logs to stderr, not through logging's root
+    assert n == 1000 and "longer than the specified maximum" not in capfd.readouterr().err
 
 
 class _AutoTokenizer:
