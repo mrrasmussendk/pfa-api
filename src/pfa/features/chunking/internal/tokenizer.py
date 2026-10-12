@@ -10,6 +10,8 @@ import threading
 import time
 from typing import Any
 
+# Repeats the embeddings engine's default model: chunking may not import embeddings, and should the two
+# ever drift, embeddings refuses the chunks (``Chunks.tokenizer``) instead of mis-sizing them.
 DEFAULT_TOKENIZER_ID = "intfloat/multilingual-e5-large"
 
 log = logging.getLogger(__name__)
@@ -40,6 +42,8 @@ class ModelTokenizer:
         self._load()
 
     def _load(self) -> Any:
+        """The tokenizer, fetched once per process. The load is timed and logged because it is the slow
+        step an operator watches at startup, and the one ``/ready`` waits on."""
         if self._tok is None:  # checked before the lock so a loaded tokenizer never waits on it
             with self._lock:
                 if self._tok is None:  # and again inside it: another thread may have loaded meanwhile
