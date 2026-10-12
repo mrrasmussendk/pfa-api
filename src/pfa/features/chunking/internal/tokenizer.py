@@ -16,11 +16,14 @@ log = logging.getLogger(__name__)
 
 
 class ModelTokenizer:
+    """Counts tokens exactly as the embedding model will see them. Loads on first use, not at
+    construction, so building the app (and every test) costs no download."""
+
     def __init__(self, tokenizer_id: str | None = None) -> None:
         # the embedding model's own variable: the tokenizer must be the one of the model that encodes
         self._id = tokenizer_id if tokenizer_id is not None else os.environ.get("PFA_EMBED_MODEL", DEFAULT_TOKENIZER_ID)
-        self._tok: Any = None
-        self._lock = threading.Lock()
+        self._tok: Any = None  # a transformers tokenizer; typed loosely to keep transformers out of the import
+        self._lock = threading.Lock()  # routes run on a threadpool: concurrent first requests must load once
 
     @property
     def tokenizer_id(self) -> str:
@@ -28,6 +31,7 @@ class ModelTokenizer:
 
     @property
     def loaded(self) -> bool:
+        """Whether the load happened, without triggering it: ``/ready`` asks this and must stay cheap."""
         return self._tok is not None
 
     def warmup(self) -> None:
@@ -35,9 +39,9 @@ class ModelTokenizer:
         self._load()
 
     def _load(self) -> Any:
-        if self._tok is None:
+        if self._tok is None:  # checked before the lock so a loaded tokenizer never waits on it
             with self._lock:
-                if self._tok is None:
+                if self._tok is None:  # and again inside it: another thread may have loaded meanwhile
                     started = time.perf_counter()
                     self._tok = self.build_tokenizer()
                     load_ms = round((time.perf_counter() - started) * 1000.0, 1)

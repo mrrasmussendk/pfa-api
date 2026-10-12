@@ -28,7 +28,8 @@ from .e5_engine import PASSAGE_PREFIX, QUERY_PREFIX, SPECIAL_TOKENS
 
 
 class Engine(Protocol):
-    """What the handlers need from an engine — satisfied by ``E5Engine`` and by test fakes."""
+    """What the handlers need from an engine. A protocol rather than ``E5Engine`` itself, so a test
+    can stand in for 2 GB of weights with a class that only has these four members."""
 
     @property
     def model_id(self) -> str: ...
@@ -42,13 +43,17 @@ class Engine(Protocol):
 
 
 class _Base:
+    """What every handler shares: fitting text to the model's window and encoding it. Each handler is
+    one use case, so the shared steps live here instead of in a service the handlers would call."""
+
     def __init__(self, engine: Engine, bus: Bus) -> None:
         self._engine = engine
         self._bus = bus
 
     def _chunking(self, message: CountTokens | SplitText) -> Any:
         """Chunking's answer. Text that passed this feature's validation is always countable and
-        splittable, so a failure is a bug in the seam, raised, never a domain outcome."""
+        splittable, so a failure is a bug in the seam, raised, never a domain outcome. ``Any``
+        because the two messages answer different types; each caller names the one it asked for."""
         r = self._bus.dispatch(message)
         if not r.ok or r.value is None:
             raise RuntimeError(f"chunking failed on {type(message).__name__}: {r.error}")
@@ -57,6 +62,8 @@ class _Base:
     def _budget(self, prefix: str) -> int:
         """Tokens left for caller text once the prefix and special tokens are accounted for."""
         prefix_tokens: int = self._chunking(CountTokens(prefix))
+        # at least one token: chunking refuses a budget of 0, and a tiny PFA_EMBED_MAX_TOKENS should
+        # still embed (badly) rather than fail every request
         return max(1, self._engine.max_tokens - prefix_tokens - SPECIAL_TOKENS)
 
     def _split(self, text: str, budget: int) -> list[str]:
@@ -72,6 +79,7 @@ class _Base:
     def _query_vector(self, text: str) -> list[float]:
         chunks = self._split(text, self._budget(QUERY_PREFIX))
         vectors = self._engine.encode_queries(chunks)
+        # a question is one meaning, so a long one is one vector: the chunks' mean, not a vector per chunk
         return vectors[0] if len(vectors) == 1 else _mean_pool(vectors)
 
     def _passage_chunks(self, texts: Sequence[str]) -> list[tuple[int, int, int, str]]:
@@ -97,6 +105,9 @@ def _stripped(texts: Sequence[str]) -> list[str] | None:
 
 
 def _mean_pool(vectors: list[list[float]]) -> list[float]:
+    """The chunks' mean direction, renormalised: the mean of unit vectors is shorter than one, and
+    every score downstream is a dot product that assumes unit length. A zero mean (opposite chunks)
+    has no direction to keep, so it is returned as is rather than divided by zero."""
     dims = len(vectors[0])
     mean = [sum(v[i] for v in vectors) / len(vectors) for i in range(dims)]
     norm = math.sqrt(sum(x * x for x in mean)) or 1.0
@@ -105,7 +116,7 @@ def _mean_pool(vectors: list[list[float]]) -> list[float]:
 
 class EmbedQueryHandler(_Base):
     def __call__(self, q: EmbedQuery) -> Result[Embedding]:
-        if not q.text.strip():
+        if not q.text.strip():  # the edge bounds length; whether blank text means anything is this feature's call
             return Result.failure("empty question")
         return Result.success(self._embedding(self._query_vector(q.text.strip())))
 
@@ -139,5 +150,6 @@ class RankCandidatesHandler(_Base):
             score = sum(a * b for a, b in zip(query, v, strict=True))
             if i not in best or score > best[i].score:
                 best[i] = Match(source_index=i, text=text, score=score, chunk_index=j, chunk_count=n)
+        # best first is the contract's promise; source_index lets a caller map back to its own order
         matches = sorted(best.values(), key=lambda m: m.score, reverse=True)
         return Result.success(Ranking(model=self._engine.model_id, matches=tuple(matches)))
