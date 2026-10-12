@@ -180,3 +180,17 @@ class _AutoTokenizer:
 def test_the_tokenizer_is_fetched_by_its_configured_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(AutoTokenizer=_AutoTokenizer))
     assert ModelTokenizer("some/model").build_tokenizer() == "tokenizer of some/model"
+
+
+class _UnreachableHub:
+    """Stands in for ``transformers.AutoTokenizer`` when the hub cannot be reached."""
+
+    @staticmethod
+    def from_pretrained(name: str) -> str:
+        raise OSError("connection refused")
+
+
+def test_a_tokenizer_that_cannot_be_fetched_fails_naming_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(AutoTokenizer=_UnreachableHub))
+    with pytest.raises(RuntimeError, match="'some/model'"):
+        ModelTokenizer("some/model").build_tokenizer()

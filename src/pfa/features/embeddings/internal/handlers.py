@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
-from pfa.features.chunking.contract import CountTokens, SplitText
+from pfa.features.chunking.contract import Chunks, CountTokens, SplitText
 from pfa.features.embeddings.contract import (
     Embedding,
     EmbedPassages,
@@ -46,21 +46,25 @@ class _Base:
         self._engine = engine
         self._bus = bus
 
+    def _chunking(self, message: CountTokens | SplitText) -> Any:
+        """Chunking's answer. Text that passed this feature's validation is always countable and
+        splittable, so a failure is a bug in the seam, raised, never a domain outcome."""
+        r = self._bus.dispatch(message)
+        if not r.ok or r.value is None:
+            raise RuntimeError(f"chunking failed on {type(message).__name__}: {r.error}")
+        return r.value
+
     def _budget(self, prefix: str) -> int:
         """Tokens left for caller text once the prefix and special tokens are accounted for."""
-        r = self._bus.dispatch(CountTokens(prefix))
-        if not r.ok or r.value is None:
-            raise RuntimeError(f"token count failed: {r.error}")  # a bug, not a domain outcome
-        return max(1, self._engine.max_tokens - r.value - SPECIAL_TOKENS)
+        prefix_tokens: int = self._chunking(CountTokens(prefix))
+        return max(1, self._engine.max_tokens - prefix_tokens - SPECIAL_TOKENS)
 
     def _split(self, text: str, budget: int) -> list[str]:
-        r = self._bus.dispatch(SplitText(text=text, budget=budget))
-        if not r.ok or r.value is None:
-            raise RuntimeError(f"chunking failed: {r.error}")  # a bug, not a domain outcome
-        if r.value.tokenizer != self._engine.model_id:
+        chunks: Chunks = self._chunking(SplitText(text=text, budget=budget))
+        if chunks.tokenizer != self._engine.model_id:
             # budgets counted by another model's tokenizer would not fit this model's window
-            raise RuntimeError(f"chunking counted with {r.value.tokenizer}, but the engine encodes with {self._engine.model_id}")
-        return list(r.value.chunks)
+            raise RuntimeError(f"chunking counted with {chunks.tokenizer}, but the engine encodes with {self._engine.model_id}")
+        return list(chunks.chunks)
 
     def _embedding(self, vector: Sequence[float]) -> Embedding:
         return Embedding(model=self._engine.model_id, dimensions=len(vector), vector=tuple(vector))
@@ -79,6 +83,18 @@ class _Base:
             out.extend((i, j, len(chunks), c) for j, c in enumerate(chunks))
         return out
 
+    def _encoded_passages(self, texts: Sequence[str]) -> list[tuple[tuple[int, int, int, str], list[float]]]:
+        """Every chunk of every text beside its passage vector, encoded in one call so the gate is taken once."""
+        chunks = self._passage_chunks(texts)
+        vectors = self._engine.encode_passages([text for _, _, _, text in chunks])
+        return list(zip(chunks, vectors, strict=True))
+
+
+def _stripped(texts: Sequence[str]) -> list[str] | None:
+    """The texts stripped, or None when there are none or one is blank: a blank text has no meaning to embed."""
+    out = [t.strip() for t in texts]
+    return out if out and all(out) else None
+
 
 def _mean_pool(vectors: list[list[float]]) -> list[float]:
     dims = len(vectors[0])
@@ -96,15 +112,13 @@ class EmbedQueryHandler(_Base):
 
 class EmbedPassagesHandler(_Base):
     def __call__(self, q: EmbedPassages) -> Result[tuple[PassageEmbedding, ...]]:
-        texts = [t.strip() for t in q.texts]
-        if not texts or any(not t for t in texts):
+        texts = _stripped(q.texts)
+        if texts is None:
             return Result.failure("every passage must be non-empty")
-        chunks = self._passage_chunks(texts)
-        vectors = self._engine.encode_passages([c[3] for c in chunks])
         return Result.success(
             tuple(
                 PassageEmbedding(source_index=i, chunk_index=j, chunk_count=n, text=text, embedding=self._embedding(v))
-                for (i, j, n, text), v in zip(chunks, vectors, strict=True)
+                for (i, j, n, text), v in self._encoded_passages(texts)
             )
         )
 
@@ -112,18 +126,16 @@ class EmbedPassagesHandler(_Base):
 class RankCandidatesHandler(_Base):
     def __call__(self, q: RankCandidates) -> Result[Ranking]:
         question = q.question.strip()
-        texts = [c.strip() for c in q.candidates]
+        texts = _stripped(q.candidates)
         if not question:
             return Result.failure("empty question")
-        if not texts or any(not t for t in texts):
+        if texts is None:
             return Result.failure("every candidate must be non-empty")
         query = self._query_vector(question)
-        chunks = self._passage_chunks(texts)
-        vectors = self._engine.encode_passages([c[3] for c in chunks])
         # both sides are unit-normalised, so the dot product is the cosine similarity;
         # a candidate scores as its best chunk
         best: dict[int, Match] = {}
-        for (i, j, n, text), v in zip(chunks, vectors, strict=True):
+        for (i, j, n, text), v in self._encoded_passages(texts):
             score = sum(a * b for a, b in zip(query, v, strict=True))
             if i not in best or score > best[i].score:
                 best[i] = Match(source_index=i, text=text, score=score, chunk_index=j, chunk_count=n)

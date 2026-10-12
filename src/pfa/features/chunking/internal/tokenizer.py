@@ -17,7 +17,8 @@ log = logging.getLogger(__name__)
 
 class ModelTokenizer:
     def __init__(self, tokenizer_id: str | None = None) -> None:
-        self._id = tokenizer_id or os.environ.get("PFA_EMBED_MODEL", DEFAULT_TOKENIZER_ID)
+        # the embedding model's own variable: the tokenizer must be the one of the model that encodes
+        self._id = tokenizer_id if tokenizer_id is not None else os.environ.get("PFA_EMBED_MODEL", DEFAULT_TOKENIZER_ID)
         self._tok: Any = None
         self._lock = threading.Lock()
 
@@ -47,7 +48,11 @@ class ModelTokenizer:
         """Fetch the tokenizer itself; a test overrides this to stand in for the download."""
         from transformers import AutoTokenizer  # heavy import: first use only
 
-        return AutoTokenizer.from_pretrained(self._id)
+        try:
+            return AutoTokenizer.from_pretrained(self._id)
+        except OSError as e:  # unreachable hub, unknown id, unreadable path: say which tokenizer
+            raise RuntimeError(f"could not load tokenizer {self._id!r} (PFA_EMBED_MODEL)") from e
 
     def count(self, text: str) -> int:
+        # without special tokens: the consumer adds its own prefix and specials to the budget it asks for
         return len(self._load().encode(text, add_special_tokens=False))

@@ -69,6 +69,7 @@ class E5Engine:
         self._model_id = _setting(model_id, "PFA_EMBED_MODEL", DEFAULT_MODEL_ID, str)
         self._device = device or os.environ.get("PFA_EMBED_DEVICE") or None  # unset or empty: the best available
         self._max_tokens = _setting(max_tokens, "PFA_EMBED_MAX_TOKENS", DEFAULT_MAX_TOKENS, int)
+        # a gate of zero slots would never open: every request would wait out the timeout and get 503
         self._concurrency = max(1, _setting(concurrency, "PFA_EMBED_CONCURRENCY", DEFAULT_CONCURRENCY, int))
         self._queue_timeout = _setting(queue_timeout, "PFA_EMBED_QUEUE_TIMEOUT", DEFAULT_QUEUE_TIMEOUT, float)
         self._model: Any = None
@@ -101,6 +102,9 @@ class E5Engine:
                 if self._model is None:
                     started = time.perf_counter()
                     model = self.build_model()
+                    # the model truncates silently past max_seq_length: set it to the ceiling the handlers
+                    # chunk to, so an over-long text is a bug we see rather than a tail we lose; the floor
+                    # keeps a tiny PFA_EMBED_MAX_TOKENS from leaving no room for the prefix
                     model.max_seq_length = max(self._max_tokens + SPECIAL_TOKENS, 16)
                     self._model = model
                     log.info(
@@ -119,7 +123,10 @@ class E5Engine:
         """Fetch the weights themselves; a test overrides this to stand in for the 2 GB model."""
         from sentence_transformers import SentenceTransformer  # heavy: imported on first use only
 
-        return SentenceTransformer(self._model_id, device=self._device)
+        try:
+            return SentenceTransformer(self._model_id, device=self._device)
+        except OSError as e:  # unreachable hub, unknown id, unreadable path: say which model
+            raise RuntimeError(f"could not load model {self._model_id!r} (PFA_EMBED_MODEL)") from e
 
     def encode_queries(self, texts: Sequence[str]) -> list[list[float]]:
         return self._encode([QUERY_PREFIX + t for t in texts], side="query")

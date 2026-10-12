@@ -393,3 +393,16 @@ def test_the_model_is_fetched_by_its_configured_id_on_its_device(monkeypatch: py
     monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=_SentenceTransformer))
     model = E5Engine(model_id="some/model", device="cpu").build_model()
     assert model.asked == ("some/model", "cpu")
+
+
+class _UnreachableHub:
+    """Stands in for ``sentence_transformers.SentenceTransformer`` when the hub cannot be reached."""
+
+    def __init__(self, name: str, device: str | None = None) -> None:
+        raise OSError("connection refused")
+
+
+def test_a_model_that_cannot_be_fetched_fails_naming_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=_UnreachableHub))
+    with pytest.raises(RuntimeError, match="'some/model'"):
+        E5Engine(model_id="some/model", device="cpu").build_model()
