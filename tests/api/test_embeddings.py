@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import math
 import os
+import sys
 import threading
 import time
+import types
 from collections.abc import Sequence
 from typing import Any
 
@@ -378,3 +380,16 @@ def test_busy_engine_is_a_503_problem_with_retry_after(fake) -> None:
     assert r.status_code == 503 and r.headers["retry-after"] == "5"
     body = r.json()
     assert body["type"] == "urn:pfa-api:problem:model-busy" and body["retry_after"] == 5 and "busy" in body["detail"]
+
+
+class _SentenceTransformer:
+    """Stands in for ``sentence_transformers.SentenceTransformer``: records what was asked for."""
+
+    def __init__(self, name: str, device: str | None = None) -> None:
+        self.asked = (name, device)
+
+
+def test_the_model_is_fetched_by_its_configured_id_on_its_device(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=_SentenceTransformer))
+    model = E5Engine(model_id="some/model", device="cpu").build_model()
+    assert model.asked == ("some/model", "cpu")

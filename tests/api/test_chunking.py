@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import sys
+import types
 from typing import Any
 
 import pytest
@@ -165,3 +167,16 @@ def test_the_tokenizer_load_is_logged_with_its_duration(caplog: pytest.LogCaptur
 
 def test_a_loaded_tokenizer_counts_without_special_tokens() -> None:
     assert _StandInTokenizer("fake/whitespace").count("one two three") == 3
+
+
+class _AutoTokenizer:
+    """Stands in for ``transformers.AutoTokenizer``: what it returns says what was asked for."""
+
+    @staticmethod
+    def from_pretrained(name: str) -> str:
+        return f"tokenizer of {name}"
+
+
+def test_the_tokenizer_is_fetched_by_its_configured_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(AutoTokenizer=_AutoTokenizer))
+    assert ModelTokenizer("some/model").build_tokenizer() == "tokenizer of some/model"
