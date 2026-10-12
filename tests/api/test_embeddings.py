@@ -170,6 +170,30 @@ def test_similarity_scores_a_long_candidate_by_its_best_chunk(words_app: FastAPI
     assert "password" in top["text"] and top["chunk_count"] > 1 and 0 < top["chunk_index"] < top["chunk_count"] - 1
 
 
+LONG_QUESTION = "how do I reset the password on my account when the e-mail link has expired already"
+
+
+def test_a_question_over_the_window_is_pooled_into_one_unit_vector(words_app: FastAPI) -> None:
+    client, engine = _fake_app(words_app, max_tokens=8)  # 8 - "query:"(1 word) - 2 specials = 5 words per chunk
+    r = client.post("/embeddings/query", json={"question": LONG_QUESTION})
+    vector = r.json()["embedding"]
+    assert len(engine.encoded) == 4 and len(vector) == 26 and math.isclose(math.hypot(*vector), 1.0)
+
+
+class OppositeChunksEngine(FakeEngine):
+    """Every other chunk points the opposite way, so the chunks' mean has no direction."""
+
+    def encode_queries(self, texts: Sequence[str]) -> list[list[float]]:
+        return [[1.0, 0.0] if i % 2 == 0 else [-1.0, 0.0] for i in range(len(texts))]
+
+
+def test_chunks_that_cancel_out_pool_to_a_zero_vector_rather_than_an_error(words_app: FastAPI) -> None:
+    bus = words_app.state.bus
+    bus.register(EmbedQuery, EmbedQueryHandler(OppositeChunksEngine(max_tokens=8), bus), replace=True)
+    r = TestClient(words_app).post("/embeddings/query", json={"question": "one two three four five six seven eight nine ten"})
+    assert r.status_code == 200 and r.json()["embedding"] == [0.0, 0.0]
+
+
 def test_app_startup_does_not_load_the_model() -> None:
     app = create_app()
     assert app.state.readiness()["embedding_model"] is False
