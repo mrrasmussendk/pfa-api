@@ -16,10 +16,10 @@ A setting is a variable an operator turns, not something a client sends. It belo
 DEFAULT_CONCURRENCY = 1
 
 def __init__(self, ..., concurrency: int | None = None) -> None:
-    self._concurrency = max(1, concurrency or int(os.environ.get("PFA_EMBED_CONCURRENCY", DEFAULT_CONCURRENCY)))
+    self._concurrency = max(1, _setting(concurrency, "PFA_EMBED_CONCURRENCY", DEFAULT_CONCURRENCY, int))
 ```
 
-The constructor parameter is what tests and other callers use; the variable is what the operator uses. Both meet in one line.
+The constructor parameter is what tests and other callers use; the variable is what the operator uses. Both meet in one line. `_setting` takes the parameter when it is not `None` (so an explicit `0` is kept, never swapped for the variable), and names the variable when its value does not parse.
 
 ## Where it goes
 

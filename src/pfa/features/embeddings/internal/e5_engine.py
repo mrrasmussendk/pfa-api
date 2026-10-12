@@ -25,8 +25,8 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Callable, Sequence
+from typing import Any, TypeVar
 
 from pfa.features.embeddings.contract import EngineBusy
 
@@ -38,7 +38,23 @@ SPECIAL_TOKENS = 2  # <s> ... </s>
 QUERY_PREFIX = "query: "
 PASSAGE_PREFIX = "passage: "
 
-log = logging.getLogger("pfa.embeddings.engine")
+log = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+def _setting(given: T | None, name: str, default: T, parse: Callable[[str], T]) -> T:
+    """The constructor's value when given, else the environment's, else the default. A value the
+    environment cannot parse fails here, when the engine is built, naming the variable."""
+    if given is not None:
+        return given
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return parse(raw)
+    except ValueError as e:
+        raise ValueError(f"{name}={raw!r} is not a valid {parse.__name__}") from e
 
 
 class E5Engine:
@@ -50,13 +66,12 @@ class E5Engine:
         concurrency: int | None = None,
         queue_timeout: float | None = None,
     ) -> None:
-        self._model_id = model_id or os.environ.get("PFA_EMBED_MODEL", DEFAULT_MODEL_ID)
-        self._device = device or os.environ.get("PFA_EMBED_DEVICE") or None
-        self._max_tokens = max_tokens or int(os.environ.get("PFA_EMBED_MAX_TOKENS", DEFAULT_MAX_TOKENS))
-        self._concurrency = max(1, concurrency or int(os.environ.get("PFA_EMBED_CONCURRENCY", DEFAULT_CONCURRENCY)))
-        self._queue_timeout = (
-            queue_timeout if queue_timeout is not None else float(os.environ.get("PFA_EMBED_QUEUE_TIMEOUT", DEFAULT_QUEUE_TIMEOUT))
-        )
+        self._model_id = _setting(model_id, "PFA_EMBED_MODEL", DEFAULT_MODEL_ID, str)
+        self._device = device or os.environ.get("PFA_EMBED_DEVICE") or None  # unset or empty: the best available
+        self._max_tokens = _setting(max_tokens, "PFA_EMBED_MAX_TOKENS", DEFAULT_MAX_TOKENS, int)
+        # a gate of zero slots would never open: every request would wait out the timeout and get 503
+        self._concurrency = max(1, _setting(concurrency, "PFA_EMBED_CONCURRENCY", DEFAULT_CONCURRENCY, int))
+        self._queue_timeout = _setting(queue_timeout, "PFA_EMBED_QUEUE_TIMEOUT", DEFAULT_QUEUE_TIMEOUT, float)
         self._model: Any = None
         self._lock = threading.Lock()  # guards the one-time load
         self._gate = threading.BoundedSemaphore(self._concurrency)  # guards inference
@@ -85,10 +100,11 @@ class E5Engine:
         if self._model is None:
             with self._lock:
                 if self._model is None:
-                    from sentence_transformers import SentenceTransformer  # heavy: imported on first use only
-
                     started = time.perf_counter()
-                    model = SentenceTransformer(self._model_id, device=self._device)
+                    model = self.build_model()
+                    # the model truncates silently past max_seq_length: set it to the ceiling the handlers
+                    # chunk to, so an over-long text is a bug we see rather than a tail we lose; the floor
+                    # keeps a tiny PFA_EMBED_MAX_TOKENS from leaving no room for the prefix
                     model.max_seq_length = max(self._max_tokens + SPECIAL_TOKENS, 16)
                     self._model = model
                     log.info(
@@ -102,6 +118,15 @@ class E5Engine:
                         },
                     )
         return self._model
+
+    def build_model(self) -> Any:
+        """Fetch the weights themselves; a test overrides this to stand in for the 2 GB model."""
+        from sentence_transformers import SentenceTransformer  # heavy: imported on first use only
+
+        try:
+            return SentenceTransformer(self._model_id, device=self._device)
+        except OSError as e:  # unreachable hub, unknown id, unreadable path: say which model
+            raise RuntimeError(f"could not load model {self._model_id!r} (PFA_EMBED_MODEL)") from e
 
     def encode_queries(self, texts: Sequence[str]) -> list[list[float]]:
         return self._encode([QUERY_PREFIX + t for t in texts], side="query")

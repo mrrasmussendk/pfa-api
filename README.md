@@ -1,144 +1,164 @@
 # PFA API
 
-A FastAPI service for multilingual text embeddings and semantic similarity. It turns questions and documents into vectors, splits long text into chunks, and ranks candidate passages against a question.
+A demonstration project by Marc Rasmussen: a multilingual text-embedding API with an accompanying harness for AI-assisted development.
 
-The default model is `intfloat/multilingual-e5-large`, which produces normalized, 1024-dimensional vectors. The service adds the model's query and passage prefixes for you.
+The API turns questions and documents into vectors, splits long documents into chunks, and ranks candidate passages by semantic similarity. A Danish question can, for example, retrieve a relevant English passage. The engineering case study is how to make that capability maintainable: explicit feature boundaries, consistent API behaviour, observable model serving, and checks that hold both human and agent changes to the same rules.
 
-The repository also contains a **coding-agent harness**: architecture rules, a bounded working set for each feature, feedback while an agent works, and a review of the finished change. The API is built as vertical slices so the harness can describe and check those boundaries. All harness tooling lives in `tools/` and stays out of the deployed service.
+**Stack:** Python · FastAPI · Pydantic · sentence-transformers / PyTorch · Docker · GitHub Actions
 
-Read the [harness overview](#the-agent-harness) below or the [full harness explanation](docs/tooling.md#heimdall--the-harness), including its map, sensors, feedback, and review loop.
+[What this demonstrates](#what-this-demonstrates) · [Quick start](#quick-start) · [Try the demo](#try-the-demo) · [Architecture](#architecture) · [Agent harness](#the-agent-harness) · [Development](#development) · [Documentation](#documentation)
 
-[Quick start](#quick-start) · [Endpoints](#endpoints) · [Docker](#docker) · [The agent harness](#the-agent-harness) · [Development](#development) · [Documentation](#documentation)
+## What this demonstrates
+
+| Engineering concern | Approach in this project | Where to inspect it |
+|---|---|---|
+| API design | Validated requests, documented examples, RFC 9457 Problem Details, and compatibility checks against the saved OpenAPI contract | [Service reference](docs/service.md), [OpenAPI](docs/openapi.json) |
+| Model integration | Tokenizer-aware chunking, query/passage prefixes, normalized vectors, and ranking across languages | [Chunking and embedding design](docs/architecture.md#chunking--the-models-512-token-window), [API scenarios](tests/e2e/) |
+| Modular architecture | Features expose messages and results through public contracts; a bus dispatches requests to their handlers | [Architecture walkthrough](docs/architecture.md#one-request-end-to-end), [feature contracts](src/pfa/features/) |
+| Operational behaviour | Separate liveness and readiness probes, background warm-up, bounded inference concurrency, and logs correlated by trace ID | [Runtime behaviour](docs/service.md#running-in-production), [logging decision](docs/decisions/0001-logging.md) |
+| Verification and delivery | Tests with fake model components, scenarios using the real model, architecture checks, dependency auditing, and verified container builds | [Tests](tests/), [build workflow](.github/workflows/ci.yml) |
+| AI-assisted development | Task-specific instructions, measured context budgets, feedback during edits, and a separate automated review pipeline | [Harness overview](#the-agent-harness), [review guide](harness/guides/pr-review.md) |
+
+For a short review, run the similarity example below, follow [one request through the architecture](docs/architecture.md#one-request-end-to-end), then inspect the [CI workflow](.github/workflows/ci.yml) and [harness design](docs/tooling.md#heimdall--the-harness).
 
 ## Quick start
 
-Requires **Python 3.10+**. Run these commands from the repository root:
+Requires **Python 3.10+**. Run from a checkout of this repository. The commands below use a macOS/Linux shell:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate
 python -m pip install -e ".[dev]" -e ./tools
 python -m pfa.api
 ```
 
-Name the environment `.venv`: the Claude Code hooks (`.claude/hooks/python.sh`) run with `.venv/bin/python` when it exists, and fall back to `python`, then `python3`.
+On Windows PowerShell, create the environment with `py -m venv .venv`, activate it with `.venv\Scripts\Activate.ps1`, then run the same install and start commands.
 
-Open **[the interactive API docs](http://127.0.0.1:8000/docs)** to try a request. The OpenAPI schema is at `/openapi.json`.
+Open [the interactive API docs](http://127.0.0.1:8000/docs). Each operation includes a request example and a **Try it out** option. The live schema is at [OpenAPI JSON](http://127.0.0.1:8000/openapi.json); a [saved copy](docs/openapi.json) is available without starting the service.
 
-The service logs one RFC 5424 line per request and per inference to stdout, each carrying the W3C `traceparent` trace id that every response header and every error document also carry, so a reported `trace_id` finds its lines with `grep`. See [the log](docs/service.md#observability-the-log).
-
-The model loads on the first request and may download about **2.2 GB** of weights. To download them ahead of time:
+**Allow for the first model load.** The default model, `intfloat/multilingual-e5-large`, produces normalized, 1024-dimensional vectors. Components load on demand, and the first embedding request may download approximately **2.2 GB** of weights before it can answer. To download the default model ahead of a demonstration:
 
 ```bash
 python tools/download_model.py
 ```
 
-For GPU installation and model settings, see [the model reference](docs/service.md#the-model). Install the CUDA build of PyTorch before the service dependencies if you plan to use an NVIDIA GPU.
+Downloading fills the disk cache; loading the model into memory still happens when the service uses it. Set `PFA_WARMUP=1` to start loading in the background at startup. `/health` answers while loading; `/ready` returns `200` once both tokenizer and model are loaded. With warm-up off, polling `/ready` alone does not trigger a load.
+
+A GPU is optional. For NVIDIA GPU use, install the appropriate CUDA build of PyTorch **before** the project dependencies; see [model configuration](docs/service.md#the-model). A service-only installation uses `python -m pip install .`.
+
+## Try the demo
+
+With the service running, send this request from another terminal, or use the same JSON in `/docs`:
+
+```bash
+curl --request POST http://127.0.0.1:8000/embeddings/similarity \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "question": "Hvordan nulstiller jeg min adgangskode?",
+    "candidates": [
+      "To reset your password, open Settings and choose Security.",
+      "Opening hours: Monday to Friday, 9 to 17."
+    ]
+  }'
+```
+
+The Danish question asks how to reset a password. The response ranks the English password instructions first. This example is also covered by the [embeddings scenarios](tests/e2e/embeddings.feature).
+
+Example response from the documented model run; exact scores can vary:
+
+```json
+{
+  "model": "intfloat/multilingual-e5-large",
+  "matches": [
+    {
+      "source_index": 0,
+      "text": "To reset your password, open Settings and choose Security.",
+      "score": 0.8112,
+      "chunk_index": 0,
+      "chunk_count": 1
+    },
+    {
+      "source_index": 1,
+      "text": "Opening hours: Monday to Friday, 9 to 17.",
+      "score": 0.7306,
+      "chunk_index": 0,
+      "chunk_count": 1
+    }
+  ]
+}
+```
+
+`source_index` identifies the original candidate; `matches` are ordered by score. A long candidate is split and scored by its best chunk, whose text and position are returned. Compare scores within a response; they are similarity values, not confidence percentages.
+
+To inspect an error, try an empty `candidates` array. The API returns `422` with an `application/problem+json` document identifying the invalid field and a `trace_id` for finding the request in the logs.
 
 ## Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/health` | Liveness: the process is responding. |
-| GET | `/ready` | Readiness: tokenizer and model are loaded. Returns 503 until ready. |
-| POST | `/chunking/split` | Split text into chunks within a token budget. |
+| GET | `/ready` | Readiness: tokenizer and model are loaded; otherwise `503`. |
+| POST | `/chunking/split` | Split text within a token budget, using the model's tokenizer. |
 | POST | `/embeddings/query` | Turn a question into one query vector. |
 | POST | `/embeddings/passages` | Embed documents, returning one vector per chunk with its source and position. |
-| POST | `/embeddings/similarity` | Rank candidate texts against a question, best match first. |
+| POST | `/embeddings/similarity` | Rank supplied candidates against a question, best match first. |
 
-For example, send this JSON to `POST /embeddings/similarity` using `/docs`:
+For a retrieval application, embed documents with `/embeddings/passages` and store the returned vectors in your own index. Embed each question with `/embeddings/query`, then rank the stored vectors by cosine similarity. `/embeddings/similarity` combines embedding and ranking when the candidate texts are already available. The service adds the model's query and passage prefixes for callers.
 
-```json
-{
-  "question": "Hvordan nulstiller jeg min adgangskode?",
-  "candidates": [
-    "To reset your password, open Settings",
-    "Opening hours"
-  ]
-}
-```
-
-Errors use `application/problem+json` (RFC 9457). See the [service reference](docs/service.md) for error types, request limits, and configuration.
+See the [service reference](docs/service.md) for request limits, error types, settings, and deployment details.
 
 ## Docker
 
-Requires Docker with Compose:
+With Docker and Compose installed:
 
 ```bash
 docker compose up --build
 ```
 
-The container enables model warm-up and keeps downloaded weights in a named volume. Use `/health` for liveness and **`/ready` to decide when to send traffic**.
+The service is available on port `8000`. Compose uses CPU inference, enables background warm-up, and keeps the model cache in a named volume. Wait for [readiness](http://127.0.0.1:8000/ready) to return `200` before the demonstration. `/health` is the container's liveness check.
 
-See [running in production](docs/service.md#running-in-production) for GPU builds, concurrency, worker settings, and model caching. For a Python installation without development tooling, use `python -m pip install .`.
+The multi-stage image runs as a non-root user and contains the service package. Development tooling is packaged separately; CI checks that it is excluded from both the service wheel and the image. See [container settings](docs/service.md#the-image) for GPU builds and preloaded weights.
+
+## Architecture
+
+The application has two **vertical slices**: chunking and embeddings. Each owns its contract and implementation. Embeddings depends on chunking's public contract; feature logic stays independent of FastAPI and Pydantic.
+
+A request follows this path: **HTTP route → contract message → bus → feature handler → result → HTTP response**. When embeddings needs chunking, it dispatches a chunking message on the same bus. Dependencies are declared in each feature's `feature.json` and checked by Eitri.
+
+```text
+src/pfa/
+  application.py       Registers the features on one bus
+  api/                 HTTP entry point, validation, errors, and logging
+    routes/            One routes module per feature, plus health probes
+  features/
+    chunking/          Token counting and text splitting
+    embeddings/        Query/passages embeddings and similarity ranking
+  kernel/              Shared Result, Bus, Query, and Command primitives
+```
+
+This makes the intended working set explicit: one feature, its dependencies' contracts, the kernel, and its HTTP adapter when needed. The trade-off is more messages and wiring than a small API strictly requires; here they provide boundaries that can be checked as the project grows. The [architecture reference](docs/architecture.md) explains the dependency rules and traces a complete request.
 
 ## The agent harness
 
-An agent needs to know where a change belongs, which files it needs to understand, and how to tell whether its work respects the architecture. This harness makes those expectations explicit and checks them throughout the task.
+The harness is the second part of the demonstration: an experiment in making architectural expectations visible and enforceable during AI-assisted development.
 
-![The agent harness](docs/diagrams/harness.svg)
+![The agent harness: prepare, work, observe, give feedback, verify, and review](docs/diagrams/harness.svg)
 
-[Mermaid source](docs/diagrams/harness.mmd)
+[Editable diagram source](docs/diagrams/harness.mmd)
 
-### Before work: give the agent a map
+| Component | Role |
+|---|---|
+| **AGENTS.md and task guides** | Identify the owning feature, its allowed working set, and the steps for a change. |
+| **Heimdall** | Generates the feature map, observes supported agent tool activity, reports drift, runs scenarios, and coordinates review. |
+| **Eitri** | Enforces dependency boundaries, framework separation, contract compatibility, and a 15,000-token context budget per feature. |
+| **Brokkr** | Supplies the token estimator; its canary suite verifies that deliberate architecture violations are rejected. |
+| **Jev and Claude** | Jev answers narrow fault checks about changed functions. In the PR pipeline, Claude verifies failing and uncertain checks against the changed files. |
 
-[AGENTS.md](AGENTS.md) explains the dependency direction, the rules, and the working set for a task. Each slice has its own instructions and a manifest declaring its dependencies. `heimdall map` generates the slice table, dependency and route summaries, and `.heimdall/map.json` from the repository.
+The context budget counts a feature's own source, the public contract surfaces of its dependencies, and the kernel. A dependency's private implementation adds no cost to its consumer; a larger kernel costs every feature. This encourages small contracts and focused features. The [budget calculation](docs/tooling.md#how-the-token-budget-works) and [estimator calibration](docs/calibration.md) explain the measure and its limits.
 
-For an embeddings task, the intended working set is the embeddings slice, chunking's public contract, and the shared kernel. The agent can understand its dependency without opening chunking's implementation. The change guides explain how to add a route, return an error, and prepare a review.
+Gherkin scenarios describe externally observable behaviour. Matching Postman requests assert each `Then` clause by name. `heimdall e2e` checks the pairing, starts the real service, runs the selected requests, and stops it. This complements the default test suite, which uses fake model components.
 
-### During work: observe and give feedback
-
-**Heimdall** uses the configured Claude Code hooks to record reads and edits against that map. It gives immediate feedback when an agent edits a second slice in one session, changes a contract with ten or more consumers, where changes must be additive, or leaves a function it touched over 40 lines or 5 parameters. Reads are recorded without interruption.
-
-Afterwards, `heimdall drift` reports how much reading fell outside the intended working set. If work on one slice repeatedly needs other slices' internals, that is evidence to reconsider the boundary. Sustained out-of-bounds reads above 20% are the project's rule of thumb for investigating it.
-
-This observation depends on the hooks: shell-based reads are invisible to them, and a missing map disables observation. The hook itself makes no network calls.
-
-### Enforce the architecture and keep each task small
-
-**Eitri** checks the rules that make the working set predictable: slices consume other slices through declared contracts, contracts stay framework-free, dynamic imports cannot hide coupling, and route errors use Problem Details. Violations fail `eitri check` and CI.
-
-Its **EIT100 token budget** also limits how much code an agent must load to work on one slice:
-
-![Feature context budget](docs/diagrams/context-budget.svg)
-
-[Mermaid source](docs/diagrams/context-budget.mmd)
-
-Contract surfaces contain public signatures and types with implementation bodies removed. A dependency's private implementation therefore adds no cost to its consumer. A larger kernel, however, costs every slice.
-
-This creates pressure to keep features focused, contracts small, and shared primitives few. When a slice exceeds the budget, split the feature or slim its contracts; do not raise the budget. The check bounds how much must be read, while judgment is still needed to choose useful boundaries.
-
-**Brokkr** supplies the shared token estimator. Its canary suite deliberately injects rule violations into a synthetic project and verifies that Eitri rejects them. This catches a rule that has been accidentally disabled or broken even when the real application still passes its checks.
-
-### Prove the behaviour from outside
-
-Unit tests prove each piece against fakes. **End-to-end scenarios** prove the promise a client relies on: the real service, started the way a client meets it, with the real model. Each feature's use cases are written in Gherkin, one file per feature:
-
-```gherkin
-@API
-Feature: chunking
-
-  Scenario: empty-text-is-a-problem
-    Given a text that is only whitespace
-    And a budget of 12 tokens
-    When I send them to POST /chunking/split
-    Then I receive 422
-    And the body is an application/problem+json document
-    And its detail says the text is empty
-```
-
-The steps are prose, not code. A Postman request in `postman/collections/e2e/<feature>/<name>.request.yaml` does what they say and asserts each `Then` clause by name. `heimdall e2e` keeps the text and the test from drifting apart:
-
-- each clause must have exactly one assertion named `then: <clause>`, and no assertion may say more;
-- the request must use the method and path the `When` names;
-- when a scenario's text or test changes, Jev is asked whether the two still agree.
-
-When the agent stops, the `Stop` hook runs the scenarios the change can reach and asks for a new one when a feature changed without one. CI runs every scenario on every pull request and every push to `main`.
-
-### Review the finished change
-
-**Jev**, called through `heimdall review`, evaluates the bounded diff alongside the task, slice map, and computed facts about the change. It answers typed questions about correctness, scope, tests, security, and architectural fit. It then reads each edited application file whole and scores its clean code, so a shortfall names the file. Policy in code turns those answers into `approve`, `comment`, `request_changes`, or `escalate` for human review.
-
-CI runs the deterministic checks separately: lint, types, tests, Eitri, canaries, the harness smoke test, and every end-to-end scenario against the started service. The PR review requires `TYPESAFE_API_KEY`; without it, the workflow reports that review was skipped.
+The configured **Claude Code hooks** provide feedback during edits and checks when an agent stops. Observation requires a generated map and supported tool events; shell reads are invisible to these hooks. Other environments can run the checks explicitly. Automated review returns `comment`, `request_changes`, or `escalate`; a person decides whether to merge. Its value still needs to be assessed against human review outcomes.
 
 ### Run the harness
 
@@ -146,79 +166,66 @@ After the development installation in [Quick start](#quick-start):
 
 ```bash
 heimdall map --root .          # Generate the map used by the hooks
-eitri check --root .           # Check boundaries and token budgets
 python tools/brokkr_canary.py  # Verify that deliberate violations fail
 python tools/smoke_test.py     # Exercise the harness through the real hook
-heimdall drift                # Inspect recorded sessions, once available
+heimdall drift                # Inspect recorded sessions, when available
 ```
 
-Run the end-to-end scenarios against the started service. This needs the [Postman CLI](https://learning.postman.com/docs/postman-cli/postman-cli-installation/) and the model weights:
-
-```bash
-heimdall e2e --all                           # Every scenario, as CI runs them
-heimdall e2e --base origin/main              # Only the scenarios your change reaches, as the Stop hook runs them
-heimdall e2e new chunking/<name> --method API \
-  --given "…" --when "I send it to POST /chunking/split" --then "…" --then "…"
-                                             # Add a scenario and a failing test to fill in
-```
-
-With `TYPESAFE_API_KEY` set in your environment, review a change locally:
+For automated review, set `TYPESAFE_API_KEY` in your environment, then run:
 
 ```bash
 heimdall review --base origin/main --task "Describe the intended change"
 ```
 
-See [Development tooling](docs/tooling.md) for the rule table, budget calculation, sensors, scenarios, and CI details, [End-to-end scenarios](harness/guides/e2e-scenarios.md) for writing one, or [PR review with Jev](harness/guides/pr-review.md) for the review questions and policy.
+The PR workflow adds Claude verification with `ANTHROPIC_API_KEY`. If the Jev key is unavailable, CI reports the review as skipped. See [the review guide](harness/guides/pr-review.md) for credentials, outcomes, and policy, and [development tooling](docs/tooling.md) for the full harness design.
 
 ## Development
 
-`src/pfa/` is the application. Each feature under `src/pfa/features/` is a **vertical slice**: it owns its public contract and implementation and knows nothing of HTTP. `src/pfa/application.py` registers every feature on one bus, and `src/pfa/api/` is the entry point: one thin routes module per feature turns requests into the feature's messages. Embeddings uses chunking through its contract. Shared primitives live in a small, framework-free kernel.
+Read [AGENTS.md](AGENTS.md) and the relevant [task guide](harness/README.md) before changing code. Use `.venv` as the environment name so the configured Claude Code hooks can find its interpreter.
 
-| Path | Responsibility |
-|---|---|
-| `src/pfa/application.py` | The application: every feature registered on one bus |
-| `src/pfa/features/` | Features: chunking and embeddings — messages in, `Result` out, no framework |
-| `src/pfa/kernel/` | Result, Bus, Query, and Command |
-| `src/pfa/api/` | The entry point: `create_app()`, one routes module per feature, problem details, request validation |
-| `tools/` | Development tooling; never deployed |
-| `tests/api/` | Service tests |
-| `tests/e2e/` | End-to-end scenarios: one Gherkin `<feature>.feature` per feature |
-| `postman/collections/e2e/` | The Postman requests that run the scenarios |
-| `tests/tooling/` | Architecture and tooling tests |
-| `harness/` | Agent task guides and rule instructions (feedforward) |
-| `docs/` | Explanatory reference pages and diagrams |
-
-Run the checks before submitting a change:
+Run the required checks from the activated development environment:
 
 ```bash
 ruff check .
 ruff format --check .
 mypy
 pytest
-eitri check --root .
+eitri check --root . --base origin/main
 ```
 
-The default tests use fake model components, so they do not download or load the embedding model. The end-to-end scenarios do load it; run them with `heimdall e2e` (see [Run the harness](#run-the-harness)).
+The default tests use fake model components and do not download embedding weights. They cover API behaviour and tooling; they also check the repository's relative Markdown links. The `origin/main` reference must be available for comparisons against the main branch.
 
-Read [AGENTS.md](AGENTS.md) before changing code. After adding slices or routes, changing slice dependencies, or changing `[tool.heimdall]`, regenerate the maps with `heimdall map --root .`.
+To run the scenarios with the real model, install the [Postman CLI](https://learning.postman.com/docs/postman-cli/postman-cli-installation/), download the default model, then run:
+
+```bash
+python tools/download_model.py
+heimdall map --root .
+heimdall e2e --all
+```
+
+Heimdall starts and stops its own service on a free port and waits for `/ready`; no manually started service or Postman login is needed. Use `heimdall e2e --base origin/main` to run the scenarios affected by a change. See [the scenario guide](harness/guides/e2e-scenarios.md) for adding or updating one.
+
+CI runs lint, formatting, types, tests, architecture checks, canaries, and a harness smoke test on Linux and Windows with Python 3.10 and 3.12. Separate jobs run real-model scenarios, audit dependencies, check API/contract compatibility and changed-line coverage on PRs, and verify packaging. See [the workflow](.github/workflows/ci.yml) for the executable definition.
+
+After changing features, routes, dependencies, or `[tool.heimdall]`, regenerate the map with `heimdall map --root .`. When a route's schema changes, regenerate `docs/openapi.json` with `python tools/openapi_compat.py --write`. Follow [the completion guide](harness/guides/hook-feedback.md) before committing and finishing a change.
+
+## Scope and trade-offs
+
+This is a demonstration of an embedding service and its development process. It computes vectors and ranks supplied text; it does not generate answers or maintain a persistent document index. Authentication and per-client rate limiting are outside the current implementation.
+
+The large default model makes the semantic example useful but adds download time and memory cost. Each server worker loads its own model, and inference concurrency defaults to one per process. Model quality and capacity should be evaluated on a representative dataset and target hardware before choosing deployment settings. The included scenarios demonstrate specific behaviours; they are not a general search-quality or throughput benchmark.
+
+The harness adds maintenance and review overhead. Its deterministic checks enforce stated rules, while model-based review remains a fallible source of feedback. These are deliberate trade-offs for exploring how a growing codebase can remain understandable to both people and coding agents.
 
 ## Documentation
 
-Read [docs/](docs/) to understand the project. Use [harness/](harness/) for instructions on making and checking a change. Root and slice `AGENTS.md` files are the agent entry points.
-
-| I want to… | Read |
+| Read next | Contents |
 |---|---|
-| Configure or deploy the API | [Service reference](docs/service.md) |
-| Understand slices, contracts, and message dispatch | [Architecture](docs/architecture.md) |
-| Understand how the agent harness works | [Full harness explanation](docs/tooling.md#heimdall--the-harness) |
-| Understand checks, token budgets, agent hooks, and CI | [Development tooling](docs/tooling.md) |
-| Fix a bug or change existing behaviour | [Changing behaviour](harness/guides/changing-behaviour.md) |
-| Add an endpoint | [Adding a route](harness/guides/adding-a-route.md) |
-| Return an API error | [Returning errors](harness/guides/returning-errors.md) |
-| Write or change tests | [Writing tests](harness/guides/writing-tests.md) |
-| Write or fix an end-to-end scenario | [End-to-end scenarios](harness/guides/e2e-scenarios.md) |
-| Run or understand the PR review | [PR review with Jev](harness/guides/pr-review.md) |
-| Investigate an architecture violation | [Eitri rule reference](harness/rules/) |
-| Check the token estimator | [Calibration](docs/calibration.md) |
+| [Documentation index](docs/README.md) | Suggested reading order and all reference pages |
+| [Service reference](docs/service.md) | Endpoints, model settings, errors, logging, and deployment |
+| [Architecture](docs/architecture.md) | Feature boundaries, contracts, dispatch, and chunking |
+| [Development tooling](docs/tooling.md) | Rules, context budgets, hooks, review, scenarios, and CI |
+| [Harness instructions](harness/README.md) | Guides for making and verifying changes |
+| [Diagrams](docs/diagrams/README.md) | Rendered architecture and workflow diagrams with editable sources |
 
 The architecture tooling is a Python port of [brokkr-eitri](https://github.com/mrrasmussendk/brokkr-eitri).

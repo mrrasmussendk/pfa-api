@@ -260,7 +260,7 @@ Unit tests prove a piece against fakes. A scenario proves the promise from outsi
 |---|---|
 | `tests/e2e/<feature>.feature` | The feature's use cases in Gherkin, one `Scenario:` each. A tag names the method (`@API`); `@tool:<tool>` overrides the tool. The steps are prose: nothing binds or executes them. |
 | `postman/collections/e2e/<feature>/<name>.request.yaml` | The test: the request the `Given` and `When` describe, and one `pm.test("then: <clause>")` per `Then` clause. Playwright and pytest tests live beside the feature file instead. |
-| `harness/e2e/system.json` | The project's part: how to start the service (`python -m pfa.api` on a free port, ready at `/health`) and which tool tests each method. |
+| `harness/e2e/system.json` | The project's part: how to start the service (`python -m pfa.api` on a free port, ready at `/ready`) and which tool tests each method. |
 
 **The text is held to the test.** A scenario only tells the truth if its test does what it says, so Heimdall checks that on every load and refuses a scenario that fails:
 

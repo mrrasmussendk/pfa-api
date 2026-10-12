@@ -2,7 +2,7 @@
 <!--heimdall:deps-->depends on: (none) + kernel<!--/heimdall:deps-->
 <!--heimdall:routes-->routes: POST /chunking/split<!--/heimdall:routes-->
 <!--heimdall:scenarios-->scenarios: `tests/e2e/chunking.feature` — split-within-budget, empty-text-is-a-problem, control-character-is-rejected, budget-outside-the-window-is-rejected, unknown-field-is-rejected<!--/heimdall:scenarios-->
-<!--heimdall:budget-->budget: ≈10% of 15,000 tokens used — `eitri check` has the exact count<!--/heimdall:budget-->
+<!--heimdall:budget-->budget: ≈20% of 15,000 tokens used — `eitri check` has the exact count<!--/heimdall:budget-->
 
 Splits text into pieces that fit a model-token budget, on paragraph and sentence boundaries first. The budget is a hard limit, counted by the model's own tokenizer.
 
