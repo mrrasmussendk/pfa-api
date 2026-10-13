@@ -2,7 +2,7 @@
 <!--heimdall:deps-->depends on: chunking + kernel<!--/heimdall:deps-->
 <!--heimdall:routes-->routes: POST /embeddings/query, POST /embeddings/passages, POST /embeddings/similarity<!--/heimdall:routes-->
 <!--heimdall:scenarios-->scenarios: `tests/e2e/embeddings.feature` — similarity-ranks-the-answer-first, no-candidates-is-rejected, question-becomes-a-query-vector, documents-become-passage-vectors-in-order<!--/heimdall:scenarios-->
-<!--heimdall:budget-->budget: ≈30% of 15,000 tokens used — `eitri check` has the exact count<!--/heimdall:budget-->
+<!--heimdall:budget-->budget: ≈40% of 15,000 tokens used — `eitri check` has the exact count<!--/heimdall:budget-->
 
 Serves `intfloat/multilingual-e5-large`: text in, a unit-normalised 1024-dim vector out. It embeds; it does not answer.
 
