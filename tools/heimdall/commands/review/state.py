@@ -3,7 +3,6 @@ as facts, so the model spends its judgment on what only judgment can decide."""
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,7 +20,7 @@ from .diff import FileChange
 # (docs.typesafe.ai/models). The budget is measured with Brokkr, the ruler Eitri's budget uses, which
 # is within about 10% of a real tokenizer: the margin below the window pays for that and the questions.
 JUDGE_WINDOW_TOKENS = 32_000
-MAX_STATE_TOKENS = 28_000  # the whole state: task, architecture, facts and every file entry, paths included
+MAX_STATE_TOKENS = 28_000  # all files together
 MAX_FILE_TOKENS = 6_000  # per file; the rest is summarised as "N more lines not shown"
 # The order the budget is spent in: the code the walls are about first, prose last. A wide diff
 # then truncates docs and tooling, never the slice the judge is asked about.
@@ -31,13 +30,11 @@ _FIX_LINE = re.compile(r"^\*\*Fix[^*]*:\*\*\s*(.+?)\s*$", re.MULTILINE)
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 __all__ = [
-    "Known",
     "area_of",
     "build_state",
     "fix_from_docs",
     "function_shape",
     "is_application",
-    "priority",
     "shape_line",
     "touched_lines",
     "truncate",
@@ -48,8 +45,6 @@ __all__ = [
 def area_of(path: str, m: MapModel | None) -> str:
     """Where a path sits in the architecture — the Heimdall half of the state."""
     p = norm(path)
-    if p.endswith(".md"):  # prose, wherever it sits: a feature's AGENTS.md describes the feature, it is not its code
-        return "docs"
     if m is not None:
         s = slice_of(p, m)
         if s is not None:
@@ -67,7 +62,7 @@ def area_of(path: str, m: MapModel | None) -> str:
         return "tooling"
     if p.startswith(".github/"):
         return "ci"
-    if p.startswith("docs/"):
+    if p.startswith("docs/") or p.endswith(".md"):
         return "docs"
     if p.startswith("src/"):
         return "service"
@@ -80,8 +75,7 @@ def is_application(area: str) -> bool:
     return area.startswith(("slice:", "contract:", "shared:")) or area in ("kernel", "app", "service")
 
 
-def priority(area: str) -> int:
-    """Where an area comes in the budget's order: the code the walls are about first, prose last."""
+def _priority(area: str) -> int:
     return next((i for i, prefix in enumerate(_AREA_PRIORITY) if area == prefix or area.startswith(prefix)), len(_AREA_PRIORITY))
 
 
@@ -198,21 +192,10 @@ class _Tally:
     source_changed: bool = False
     code_changed: bool = False  # Python in the application (a slice, the kernel, the app): the craft floor is about this, not the tooling
     docs_changed: bool = False
-    kernel_changed: bool = False  # every feature imports the kernel: a mistake there reaches all of them
-    shared_changed: bool = False  # the application outside the features (composition root, HTTP edge helpers) or a shared package
     tests: set[str] = field(default_factory=set)
     truncated: list[str] = field(default_factory=list)
     diff_tokens: int = 0  # the whole diff, Brokkr's estimate
     state_tokens: int = 0  # what the judge gets after the caps
-    not_shown: int = 0  # files counted in the facts but left out of ``files``: the budget ran out before them
-
-    @classmethod
-    def of(cls, files: list[FileChange], m: MapModel | None) -> _Tally:
-        tally = cls()
-        for f in files:
-            tally.count(area_of(f.path, m), f, m)
-            tally.diff_tokens += 0 if f.binary else estimate(f.text)
-        return tally
 
     def count(self, area: str, f: FileChange, m: MapModel | None) -> None:
         if is_application(area) and f.status != "deleted" and norm(f.path).endswith(".py"):
@@ -227,32 +210,30 @@ class _Tally:
                 self.routes_changed = True
         elif area in ("kernel", "app", "service") or area.startswith("shared:"):
             self.source_changed = True
-            self.kernel_changed = self.kernel_changed or area == "kernel"
-            self.shared_changed = self.shared_changed or area == "app" or area.startswith("shared:")
         elif area == "tests":
             self.tests.add(norm(f.path))
         elif area == "docs":
             self.docs_changed = True
 
 
-def _entries(files: list[FileChange], m: MapModel | None, tally: _Tally, budget: int) -> list[dict[str, Any]]:
-    """One entry per file, source first (see ``_AREA_PRIORITY``), git order within an area. ``budget`` is spent on
-    whole entries, path and counts included; a file that no longer fits is counted in the facts and not shown."""
+def _entries(files: list[FileChange], m: MapModel | None, tally: _Tally) -> list[dict[str, Any]]:
+    """One entry per file, source first (see ``_AREA_PRIORITY``), git order within an area; the
+    character budget is spent in that order and ``tally`` learns what the files add up to."""
+    budget = MAX_STATE_TOKENS
     entries: list[dict[str, Any]] = []
-    classified = sorted(((area_of(f.path, m), f) for f in files), key=lambda pair: priority(pair[0]))
+    classified = sorted(((area_of(f.path, m), f) for f in files), key=lambda pair: _priority(pair[0]))
     for area, f in classified:
-        entry: dict[str, Any] = {"path": norm(f.path), "status": f.status, "area": area, "added": f.added, "removed": f.removed, "diff": ""}
-        cost = estimate(json.dumps(entry, ensure_ascii=False))
-        if cost >= budget:
-            tally.not_shown += 1
-            continue
-        text, cut = ("[binary]", False) if f.binary else truncate(f.text, min(MAX_FILE_TOKENS, budget - cost))
-        if cut:
-            tally.truncated.append(f.path)
-        entry["diff"] = text
+        tally.count(area, f, m)
+        if f.binary:
+            text = "[binary]"
+        else:
+            tally.diff_tokens += estimate(f.text)
+            text, cut = truncate(f.text, min(MAX_FILE_TOKENS, max(budget, 100)))
+            if cut:
+                tally.truncated.append(f.path)
         tally.state_tokens += estimate(text)
-        budget -= cost + estimate(text)
-        entries.append(entry)
+        budget -= estimate(text)
+        entries.append({"path": norm(f.path), "status": f.status, "area": area, "added": f.added, "removed": f.removed, "diff": text})
     return entries
 
 
@@ -280,8 +261,17 @@ def _architecture(m: MapModel | None) -> dict[str, Any]:
     }
 
 
-def _facts(files: list[FileChange], tally: _Tally, walls: list[dict[str, Any]], shape: list[dict[str, Any]]) -> dict[str, Any]:
-    return {
+def build_state(
+    files: list[FileChange],
+    m: MapModel | None,
+    task: str | None,
+    walls: list[dict[str, Any]] | None = None,
+    shape: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The JSON object Jev judges: the task, the architecture, the facts and the files."""
+    tally = _Tally()
+    entries = _entries(files, m, tally)
+    facts = {
         "files_changed": len(files),
         "lines_added": sum(f.added for f in files),
         "lines_removed": sum(f.removed for f in files),
@@ -293,50 +283,13 @@ def _facts(files: list[FileChange], tally: _Tally, walls: list[dict[str, Any]], 
         "code_changed": tally.code_changed,
         "tests_changed": sorted(tally.tests),
         "docs_changed": tally.docs_changed,
-        "kernel_changed": tally.kernel_changed,
-        "shared_changed": tally.shared_changed,
         "files_truncated": tally.truncated,
-        "files_not_shown": tally.not_shown,
         "diff_tokens": tally.diff_tokens,
         "state_tokens": tally.state_tokens,
         "state_budget_tokens": MAX_STATE_TOKENS,
         "judge_window_tokens": JUDGE_WINDOW_TOKENS,
-        "wall_violations": walls,
-        "function_shape": shape,
+        "wall_violations": list(walls or []),
+        "function_shape": list(shape or []),
         "function_limits": {"lines": FUNCTION_LINES, "params": FUNCTION_PARAMETERS},
     }
-
-
-@dataclass(frozen=True)
-class Known:
-    """What Heimdall established before asking: Eitri's findings, the functions over the shape limits, and the
-    changed functions the questions are about, by id (``functions.f1``)."""
-
-    walls: list[dict[str, Any]] = field(default_factory=list)
-    shape: list[dict[str, Any]] = field(default_factory=list)
-    functions: dict[str, dict[str, Any]] = field(default_factory=dict)
-
-
-def build_state(files: list[FileChange], m: MapModel | None, task: str | None, known: Known | None = None) -> dict[str, Any]:
-    """The JSON object Jev judges: the task, the architecture, the facts, the changed functions and the files, at
-    most ``MAX_STATE_TOKENS`` as sent. The files get what the rest leaves; when the whole still overshoots (the
-    facts grow with every file cut), the files' share shrinks by the overshoot and they are laid out again."""
-    known = known or Known()
-    budget = MAX_STATE_TOKENS
-    tally = _Tally.of(files, m)
-    while True:
-        tally.truncated = []
-        tally.state_tokens = 0
-        tally.not_shown = 0
-        entries = _entries(files, m, tally, budget)
-        state = {
-            "task": task or "(no task statement given)",
-            "architecture": _architecture(m),
-            "facts": _facts(files, tally, list(known.walls), list(known.shape)),
-            "functions": dict(known.functions),
-            "files": entries,
-        }
-        over = estimate(json.dumps(state, ensure_ascii=False)) - MAX_STATE_TOKENS
-        if over <= 0 or not entries:
-            return state
-        budget -= over
+    return {"task": task or "(no task statement given)", "architecture": _architecture(m), "facts": facts, "files": entries}

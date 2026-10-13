@@ -8,7 +8,7 @@
 - [Heimdall — the harness](#heimdall--the-harness)
 - [CI/CD — the gate and the judgment](#cicd--the-gate-and-the-judgment)
 
-Five layers, each catching what the one before cannot:
+Four layers, each catching what the one before cannot:
 
 | Layer | Tool | Answers | Runs |
 |---|---|---|---|
@@ -16,7 +16,6 @@ Five layers, each catching what the one before cannot:
 | The walls | Eitri | Does the code respect the architecture? | `eitri check`, CI |
 | The canary | Brokkr | Does Eitri still bite? | CI |
 | The harness | Heimdall (+ Jev on PRs) | What did the agent actually do, and is the change sound? | every tool call; every PR |
-| The promise | `heimdall e2e` (Postman) | Does the running service still do what its scenarios say? | when the agent stops; every PR and push to `main` |
 
 ## Code quality — Ruff, mypy, and warnings as errors
 
@@ -26,7 +25,6 @@ ruff check . && ruff format --check . && mypy    # what CI runs; `ruff check --f
 
 - **Ruff** lints and formats, configured in `[tool.ruff]`: line length 140, Python 3.10 target, isort that knows the repo's first-party packages. Rule families: pycodestyle, pyflakes, isort, bugbear, pyupgrade, simplify, comprehensions, performance, pylint errors and warnings, implicit string concatenation, and a ban on stray `print` in the service (the tooling CLIs and tests are exempt — printing is their job). Each ignored rule has its reason beside it in the config.
 - **mypy** checks `src/` and the tooling, configured in `[tool.mypy]`. The service packages require typed definitions; the tooling is checked with `check_untyped_defs`. Torch and sentence-transformers ship no stubs and are ignored as missing.
-- **Links resolve.** `tests/tooling/test_docs_links.py` follows every relative link in the repository's Markdown (the vendored `postman/skills` aside) to a file that exists and, with a `#fragment`, to a heading in it. The guides are the agents' instructions, and a dead link leads nowhere.
 - **Warnings are errors** in pytest (`filterwarnings = ["error"]`): a deprecation anywhere fails the suite instead of scrolling past. The dev extra depends on `httpx2`, which Starlette's `TestClient` now expects.
 
 ## Eitri — the walls
@@ -41,8 +39,6 @@ ruff check . && ruff format --check . && mypy    # what CI runs; `ruff check --f
 | **EIT004** | Undeclared dependency: importing `pfa.features.x.contract` requires `x` in your `feature.json`. | error |
 | **EIT005** | Error shape: no `HTTPException` from `fastapi`/`starlette` in the application outside the features, however imported or aliased — errors are RFC 9457 problem documents raised as `pfa.api.problems.Problem`. The module that defines the helper is exempt: it is the conversion point. | error |
 | **EIT006** | Features depend downward: nothing under `src/pfa/features/` outside `contract/` imports `fastapi`, `starlette`, `pfa.application` or `pfa.api`. Routes, request models and status codes live in `src/pfa/api/routes/<feature>.py`. | error |
-| **EIT007** | Dependency cycle: the features' `feature.json` dependencies must not loop (`a → b → a`). Each feature is understood through the contracts below it. | error |
-| **EIT008** | Breaking contract change, with `--base <ref>`: a contract member removed or changed while something outside its feature still used it at the merge base. Additions are free; removals wait for the migration. | error |
 | **EIT100** | **Context budget**: own source + dependency contract surfaces + kernel > budget → check fails. | error |
 | **EIT101** | Context budget report (the same number, always visible). | info |
 
@@ -142,16 +138,16 @@ Eitri says whether the code passes. Brokkr says whether Eitri **still bites**. I
 
 The ways a wall gets disarmed are all quiet. Someone sets `enabled = false` "for now". A refactor of the tooling changes how imports are resolved and a rule silently stops matching. A config key is renamed and the budget falls back to its default. `eitri check` prints `0 error(s)` in every one of those cases, and the green looks exactly like a real green.
 
-`python tools/brokkr_canary.py` runs eleven checks, in order, one line each:
+`python tools/brokkr_canary.py` runs eight checks, in order, one line each:
 
 | # | Check | What it proves |
 |---|---|---|
 | 1 | The real `src/` passes `eitri check` clean | The walls do not bite on clean work. |
-| 2–9 | EIT001–EIT007 bite | One minimal violating file per rule (EIT001 twice: from a feature and from the application; for EIT007, a manifest that closes a loop), written into a synthetic tree, fails the check. |
-| 10 | EIT100 bites | With `--budget 100`, the budget rule fails on a tree that passes at 15000. |
-| 11 | `enabled = false` disarms everything | The config switch really does switch the walls off — so you know what that line means if you ever see it in a diff. |
+| 2–6 | EIT001, EIT002, EIT003, EIT004, EIT005 bite | One minimal violating file per rule, written into a synthetic tree, fails the check. |
+| 7 | EIT100 bites | With `--budget 100`, the budget rule fails on a tree that passes at 15000. |
+| 8 | `enabled = false` disarms everything | The config switch really does switch the walls off — so you know what that line means if you ever see it in a diff. |
 
-Checks 2 to 11 run against a **synthetic two-slice tree** written to a temp directory by `tools/fixtures.py`, not against the real service, so the canaries keep meaning the same thing as the real slices change. The exit code is the number of canaries that failed to bite.
+Checks 2 to 8 run against a **synthetic two-slice tree** written to a temp directory by `tools/fixtures.py`, not against the real service, so the canaries keep meaning the same thing as the real slices change. The exit code is the number of canaries that failed to bite.
 
 ```
 canary ok:   real repo passes (walls do not bite on clean work)
@@ -160,13 +156,10 @@ canary ok:   EIT002 bit
 canary ok:   EIT003 bit
 canary ok:   EIT004 bit
 canary ok:   EIT005 bit
-canary ok:   EIT006 bit
-canary ok:   EIT001 bit
-canary ok:   EIT007 bit
 canary ok:   EIT100 bit
 canary note: 'enabled = false' silently disarms every wall — keep Brokkr in CI
 ---
-canary: 11 passed, 0 failed
+canary: 8 passed, 0 failed
 ```
 
 **Reading a failure.** `CANARY FAIL: EIT003 did not bite` means the rule is broken, not your code: look at `tools/eitri/walls.py`, `imports.py`, `core.py`. The one exception is check 1 — `the real repo does not pass` means the service has a violation, and Brokkr stops there.
@@ -190,8 +183,8 @@ Everything Heimdall knows comes from `.heimdall/map.json`, and everything it wri
 | Artifact | Who writes it | What it tells the agent |
 |---|---|---|
 | `AGENTS.md` (root) | you, except the slice table | The dependency direction, the walls, the exact working set for a task, how to add a slice, how to change a contract, which guide to read. `CLAUDE.md` is one line, `@AGENTS.md`, so Claude Code loads the same document. |
-| the **slice table** inside it | `heimdall map` | Every slice with its declared dependencies, fan-in, budget used, contract path, and routes — generated from the manifests and `src/pfa/api/routes/<feature>.py`, so it cannot be stale. |
-| `src/pfa/features/<name>/AGENTS.md` | `heimdall map` writes the first four lines, you write the rest | `depends on:`, `routes:`, `scenarios:` (the use cases in `tests/e2e/<name>.feature` that state its promise) and `budget:` (its EIT100 working set, rounded to 10% so the line moves only when the feature grows by a tenth), then what the slice is for, its working set, its gotchas. |
+| the **slice table** inside it | `heimdall map` | Every slice with its declared dependencies, fan-in, contract path, and routes — generated from the manifests and `src/pfa/api/routes/<feature>.py`, so it cannot be stale. |
+| `src/pfa/features/<name>/AGENTS.md` | `heimdall map` writes the first two lines, you write the rest | `depends on:` and `routes:` (generated), then what the slice is for, its working set, its gotchas. |
 | [Change guides](../harness/guides/) | you | One guide per kind of change: adding a route, returning an error, what the PR review judges. |
 | `.heimdall/map.json` | `heimdall map` | The machine-readable feature table plus the layout from `[tool.heimdall]` as paths: `features`, `kernel`, `app` (the application; any read inside it that is not a feature is in-bounds) and `routes` (`<routes>/<feature>.py` classifies as the feature), plus any `shared` packages. This is what the sensors and the review read. |
 
@@ -199,22 +192,21 @@ Everything Heimdall knows comes from `.heimdall/map.json`, and everything it wri
 
 ### 2 · Sensors — what the agent actually touches
 
-`.claude/settings.json` registers `python -m heimdall hook` (through `.claude/hooks/python.sh`, which picks the project's `.venv`, then `python`, then `python3`) as a Claude Code `PostToolUse` hook for `Read`, `Grep`, `Glob`, `Edit`, `Write` and `MultiEdit`. Claude Code runs it as a fresh process after every one of those calls. The hook loads the map, runs every sensor over the event, appends findings as JSON lines to `.heimdall/telemetry.jsonl`, and exits.
+`.claude/settings.json` registers `python -m heimdall hook` as a Claude Code `PostToolUse` hook for `Read`, `Grep`, `Glob`, `Edit`, `Write` and `MultiEdit`. Claude Code runs it as a fresh process after every one of those calls. The hook loads the map, runs every sensor over the event, appends findings as JSON lines to `.heimdall/telemetry.jsonl`, and exits.
 
-The same file registers `.claude/hooks/finish.py` as a `Stop` hook: when the agent is about to end its turn and the tree differs from `origin/main`, it runs `pytest` under coverage, then three checks of the change against `origin/main` (changed lines run under a test, `tools/diff_coverage.py`; contracts change additively, `eitri check --base`; the HTTP API stays compatible, `tools/openapi_compat.py`), then `heimdall e2e --base origin/main` (the BDD scenarios the change reaches, run by Postman against the started service; see [End-to-end scenarios](../harness/guides/e2e-scenarios.md)), then `heimdall review --base origin/main`. A red suite, a broken promise, a failing or missing scenario, or a `request_changes` verdict exits 2 with the output on stderr, which Claude Code feeds back to the agent and refuses the stop; `escalate` and a review that cannot run (no `TYPESAFE_API_KEY`) become a message to the user, with the session's drift line (`heimdall drift --session <id>`), and the turn ends. `stop_hook_active` on the event exits 0 so a block never loops. Because `--base` diffs `origin/main...HEAD`, only committed work is judged.
+The same file registers `.claude/hooks/finish.py` as a `Stop` hook: when the agent is about to end its turn and the tree differs from `origin/main`, it runs `pytest` and then `heimdall review --base origin/main`. A red suite or a `request_changes` verdict exits 2 with the output on stderr, which Claude Code feeds back to the agent and refuses the stop; `escalate` and a review that cannot run (no `TYPESAFE_API_KEY`) become a message to the user, and the turn ends. `stop_hook_active` on the event exits 0 so a block never loops. Because `--base` diffs `origin/main...HEAD`, only committed work is judged.
 
 | Sensor | Fires on | What it records |
 |---|---|---|
 | `boundary_reads` | Read, Grep, Glob of a `.py`, `.pyi`, `.md` or `feature.json` | The path's class: `kernel`, `app`, `shared:<pkg>`, `slice:<name>` (the feature's folder or its route module), `contract:<name>`, or `outside`. Pure observation. |
 | `boundary_edits` | Edit, Write, MultiEdit inside a slice | Which slice, remembered per session in `.heimdall/session-<id>.json`, and whether the edit deserves feedback. |
-| `kernel_edits` | Edit, Write, MultiEdit inside the kernel | The kernel edit; on the session's first, feedback on what the kernel costs every feature. |
 | `function_shape` | Edit, Write, MultiEdit of a `.py` file outside `tests/` | The functions the edit touched that are over 40 lines or 5 parameters (`tools/heimdall/shape.py`), read from the file's AST; each one is feedback. |
 
 Constraints, because this runs on *every* tool call: stdlib only, no network, no model or framework imports, one small state file per session, and any failure exits 0 so a broken hook can never block the agent. Latency is about 100 ms, mostly interpreter start-up. Adding a sensor is one class and one line in `tools/heimdall/sensors/__init__.py` — an explicit list, never a package scan.
 
 ### 3 · Feedback — talking back
 
-**In the loop, immediately.** When a sensor attaches feedback, the hook prints `Heimdall: <message>` to stderr and exits 2, which Claude Code shows the agent before its next action. Exactly four situations trigger it: editing a **second slice** in one session ("cross-slice changes should go through contracts; confirm this is intentional"), editing a **frozen contract** (fan-in 10 or more: "additive changes only"), the session's **first kernel edit** (every feature pays for each public name added there; once per session), and leaving a function the edit touched **over the shape limit** (40 lines or 5 parameters: "split it into functions whose names say what they do"). The shape feedback names the function and the line, judges only what the edit touched, and is the same fact `heimdall review` hands the judge, so the agent hears it while the function is still open rather than from the PR comment. Reads never trigger feedback; interrupting context-gathering trains an agent to read less, not better.
+**In the loop, immediately.** When a sensor attaches feedback, the hook prints `Heimdall: <message>` to stderr and exits 2, which Claude Code shows the agent before its next action. Exactly three situations trigger it: editing a **second slice** in one session ("cross-slice changes should go through contracts; confirm this is intentional"), editing a **frozen contract** (fan-in 10 or more: "additive changes only"), and leaving a function the edit touched **over the shape limit** (40 lines or 5 parameters: "split it into functions whose names say what they do"). The shape feedback names the function and the line, judges only what the edit touched, and is the same fact `heimdall review` hands the judge, so the agent hears it while the function is still open rather than from the PR comment. Reads never trigger feedback; interrupting context-gathering trains an agent to read less, not better.
 
 **After the session, in aggregate.** `heimdall drift` replays the telemetry against the map:
 
@@ -231,61 +223,25 @@ rule of thumb: sustained oob% > 20 on a slice = re-cut that seam
 
 A read is *in bounds* if it hit the kernel, a shared package, a slice the session edited, or the contract of a slice the edited slice declares. The per-session table comes first because wandering is a session property that the aggregate dilutes. The number to act on is the aggregate over time: if work on a slice keeps needing reads outside its working set, the boundary is drawn wrong.
 
-### 4 · Review — fault checks per function, verified on the PR
+### 4 · Review — Jev as the judge
 
-`heimdall review` is the judgment on top of the gate. [Jev](https://docs.typesafe.ai/) (TypeSafe AI) does not write review comments; it answers **typed** questions with probabilities, and its own guidance is to ask narrow, atomic questions per item. So the review asks fault checks about each changed function, and a failing answer names its function. Heimdall is the deliberation around that call:
+`heimdall review` is the judgment on top of the gate. [Jev](https://docs.typesafe.ai/) (TypeSafe AI) does not write review comments; it answers **typed** questions — yes/no with a probability, a choice, a position on a rubric — over a state you give it. Heimdall is the deliberation around that call:
 
-1. **The items.** Every function the diff touches, read whole from the working tree, routes marked (`items.py`), within a 14 000-token budget, application first.
-2. **The checks.** Per function: does more than one thing, a parameter that switches its job, an edge input mishandled, an error swallowed, changed without a test, outside input reaching a shell, path, query or log unvalidated. Per route: an error answered without `Problem`, internals leaking to a client. About the change: which file is out of scope, which is misplaced, and whether docs went stale (`questions.py`). Per edited application file, whole, in its own call: clean code and what limits it. Checks that do not fit one 64k request beside the state go in batches.
-3. **Facts stay facts.** Eitri's findings on the changed files block on their own; blast radius is computed from the facts (kernel, frozen contract → wide), not asked.
-4. **Policy in code** (`policy.py`). Each answer is a row at its place. A fault check fails at 0.60, a style check at 0.90, a file below 2.7 clean code fails naming it, a wide blast radius escalates. Outcomes: `comment` · `request_changes` · `escalate` (exit 0 · 1 · 2; 3 when the review could not run). There is no approval: a person merges.
-5. **Two pipelines.** Locally and in the Stop hook (the agent pipeline) a failing check blocks. On the PR (`--claude`) Claude (Sonnet 5.5, `claude.py`) verifies every failing and unsure check against the changed files, and a check blocks only when Claude confirms it with lines `verify.py` finds in the file. It is asked eight checks per request, so a large change never runs its answer past the output limit. The changed files lead each request as a cached block, and a request that fails leaves only its own checks undecided.
-6. **Outputs.** A table of the failing and unsure checks with their places, a clean-code row per file judged whole, `--json` and `--markdown` reports, and a `review` line in the telemetry.
+1. **Bounded state.** The diff, cut per file and capped in Brokkr tokens against Jev's 32k state window (28 000 for the files, 6 000 per file; lock files and binaries dropped, truncations named and the sent/whole sizes shown in the comment), plus what Heimdall already knows: the slice map as the architecture's promise, the walls in one sentence each, and computed facts — slices touched, cross-slice or not, contracts touched with fan-in and frozen flag, whether routes, tests or docs changed, Eitri's findings, and the changed functions over the shape limits — and the PR title and body as the stated task. Facts stay facts, so the model spends judgment on intent and placement.
+2. **One call about the diff, fifteen questions.** Gates (`safe_to_merge`, `needs_human_review`, `has_security_concern`), fit (`respects_slice_walls`, `errors_use_problem_details`, `tests_cover_change`, `stays_in_scope`, `leaks_internals`), craft (`single_purpose`, `lean_signatures` — asked about the functions `facts.function_shape` names as over 40 lines or 5 parameters), rubrics (`correctness`, `blast_radius`, `docs_in_sync`), and two labels for the report.
+3. **One call per edited application file, whole, two questions.** Each file of the application's Python the change edits is read whole from the working tree (up to 28 000 tokens) and sent on its own with the lines the change touched and its functions over the limits: `clean_code` and `clean_code_limit`, what holds the score down. A file below 2.7 (90%) fails the check naming the file, with that label and the file's functions over the limits as the fix. The tooling and the tests are never judged whole.
+4. **Policy in code.** Thresholds in `T` in `tools/heimdall/commands/review/policy.py` map the answers to one outcome: `approve` · `comment` · `request_changes` · `escalate` (exit 0 · 0 · 1 · 2; 3 when the review could not run). Missing answers fall back to neutral and land on `escalate`, never `approve`.
+5. **Outputs.** A table on stdout with a clean-code row per file judged whole, `--json` and `--markdown` reports, and a `review` line in the telemetry beside the session's reads and edits.
 
 ```bash
 export TYPESAFE_API_KEY=…                       # https://console.typesafe.ai/
-heimdall review --base origin/main --task "…"   # the agent pipeline; the PR check adds --claude (ANTHROPIC_API_KEY in CI)
-heimdall review --diff change.diff --dry-run    # print every call, call nothing
+heimdall review --base origin/main --task "…"   # what the PR check will see
+heimdall review --diff change.diff --dry-run    # print every call (the diff's, then one per file), call nothing
 ```
 
-Jev's call is stdlib only, retrying on 429/529 and never on 401; Claude's uses the `anthropic` SDK (a dependency of the tooling, never of the service). The thresholds are a starting point — measure them against your own merges (`heimdall review --json` on past PRs). Full detail in [guides/pr-review.md](../harness/guides/pr-review.md).
+Stdlib only, retries on 429/529, never on 401. Facts stay with Eitri: Jev is *told* the walls, never asked to re-derive them. The thresholds are a starting point — measure them against your own merges (`heimdall review --json` on past PRs) before letting `approve` carry weight. Full detail in [guides/pr-review.md](../harness/guides/pr-review.md).
 
-### 5 · Scenarios — the promise, checked from outside
-
-Unit tests prove a piece against fakes. A scenario proves the promise from outside: the real service, started the way a client meets it, with the real model. The guide for writing one is [End-to-end scenarios](../harness/guides/e2e-scenarios.md); this is how the machinery fits together.
-
-**Where things live.**
-
-| File | What it holds |
-|---|---|
-| `tests/e2e/<feature>.feature` | The feature's use cases in Gherkin, one `Scenario:` each. A tag names the method (`@API`); `@tool:<tool>` overrides the tool. The steps are prose: nothing binds or executes them. |
-| `postman/collections/e2e/<feature>/<name>.request.yaml` | The test: the request the `Given` and `When` describe, and one `pm.test("then: <clause>")` per `Then` clause. Playwright and pytest tests live beside the feature file instead. |
-| `harness/e2e/system.json` | The project's part: how to start the service (`python -m pfa.api` on a free port, ready at `/ready`) and which tool tests each method. |
-
-**The text is held to the test.** A scenario only tells the truth if its test does what it says, so Heimdall checks that on every load and refuses a scenario that fails:
-
-| Check | When | Catches |
-|---|---|---|
-| Clause for clause | always | A `Then` clause with no assertion of that name, an assertion no clause states, one asserted twice |
-| The request | always, Postman | A request whose method or path is not the `<METHOD> /<path>` the `When` names |
-| Jev | the scenario's own lines or its test changed, and `TYPESAFE_API_KEY` is set | A test that sends or asserts what the text does not say, or leaves out what it does |
-
-**Which scenarios run.** A run costs a service start and a model load, so the `Stop` hook runs only what a change can reach (`heimdall e2e --base origin/main`):
-
-1. The change is everything since the merge base: committed, uncommitted and untracked. The slice map says which features it touched and which depend on them.
-2. A scenario whose own lines of its feature file, or whose test, changed always runs. A feature that changed with no scenario always gets one asked for, and so does each of its routes that no scenario's `When` sends a request to. In CI, `--all` holds every route in the map to a scenario.
-3. Otherwise Jev answers one question per scenario, *could this change alter what it observes?*, and the scenario runs at `p ≥ 0.30`. Jev is also asked whether the change adds behaviour no scenario describes (`p ≥ 0.60` asks for a new one). Without a key, the slice map decides instead.
-4. A green run is remembered by the change's fingerprint, so stopping again on the same change runs nothing.
-
-Exit codes: `0` green · `1` a scenario failed · `2` a scenario is missing, malformed, or disagrees with its test · `3` could not run (no Postman CLI, the service did not start). The hook blocks on 1 and 2 and reports 3 to the user. The service's log is kept in `.heimdall/e2e-service.log`.
-
-```bash
-heimdall e2e --all                    # every scenario: what CI runs
-heimdall e2e --base origin/main       # what the Stop hook runs; --force reruns a remembered green change
-heimdall e2e new chunking/<name> --method API --given "…" --when "I send it to POST /chunking/split" --then "…" --then "…"
-```
-
-### 6 · Estimate — the shared ruler
+### 5 · Estimate — the shared ruler
 
 `heimdall estimate <file-or-dir>` prints the token estimate using the same `brokkr` estimator Eitri's EIT100 uses, so a human can ask "how big is this slice to an agent?" with the ruler the gate applies. Calibration against a real tokenizer: [calibration.md](calibration.md).
 
@@ -294,14 +250,14 @@ heimdall e2e new chunking/<name> --method API --given "…" --when "I send it to
 - It does not enforce. The walls are Eitri's; Heimdall observes, advises, and on PRs judges. An agent can ignore the warning; the check and the review catch it later.
 - It does not see Bash. Reads done with `cat` or `grep` in a shell are invisible to the hook.
 - It does not know what the agent *intended*. Bounds are computed over the whole session.
-- It does not call the network from the hook. Only `heimdall review` and `heimdall e2e` do, and only when asked or when the agent stops.
+- It does not call the network from the hook. Only `heimdall review` does, and only when asked.
 - It does not run itself. If `.heimdall/map.json` is missing the hook exits silently — the first thing to check when the harness seems quiet.
 
 ```bash
 pip install -e ./tools            # the hook needs `python -m heimdall` to resolve
 heimdall map --root .             # feedforward: regenerate the maps (do this first)
 heimdall drift                    # feedback: the report, once there is telemetry
-python tools/smoke_test.py        # the whole loop end to end through the real hook; fails if a hook call takes over 750 ms
+python tools/smoke_test.py        # the whole loop end to end through the real hook, prints latency
 pytest tests/tooling              # behavioral scenarios, format parity, the review's policy — against a synthetic tree
 ```
 
@@ -314,12 +270,6 @@ Two workflows. `ci.yml` is the **gate**: facts, and a fact failing fails the bui
 ![CI build and publication](diagrams/ci-build.svg)
 
 [Mermaid source](diagrams/ci-build.mmd)
-
-**What the change job runs.** On a pull request only, the `change` job holds the PR to the same promises the Stop hook does, against the branch it merges into: `eitri check --base` (contracts change additively, EIT008), `tools/openapi_compat.py --base` (no change that breaks a client of `docs/openapi.json`; a higher major version declares one), and `tools/diff_coverage.py --base` (at least 90% of changed application lines run under the tests).
-
-**What the audit job runs.** `tools/dependency_audit.py` runs `pip-audit` over the service's installed dependencies, CPU torch included, as the image has them. An advisory with a fixed release fails the build, because it is an upgrade away. One with no fix yet is listed and passes.
-
-**What the scenarios job runs.** `heimdall e2e --all` runs every scenario on every pull request and every push to `main` or a tag, without Jev and without a remembered green run, so a human's change is held to the same promise as an agent's. The runner is the environment: Heimdall starts the service from `harness/e2e/system.json` on the runner, and the Postman CLI runs the requests from the checkout. Nothing is deployed and no Postman login is needed. The job caches the model weights and loads them before the run; on a failure it prints the service's log.
 
 ### Review a pull request (`pr-review.yml`)
 

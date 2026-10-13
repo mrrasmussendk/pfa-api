@@ -16,5 +16,13 @@ class Streams(NamedTuple):
     stderr: TextIO
 
 
+class Streams(NamedTuple):
+    """The console as one value: the diff may arrive on stdin, the table leaves on stdout, errors on stderr."""
+
+    stdin: TextIO
+    stdout: TextIO
+    stderr: TextIO
+
+
 class ReviewError(Exception):
     """Could not review (exit 3): the review is not an answer about the code."""

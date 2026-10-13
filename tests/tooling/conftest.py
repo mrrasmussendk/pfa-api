@@ -18,6 +18,12 @@ SHORT_FUNCTION = "def short_one(a, b):\n    return a + b\n"
 WIDE_FUNCTION = "def wide(a, b, c, d, e, f):\n    return a\n"
 SHAPED_SOURCE = LONG_FUNCTION + "\n\n" + SHORT_FUNCTION
 
+# One sample of each shape the hook's sensor and the review's judge are asked about.
+LONG_FUNCTION = "def long_one():\n" + "\n".join(f"    x{i} = {i}" for i in range(44)) + "\n    return x0\n"  # 46 lines
+SHORT_FUNCTION = "def short_one(a, b):\n    return a + b\n"
+WIDE_FUNCTION = "def wide(a, b, c, d, e, f):\n    return a\n"
+SHAPED_SOURCE = LONG_FUNCTION + "\n\n" + SHORT_FUNCTION
+
 
 class TempRepo:
     """A throwaway repo root that ``heimdall.app.run`` treats as CWD (port of TempRepo.cs)."""

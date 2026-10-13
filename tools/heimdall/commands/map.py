@@ -1,9 +1,7 @@
 """``heimdall map --root <dir> [--budget 15000] [--kernel <name>]`` — the feedforward emitter.
 
 The ``feature.json`` graph is the ground truth: writes ``.heimdall/map.json`` (relative to CWD)
-and regenerates the AGENTS.md markers in every slice: its dependencies, its routes, the e2e scenarios
-that state its promise (``tests/e2e/<feature>.feature``), and how much of the token budget it uses,
-rounded to 10% so the line moves only when the feature grows by a tenth of its budget. Where things are comes
+and regenerates the AGENTS.md deps and routes markers in every slice. Where things are comes
 from ``[tool.heimdall]`` in the root ``pyproject.toml``, as paths from the repo root:
 
 - ``features`` — the folder of slices (default: ``src/pfa/features``, else ``src/slices``, ``slices``);
@@ -22,15 +20,14 @@ import json
 import os
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any, TextIO
 
 USAGE = "usage: heimdall map --root <dir> [--budget 15000] [--kernel <name>]"
 MANIFEST = "feature.json"
 _HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options")
+_DEPS = re.compile(r"<!--heimdall:deps-->.*?<!--/heimdall:deps-->", re.S)
+_ROUTES = re.compile(r"<!--heimdall:routes-->.*?<!--/heimdall:routes-->", re.S)
 _MAP = re.compile(r"<!--heimdall:map-->.*?<!--/heimdall:map-->", re.S)
-_SCENARIO = re.compile(r"^\s*Scenario:\s*(\S+)", re.M)
-SCENARIOS_DIR = "tests/e2e"
 
 
 def _const(text: str) -> Callable[[re.Match[str]], str]:
@@ -77,97 +74,26 @@ def _routes_of(path: str) -> list[str]:
     return routes
 
 
-def _scenarios_line(root_abs: str, name: str) -> str:
-    """Where the feature's promise is written, and the scenarios in it."""
-    path = os.path.join(root_abs, SCENARIOS_DIR, name + ".feature")
-    try:
-        with open(path, encoding="utf-8") as f:
-            names = _SCENARIO.findall(f.read())
-    except OSError:
-        return f"scenarios: (none) — add them with `heimdall e2e new {name}/<name>`"
-    return f"scenarios: `{SCENARIOS_DIR}/{name}.feature` — " + (", ".join(names) if names else "(none yet)")
-
-
-def _budget_used(root_abs: str, budget: int) -> tuple[dict[str, int], str | None]:
-    """Each feature's EIT100 working set as a percentage of ``budget``, rounded to 10: the headroom an agent
-    should know before it adds code, coarse enough that the generated line rarely changes. When Eitri cannot
-    measure the tree, no percentages and the reason, for the map to report; the budget lines are then left
-    out, and ``eitri check`` names the problem itself."""
-    try:
-        from eitri.context_budget import measure
-        from eitri.core import EitriConfig
-        from eitri.project import discover_slices, find_kernel_dir, find_slices_dir
-    except ImportError as e:
-        return {}, f"Eitri is not installed ({e})"
-    from pathlib import Path
-
-    root = Path(root_abs)
-    config = EitriConfig.read(root, token_budget=budget)
-    try:
-        sd = find_slices_dir(root, config)
-        slices = discover_slices(sd) if sd is not None else []
-        kernel = find_kernel_dir(root, config, sd)
-        by_name = {s.name: s for s in slices}
-        return {s.name: round(10 * measure(s, by_name, kernel, config).total / budget) * 10 for s in slices}, None
-    except (OSError, ValueError, SyntaxError) as e:
-        return {}, f"Eitri could not measure the features ({e})"
-
-
-def _set_marker(txt: str, name: str, line: str, after: str | None) -> str:
-    """``txt`` with the ``name`` marker holding ``line``: replaced where it is, else inserted after the ``after``
-    marker's line, else appended."""
-    marked = f"<!--heimdall:{name}-->{line}<!--/heimdall:{name}-->"
-    pattern = re.compile(rf"<!--heimdall:{name}-->.*?<!--/heimdall:{name}-->", re.S)
-    if pattern.search(txt):
-        return pattern.sub(_const(marked), txt)
-    anchor = re.search(rf"<!--/heimdall:{after}-->\n", txt) if after else None
-    if anchor:
-        return txt[: anchor.end()] + marked + "\n" + txt[anchor.end() :]
-    return txt.rstrip() + "\n" + marked + "\n"
-
-
-def _write_feature_agents(path: str, name: str, lines: list[tuple[str, str]]) -> None:
-    """The feature's AGENTS.md with each generated ``(marker, line)`` in place, in order; the rest is the author's."""
-    if os.path.isfile(path):
-        with open(path, encoding="utf-8") as f:
-            txt = f.read()
-    else:
-        txt = f"# {name}\n"
-    previous = None
-    for marker, line in lines:
-        txt = _set_marker(txt, marker, line, previous)
-        previous = marker
-    with open(path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(txt)
-
-
-@dataclass(frozen=True)
-class _Features:
-    """What the map knows of each feature: its dependencies (in discovery order), its routes, and its budget
-    share where Eitri could measure it."""
-
-    discovered: list[tuple[str, list[str]]]
-    routes: dict[str, list[str]]
-    used: dict[str, int]
-
-
-def _root_map_block(lay: _Layout, cwd: str, budget: int, feats: _Features) -> str:
+def _root_map_block(
+    kernel_dir: str,
+    slices_dir: str,
+    routes_dir: str,
+    budget: int,
+    discovered: list[tuple[str, list[str]]],
+    fan_in: dict[str, int],
+    routes: dict[str, list[str]],
+) -> str:
     """The generated slice table in the root AGENTS.md — the feedforward map in prose form."""
-    slices_dir = _rel(lay.slices_dir, cwd)
-    fan_in = _fan_in(feats.discovered)
     lines = [
         "<!--heimdall:map-->",
-        f"features: `{slices_dir}` · kernel: `{_rel(lay.kernel_dir, cwd)}` · routes: `{_rel(lay.routes_dir, cwd)}/<feature>.py` · budget: {budget} tokens per feature · regenerate with `heimdall map --root .`",
+        f"features: `{slices_dir}` · kernel: `{kernel_dir}` · routes: `{routes_dir}/<feature>.py` · budget: {budget} tokens per feature · regenerate with `heimdall map --root .`",
         "",
-        "| feature | depends on | fan-in | budget used | contract | routes |",
-        "|---|---|---|---|---|---|",
+        "| feature | depends on | fan-in | contract | routes |",
+        "|---|---|---|---|---|",
     ]
-    for name, deps in feats.discovered:
-        rs = "<br>".join(f"`{r}`" for r in feats.routes[name]) if feats.routes[name] else "(none)"
-        share = f"≈{feats.used[name]}%" if name in feats.used else "?"
-        lines.append(
-            f"| {name} | {', '.join(deps) if deps else '(none)'} | {fan_in[name]} | {share} | `{slices_dir}/{name}/contract/` | {rs} |"
-        )
+    for name, deps in discovered:
+        rs = "<br>".join(f"`{r}`" for r in routes[name]) if routes[name] else "(none)"
+        lines.append(f"| {name} | {', '.join(deps) if deps else '(none)'} | {fan_in[name]} | `{slices_dir}/{name}/contract/` | {rs} |")
     lines.append("<!--/heimdall:map-->")
     return "\n".join(lines)
 
@@ -247,157 +173,113 @@ def _read_deps(manifest: str) -> list[str]:
     return [str(d) for d in deps] if isinstance(deps, list) else []
 
 
-class _UsageError(Exception):
-    pass
+def run(args: list[str], stdout: TextIO, stderr: TextIO, cwd: str) -> int:
+    root: str | None = None
+    budget = 15000
+    kernel_name: str | None = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--root" and i + 1 < len(args):
+            root = args[i + 1]
+            i += 2
+        elif a == "--budget" and i + 1 < len(args):
+            try:
+                budget = int(args[i + 1])
+            except ValueError:
+                stderr.write(USAGE + "\n")
+                return 2
+            i += 2
+        elif a == "--kernel" and i + 1 < len(args):
+            kernel_name = args[i + 1]
+            i += 2
+        else:
+            stderr.write(USAGE + "\n")
+            return 2
+    if root is None:
+        stderr.write(USAGE + "\n")
+        return 2
 
-
-class _UnreadableManifest(Exception):
-    def __init__(self, path: str, reason: Exception) -> None:
-        super().__init__(f"{path}: {reason}")
-        self.path, self.reason = path, reason
-
-
-@dataclass(frozen=True)
-class _Options:
-    root: str
-    budget: int = 15000
-    kernel: str | None = None
-
-
-def _parse(args: list[str]) -> _Options:
-    """``--root`` (required), ``--budget`` and ``--kernel``; anything else is a usage error."""
-    values: dict[str, str] = {}
-    for i in range(0, len(args), 2):
-        if args[i] not in ("--root", "--budget", "--kernel") or i + 1 >= len(args):
-            raise _UsageError
-        values[args[i][2:]] = args[i + 1]
-    if "root" not in values:
-        raise _UsageError
-    try:
-        budget = int(values.get("budget", "15000"))
-    except ValueError:
-        raise _UsageError from None
-    if budget <= 0:
-        raise _UsageError
-    return _Options(values["root"], budget, values.get("kernel"))
-
-
-@dataclass(frozen=True)
-class _Layout:
-    """Where everything is, as absolute paths, from ``[tool.heimdall]`` or the defaults."""
-
-    root: str
-    slices_dir: str
-    app_dir: str
-    kernel_dir: str
-    kernel: str
-    routes_dir: str
-    shared: tuple[str, ...]
-
-
-def _layout(root_abs: str, kernel_name: str | None) -> _Layout | None:
+    root_abs = os.path.abspath(os.path.join(cwd, root))
     section = _heimdall_section(root_abs)
+
     features = _path_key(section, "features")
     slices_dir = _first_dir(root_abs, *([features] if features else []), "src/pfa/features", "pfa/features", "src/slices", "slices")
     if slices_dir is None:
-        return None
-    app_key, kernel_key, routes_key = (_path_key(section, k) for k in ("app", "kernel", "routes"))
+        stderr.write(f"no features/ under {root}\n")
+        return 1
+    app_key = _path_key(section, "app")
     app_dir = os.path.join(root_abs, app_key) if app_key else os.path.dirname(slices_dir)
+    kernel_key = _path_key(section, "kernel")
     kernel_dir = os.path.join(root_abs, kernel_key) if kernel_key else os.path.join(os.path.dirname(slices_dir), "kernel")
-    routes_dir = os.path.join(root_abs, routes_key) if routes_key else os.path.join(app_dir, "api", "routes")
     kernel = kernel_name or os.path.basename(kernel_dir)
-    return _Layout(root_abs, slices_dir, app_dir, kernel_dir, kernel, routes_dir, tuple(_shared_packages(section)))
+    routes_key = _path_key(section, "routes")
+    routes_dir = os.path.join(root_abs, routes_key) if routes_key else os.path.join(app_dir, "api", "routes")
+    shared = _shared_packages(section)
 
-
-def _discover(lay: _Layout) -> tuple[list[tuple[str, list[str]]], dict[str, list[str]]]:
-    """Each feature with a manifest, its dependencies (the kernel left out) and its routes."""
     discovered: list[tuple[str, list[str]]] = []
     routes: dict[str, list[str]] = {}
-    for name in sorted(os.listdir(lay.slices_dir)):
-        manifest = os.path.join(lay.slices_dir, name, MANIFEST)
+    for name in sorted(os.listdir(slices_dir)):
+        manifest = os.path.join(slices_dir, name, MANIFEST)
         if not os.path.isfile(manifest):
             continue
         try:
-            refs = sorted({d for d in _read_deps(manifest) if d != lay.kernel})
+            refs = sorted({d for d in _read_deps(manifest) if d != kernel})
         except (OSError, ValueError) as e:
-            raise _UnreadableManifest(manifest, e) from None
+            stderr.write(f"heimdall map: unreadable {_rel(manifest, cwd)}: {e}\n")
+            return 1
         discovered.append((name, refs))
-        routes[name] = _routes_of(os.path.join(lay.routes_dir, name + ".py"))
-    return discovered, routes
+        routes[name] = _routes_of(os.path.join(routes_dir, name + ".py"))
 
+        agents = os.path.join(slices_dir, name, "AGENTS.md")
+        dep_line = f"<!--heimdall:deps-->depends on: {', '.join(refs) if refs else '(none)'} + {kernel}<!--/heimdall:deps-->"
+        routes_line = f"<!--heimdall:routes-->routes: {', '.join(routes[name]) if routes[name] else '(none)'}<!--/heimdall:routes-->"
+        if os.path.isfile(agents):
+            with open(agents, encoding="utf-8") as f:
+                txt = f.read()
+            if "<!--heimdall:deps-->" in txt:
+                txt = _DEPS.sub(_const(dep_line), txt)
+            else:
+                txt = txt.rstrip() + "\n" + dep_line + "\n"
+            if "<!--heimdall:routes-->" in txt:
+                txt = _ROUTES.sub(_const(routes_line), txt)
+            else:
+                txt = txt.replace(dep_line, dep_line + "\n" + routes_line, 1)
+        else:
+            txt = f"# {name}\n{dep_line}\n{routes_line}\n"
+        with open(agents, "w", encoding="utf-8", newline="\n") as f:
+            f.write(txt)
 
-def _feature_lines(lay: _Layout, feats: _Features, name: str, budget: int) -> list[tuple[str, str]]:
-    """The generated ``(marker, line)`` pairs of one feature's AGENTS.md, in order."""
-    refs, routes = dict(feats.discovered)[name], feats.routes[name]
-    lines = [
-        ("deps", f"depends on: {', '.join(refs) if refs else '(none)'} + {lay.kernel}"),
-        ("routes", f"routes: {', '.join(routes) if routes else '(none)'}"),
-        ("scenarios", _scenarios_line(lay.root, name)),
-    ]
-    if name in feats.used:
-        lines.append(("budget", f"budget: ≈{feats.used[name]}% of {budget:,} tokens used — `eitri check` has the exact count"))
-    return lines
-
-
-def _fan_in(discovered: list[tuple[str, list[str]]]) -> dict[str, int]:
     fan_in = {name: 0 for name, _ in discovered}
     for _, deps in discovered:
         for d in deps:
             if d in fan_in:
                 fan_in[d] += 1
-    return fan_in
 
-
-def _map_doc(lay: _Layout, cwd: str, budget: int, discovered: list[tuple[str, list[str]]], routes: dict[str, list[str]]) -> dict[str, Any]:
-    fan_in = _fan_in(discovered)
     doc: dict[str, Any] = {
-        "kernel": lay.kernel,
-        "kernel_dir": _rel(lay.kernel_dir, cwd),
-        "slices_dir": _rel(lay.slices_dir, cwd),
-        "app_dir": _rel(lay.app_dir, cwd),
-        "routes_dir": _rel(lay.routes_dir, cwd),
+        "kernel": kernel,
+        "kernel_dir": _rel(kernel_dir, cwd),
+        "slices_dir": _rel(slices_dir, cwd),
+        "app_dir": _rel(app_dir, cwd),
+        "routes_dir": _rel(routes_dir, cwd),
         "slices": {
             name: {
-                "path": _rel(os.path.join(lay.slices_dir, name), cwd),
+                "path": _rel(os.path.join(slices_dir, name), cwd),
                 "depends_on": deps,
                 "budget": budget,
                 "fan_in": fan_in[name],
-                "routes": routes[name],
             }
             for name, deps in discovered
         },
     }
-    if lay.shared:
-        doc["shared"] = list(lay.shared)
-    return doc
-
-
-def run(args: list[str], stdout: TextIO, stderr: TextIO, cwd: str) -> int:
-    try:
-        opts = _parse(args)
-    except _UsageError:
-        stderr.write(USAGE + "\n")
-        return 2
-    lay = _layout(os.path.abspath(os.path.join(cwd, opts.root)), opts.kernel)
-    if lay is None:
-        stderr.write(f"no features/ under {opts.root}\n")
-        return 1
-    try:
-        discovered, routes = _discover(lay)
-    except _UnreadableManifest as e:
-        stderr.write(f"heimdall map: unreadable {_rel(e.path, cwd)}: {e.reason}\n")
-        return 1
-    used, unmeasured = _budget_used(lay.root, opts.budget)
-    if unmeasured:
-        stderr.write(f"heimdall map: budget lines left out: {unmeasured}\n")
-    feats = _Features(discovered, routes, used)
-    for name, _ in discovered:
-        _write_feature_agents(os.path.join(lay.slices_dir, name, "AGENTS.md"), name, _feature_lines(lay, feats, name, opts.budget))
-    doc = _map_doc(lay, cwd, opts.budget, discovered, routes)
+    if shared:
+        doc["shared"] = shared
     heimdall_dir = os.path.join(cwd, ".heimdall")
     os.makedirs(heimdall_dir, exist_ok=True)
     with open(os.path.join(heimdall_dir, "map.json"), "w", encoding="utf-8", newline="\n") as f:
         json.dump(doc, f, indent=2)
-    _update_root_agents(cwd, _root_map_block(lay, cwd, opts.budget, feats))
+    _update_root_agents(
+        cwd, _root_map_block(_rel(kernel_dir, cwd), _rel(slices_dir, cwd), _rel(routes_dir, cwd), budget, discovered, fan_in, routes)
+    )
     stdout.write(f"heimdall map: {len(discovered)} features -> .heimdall/map.json; AGENTS.md deps regenerated\n")
     return 0

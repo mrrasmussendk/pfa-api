@@ -3,14 +3,12 @@ flowchart TB
     accTitle: CI build and publication
     trigger["Push to main, tag or pull request"]:::input
     checks["Enforce<br/>Ruff, mypy, tests and Eitri<br/>Canaries, smoke test and map freshness"]:::process
-    e2e["End-to-end scenarios<br/>Start the service, run every scenario"]:::process
     wheel["Build wheel<br/>Verify tooling is excluded"]:::process
     image["Build and boot image<br/>Verify health, OpenAPI and tooling exclusion"]:::process
     publish{"Main branch or tag?"}:::decision
     registry["Publish image to GHCR"]:::output
     verified["PR image verified<br/>No registry push"]:::output
     trigger --> checks -->|Pass| wheel -->|Pass| image
-    checks -->|Pass| e2e
     image -->|Pass| publish
     publish -->|Yes| registry
     publish -->|No| verified

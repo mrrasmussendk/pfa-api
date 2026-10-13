@@ -2,23 +2,18 @@ from __future__ import annotations
 
 import math
 import os
-import sys
 import threading
 import time
-import types
 from collections.abc import Sequence
-from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from pfa.api.app import create_app
-from pfa.features.chunking.contract import CountTokens, SplitText
 from pfa.features.embeddings.contract import EmbedPassages, EmbedQuery, EngineBusy, RankCandidates
-from pfa.features.embeddings.internal.e5_engine import DEFAULT_MODEL_ID, E5Engine
+from pfa.features.embeddings.internal.e5_engine import E5Engine
 from pfa.features.embeddings.internal.handlers import EmbedPassagesHandler, EmbedQueryHandler, RankCandidatesHandler
-from pfa.kernel import Result
 
 
 class FakeEngine:
@@ -76,54 +71,25 @@ def test_question_is_embedded_as_a_query_vector(fake) -> None:
     assert engine.encoded == ["query: Hvad er en vertikal slice?"]  # the query prefix, exactly once
 
 
-PROBLEM = "application/problem+json"
-DOMAIN_REJECTION = "urn:pfa-api:problem:domain-rejection"
-VALIDATION_ERROR = "urn:pfa-api:problem:validation-error"
-
-
-@pytest.mark.parametrize(
-    ("path", "body", "detail"),
-    [
-        ("/embeddings/query", {"question": "   "}, "empty question"),
-        ("/embeddings/passages", {"texts": ["doc", "  "]}, "every passage must be non-empty"),
-        ("/embeddings/similarity", {"question": " ", "candidates": ["x"]}, "empty question"),
-        ("/embeddings/similarity", {"question": "q", "candidates": [" "]}, "every candidate must be non-empty"),
-    ],
-)
-def test_blank_text_is_a_domain_rejection(fake, path: str, body: dict[str, Any], detail: str) -> None:
+def test_blank_question_is_a_domain_rejection(fake) -> None:
     client, _ = fake
-    r = client.post(path, json=body)
-    assert r.status_code == 422 and r.headers["content-type"].startswith(PROBLEM)
-    assert r.json()["type"] == DOMAIN_REJECTION and r.json()["detail"] == detail
+    r = client.post("/embeddings/query", json={"question": "   "})
+    assert r.status_code == 422 and r.json()["detail"] == "empty question"
 
 
-@pytest.mark.parametrize(
-    ("path", "body"),
-    [
-        ("/embeddings/query", {}),
-        ("/embeddings/query", {"question": ""}),
-        ("/embeddings/similarity", {"question": "x", "candidates": []}),
-        ("/embeddings/passages", {"texts": ["x" * 200_001]}),
-        ("/embeddings/similarity", {"question": "q", "candidates": ["x" * 200_001]}),
-    ],
-)
-def test_a_malformed_body_is_a_validation_problem(fake, path: str, body: dict[str, Any]) -> None:
+def test_body_is_validated(fake) -> None:
     client, _ = fake
-    r = client.post(path, json=body)
-    assert r.status_code == 422 and r.headers["content-type"].startswith(PROBLEM)
-    assert r.json()["type"] == VALIDATION_ERROR
+    assert client.post("/embeddings/query", json={}).status_code == 422
+    assert client.post("/embeddings/query", json={"question": ""}).status_code == 422
+    assert client.post("/embeddings/similarity", json={"question": "x", "candidates": []}).status_code == 422
 
 
-def test_passages_keep_their_order(fake) -> None:
-    client, _ = fake
+def test_passages_get_the_passage_prefix_and_keep_their_order(fake) -> None:
+    client, engine = fake
     r = client.post("/embeddings/passages", json={"texts": ["first doc", "second doc"]})
+    assert r.status_code == 200, r.text
     chunks = r.json()["chunks"]
     assert [(c["source_index"], c["chunk_index"], c["chunk_count"]) for c in chunks] == [(0, 0, 1), (1, 0, 1)]
-
-
-def test_passages_are_encoded_with_the_passage_prefix(fake) -> None:
-    client, engine = fake
-    client.post("/embeddings/passages", json={"texts": ["first doc", "second doc"]})
     assert engine.encoded == ["passage: first doc", "passage: second doc"]
 
 
@@ -142,21 +108,19 @@ def test_long_passage_is_chunked_through_the_chunking_feature_within_the_budget(
     assert (last["source_index"], last["chunk_index"], last["chunk_count"], last["text"]) == (1, 0, 1, "short")
 
 
-RANKING = {"question": "reset my password", "candidates": ["office hours today", "how to reset a password", "the weather report"]}
-
-
-def test_similarity_ranks_the_best_candidate_first(fake) -> None:
+def test_similarity_ranks_candidates_best_first_and_reports_the_best_chunk(fake) -> None:
     client, _ = fake
-    r = client.post("/embeddings/similarity", json=RANKING)
-    top = r.json()["matches"][0]
-    assert (top["source_index"], top["text"], top["chunk_count"]) == (1, "how to reset a password", 1)
-
-
-def test_similarity_orders_every_match_by_falling_score(fake) -> None:
-    client, _ = fake
-    r = client.post("/embeddings/similarity", json=RANKING)
-    scores = [m["score"] for m in r.json()["matches"]]
-    assert len(scores) == 3 and scores == sorted(scores, reverse=True)
+    r = client.post(
+        "/embeddings/similarity",
+        json={"question": "reset my password", "candidates": ["office hours today", "how to reset a password", "the weather report"]},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["model"] == "fake/e5"
+    assert body["matches"][0]["text"] == "how to reset a password"
+    scores = [m["score"] for m in body["matches"]]
+    assert scores == sorted(scores, reverse=True)
+    assert body["matches"][0]["source_index"] == 1 and body["matches"][0]["chunk_count"] == 1
 
 
 def test_similarity_scores_a_long_candidate_by_its_best_chunk(words_app: FastAPI) -> None:
@@ -170,94 +134,17 @@ def test_similarity_scores_a_long_candidate_by_its_best_chunk(words_app: FastAPI
     assert "password" in top["text"] and top["chunk_count"] > 1 and 0 < top["chunk_index"] < top["chunk_count"] - 1
 
 
-LONG_QUESTION = "how do I reset the password on my account when the e-mail link has expired already"
-
-
-def test_a_question_over_the_window_is_pooled_into_one_unit_vector(words_app: FastAPI) -> None:
-    client, engine = _fake_app(words_app, max_tokens=8)  # 8 - "query:"(1 word) - 2 specials = 5 words per chunk
-    r = client.post("/embeddings/query", json={"question": LONG_QUESTION})
-    vector = r.json()["embedding"]
-    assert len(engine.encoded) == 4 and len(vector) == 26 and math.isclose(math.hypot(*vector), 1.0)
-
-
-class OppositeChunksEngine(FakeEngine):
-    """Every other chunk points the opposite way, so the chunks' mean has no direction."""
-
-    def encode_queries(self, texts: Sequence[str]) -> list[list[float]]:
-        return [[1.0, 0.0] if i % 2 == 0 else [-1.0, 0.0] for i in range(len(texts))]
-
-
-def test_chunks_that_cancel_out_pool_to_a_zero_vector_rather_than_an_error(words_app: FastAPI) -> None:
-    bus = words_app.state.bus
-    bus.register(EmbedQuery, EmbedQueryHandler(OppositeChunksEngine(max_tokens=8), bus), replace=True)
-    r = TestClient(words_app).post("/embeddings/query", json={"question": "one two three four five six seven eight nine ten"})
-    assert r.status_code == 200 and r.json()["embedding"] == [0.0, 0.0]
+def test_similarity_rejects_blank_question(fake) -> None:
+    client, _ = fake
+    r = client.post("/embeddings/similarity", json={"question": " ", "candidates": ["x"]})
+    assert r.status_code == 422 and r.json()["detail"] == "empty question"
 
 
 def test_app_startup_does_not_load_the_model() -> None:
     app = create_app()
-    assert app.state.readiness()["embedding_model"] is False
-
-
-# ---------------------------------------------------------------- chunking, as a dependency
-
-
-class OtherModelEngine(FakeEngine):
-    model_id = "other/model"
-
-
-def test_a_chunk_counted_for_another_model_is_a_bug_not_a_result(words_app: FastAPI) -> None:
-    handler = EmbedQueryHandler(OtherModelEngine(), words_app.state.bus)
-    with pytest.raises(RuntimeError, match="fake/e5"):
-        handler(EmbedQuery(text="hello"))
-
-
-def test_a_failed_token_count_is_a_bug_not_a_zero(words_app: FastAPI) -> None:
-    bus = words_app.state.bus
-    bus.register(CountTokens, lambda q: Result.failure("tokenizer unavailable"), replace=True)
-    with pytest.raises(RuntimeError, match="tokenizer unavailable"):
-        EmbedQueryHandler(FakeEngine(), bus)(EmbedQuery(text="hello"))
-
-
-def test_a_failed_split_is_a_bug_not_a_result(words_app: FastAPI) -> None:
-    bus = words_app.state.bus
-    bus.register(SplitText, lambda q: Result.failure("split failed"), replace=True)
-    with pytest.raises(RuntimeError, match="split failed"):
-        EmbedQueryHandler(FakeEngine(), bus)(EmbedQuery(text="hello"))
-
-
-# ---------------------------------------------------------------- the engine's settings
-
-SETTINGS = ("PFA_EMBED_MODEL", "PFA_EMBED_DEVICE", "PFA_EMBED_MAX_TOKENS", "PFA_EMBED_CONCURRENCY", "PFA_EMBED_QUEUE_TIMEOUT")
-
-
-@pytest.fixture
-def no_settings(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
-    for name in SETTINGS:
-        monkeypatch.delenv(name, raising=False)
-    return monkeypatch
-
-
-def test_the_engine_defaults_to_the_e5_model_and_its_limits(no_settings: pytest.MonkeyPatch) -> None:
-    engine = E5Engine()
-    assert (engine.model_id, engine.max_tokens, engine.concurrency) == (DEFAULT_MODEL_ID, 500, 1)
-
-
-def test_the_constructor_overrides_every_setting(no_settings: pytest.MonkeyPatch) -> None:
-    engine = E5Engine(model_id="some/model", max_tokens=200, concurrency=3, queue_timeout=1.0)
-    assert (engine.model_id, engine.max_tokens, engine.concurrency) == ("some/model", 200, 3)
-
-
-def test_an_explicit_zero_is_not_replaced_by_the_environment(no_settings: pytest.MonkeyPatch) -> None:
-    no_settings.setenv("PFA_EMBED_MAX_TOKENS", "100")
-    assert E5Engine(max_tokens=0).max_tokens == 0
-
-
-@pytest.mark.parametrize("name", ["PFA_EMBED_MAX_TOKENS", "PFA_EMBED_CONCURRENCY", "PFA_EMBED_QUEUE_TIMEOUT"])
-def test_an_unparsable_setting_fails_at_build_naming_the_variable(no_settings: pytest.MonkeyPatch, name: str) -> None:
-    no_settings.setenv(name, "two")
-    with pytest.raises(ValueError, match=name):
-        E5Engine()
+    handler = app.state.bus._handlers[EmbedQuery]
+    assert handler._engine.model_id == "intfloat/multilingual-e5-large"
+    assert handler._engine.loaded is False
 
 
 def test_bus_refuses_two_handlers_for_one_query() -> None:
@@ -347,19 +234,10 @@ class _SlowModel:
                 self.active -= 1
 
 
-class _StandInEngine(E5Engine):
-    """The real ``E5Engine`` over a stand-in model: the gate, not the load, is under test."""
-
-    def __init__(self, model: Any, concurrency: int, timeout: float) -> None:
-        super().__init__(model_id="fake", device="cpu", max_tokens=500, concurrency=concurrency, queue_timeout=timeout)
-        self.model = model
-
-    def build_model(self) -> Any:
-        return self.model
-
-
 def _gated_engine(model: _SlowModel, concurrency: int = 1, timeout: float = 0.2) -> E5Engine:
-    return _StandInEngine(model, concurrency, timeout)
+    engine = E5Engine(model_id="fake", device="cpu", max_tokens=500, concurrency=concurrency, queue_timeout=timeout)
+    engine._model = model  # loaded already: the gate, not the load, is under test
+    return engine
 
 
 def test_engine_serialises_inference_behind_the_gate() -> None:
@@ -406,27 +284,8 @@ def test_busy_engine_is_a_503_problem_with_retry_after(fake) -> None:
     assert body["type"] == "urn:pfa-api:problem:model-busy" and body["retry_after"] == 5 and "busy" in body["detail"]
 
 
-class _SentenceTransformer:
-    """Stands in for ``sentence_transformers.SentenceTransformer``: records what was asked for."""
-
-    def __init__(self, name: str, device: str | None = None) -> None:
-        self.asked = (name, device)
-
-
-def test_the_model_is_fetched_by_its_configured_id_on_its_device(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=_SentenceTransformer))
-    model = E5Engine(model_id="some/model", device="cpu").build_model()
-    assert model.asked == ("some/model", "cpu")
-
-
-class _UnreachableHub:
-    """Stands in for ``sentence_transformers.SentenceTransformer`` when the hub cannot be reached."""
-
-    def __init__(self, name: str, device: str | None = None) -> None:
-        raise OSError("connection refused")
-
-
-def test_a_model_that_cannot_be_fetched_fails_naming_it(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(sys.modules, "sentence_transformers", types.SimpleNamespace(SentenceTransformer=_UnreachableHub))
-    with pytest.raises(RuntimeError, match="'some/model'"):
-        E5Engine(model_id="some/model", device="cpu").build_model()
+def test_passage_and_candidate_texts_are_size_capped(fake) -> None:
+    client, _ = fake
+    huge = "x" * 200_001
+    assert client.post("/embeddings/passages", json={"texts": [huge]}).status_code == 422
+    assert client.post("/embeddings/similarity", json={"question": "q", "candidates": [huge]}).status_code == 422

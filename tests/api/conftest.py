@@ -16,7 +16,7 @@ def client() -> TestClient:
 
 # ---------------------------------------------------------------- chunking, faked through its contract
 
-FAKE_TOKENIZER = "fake/e5"  # counts for the fake model: embeddings checks chunking counted for its model
+FAKE_TOKENIZER = "fake/whitespace"
 
 
 def _words(text: str) -> int:
