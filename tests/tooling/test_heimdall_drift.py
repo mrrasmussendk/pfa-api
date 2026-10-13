@@ -54,9 +54,10 @@ def test_drift_skips_malformed_telemetry_lines(repo: TempRepo) -> None:
     repo.hook(TempRepo.ev("s1", "Read", "src/pfa/features/kvad/internal/kvad_engine.py"))
     with open(repo.root / ".heimdall" / "telemetry.jsonl", "a", encoding="utf-8") as f:
         f.write("{garbage\n")
-    code, stdout, _ = repo.run("", "drift")
+    code, stdout, stderr = repo.run("", "drift")
     assert code == 0
     assert "s1        kvad                            1     0      0%" in stdout
+    assert stderr == "heimdall drift: left out 1 telemetry line(s) that are not records\n"
 
 
 def test_drift_counts_shared_package_reads_as_in_bounds(repo: TempRepo) -> None:
@@ -86,3 +87,65 @@ def test_drift_treats_a_slices_route_module_as_the_slice_and_the_app_package_as_
     assert "s1        kvad                            4     1     25%" in stdout
     assert '"kind": "app"' in repo.telemetry and '"kind": "slice:kvad"' not in repo.telemetry
     assert '"event": "edit", "path": "src/pfa/api/routes/kvad.py", "slice": "kvad"' in repo.telemetry
+
+
+def test_one_session_s_line_names_the_reads_outside_its_working_set(repo: TempRepo) -> None:
+    _smoke_scenario(repo)
+
+    code, stdout, _ = repo.run("", "drift", "--session", "s2")
+
+    assert code == 0
+    assert stdout == (
+        "heimdall drift: 1 of 2 reads this session (50%) fell outside the working set: src/pfa/features/rune/internal/rune_engine.py"
+        " — if this feature keeps needing them, its seam or a contract is missing something\n"
+    )
+
+
+def test_a_session_inside_its_working_set_says_so_without_a_hint(repo: TempRepo) -> None:
+    _smoke_scenario(repo)
+
+    _, stdout, _ = repo.run("", "drift", "--session", "s1")
+
+    assert stdout == "heimdall drift: 0 of 3 reads this session (0%) fell outside the working set\n"
+
+
+def test_a_session_with_no_telemetry_has_no_reads(repo: TempRepo) -> None:
+    _smoke_scenario(repo)
+
+    _, stdout, _ = repo.run("", "drift", "--session", "nobody")
+
+    assert stdout == "heimdall drift: no reads recorded this session\n"
+
+
+def test_drift_refuses_arguments_it_does_not_know(repo: TempRepo) -> None:
+    _smoke_scenario(repo)
+
+    code, _, stderr = repo.run("", "drift", "--everything")
+
+    assert code == 2 and "usage: heimdall drift" in stderr
+
+
+def test_a_session_line_names_eight_out_of_bounds_paths_and_counts_the_rest(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    repo.hook(TempRepo.ev("s3", "Edit", "src/pfa/features/kvad/internal/kvad_engine.py"))
+    for i in range(9):
+        repo.hook(TempRepo.ev("s3", "Read", f"src/pfa/features/rune/internal/r{i}.py"))
+
+    _, stdout, _ = repo.run("", "drift", "--session", "s3")
+
+    named = ", ".join(f"src/pfa/features/rune/internal/r{i}.py" for i in range(8))
+    assert f"9 of 9 reads this session (100%) fell outside the working set: {named} and 1 more — " in stdout
+
+
+def test_a_session_at_or_under_the_rule_of_thumb_names_its_stray_reads_without_the_hint(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    repo.hook(TempRepo.ev("s4", "Edit", "src/pfa/features/kvad/internal/kvad_engine.py"))
+    for _ in range(4):
+        repo.hook(TempRepo.ev("s4", "Read", "src/pfa/features/kvad/internal/kvad_engine.py"))
+    repo.hook(TempRepo.ev("s4", "Read", "src/pfa/features/rune/internal/rune_engine.py"))
+
+    _, stdout, _ = repo.run("", "drift", "--session", "s4")
+
+    assert stdout == (
+        "heimdall drift: 1 of 5 reads this session (20%) fell outside the working set: src/pfa/features/rune/internal/rune_engine.py\n"
+    )

@@ -10,7 +10,7 @@ version = "0.1.0"
 description = "Eitri (slice walls + context budget), Heimdall (agent hook harness) and Brokkr (token estimator) for the PFA API."
 requires-python = ">=3.10"
 license = { text = "MIT" }
-dependencies = []
+dependencies = ["anthropic>=1.13"]  # heimdall review: Claude verifies the judge's doubts
 
 [project.scripts]
 eitri = "eitri.cli:main"

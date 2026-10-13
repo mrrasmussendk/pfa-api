@@ -111,7 +111,7 @@ Severity: info for everything except `/health` and `/ready`, which log at debug 
 
 ### The inference line (`MSGID=encode`)
 
-`E5Engine._encode` measures the gate wait and the encode separately and logs at `pfa.embeddings.engine`:
+`E5Engine._encode` measures the gate wait and the encode separately and logs at its module's logger, `pfa.features.embeddings.internal.e5_engine`:
 
 | SD-PARAM | Example | Note |
 |---|---|---|
@@ -122,7 +122,7 @@ Severity: info for everything except `/health` and `/ready`, which log at debug 
 | `encode_ms` | `388.0` | Time inside `model.encode`. |
 | `device` | `cpu` | |
 
-The one-time load logs `MSGID=load` with `model_id`, `device`, `max_seq_length` and `load_ms` at info. A gate timeout logs `MSGID=busy` at warning with `wait_ms` before raising `EngineBusy`; the route then answers `503`.
+The one-time load logs `MSGID=load` with `model_id`, `device`, `max_seq_length` and `load_ms` at info; the chunking tokenizer's one-time load logs the same `MSGID` with `tokenizer_id` and `load_ms`. A gate timeout logs `MSGID=busy` at warning with `wait_ms` before raising `EngineBusy`; the route then answers `503`.
 
 ### Errors
 

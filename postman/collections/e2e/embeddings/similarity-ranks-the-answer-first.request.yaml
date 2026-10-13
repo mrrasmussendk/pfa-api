@@ -1,0 +1,27 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/embeddings/similarity'
+order: 1000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "question": "Hvor høj er Eiffeltårnet?",
+      "candidates": [
+        "Bread is baked from flour, water, salt and yeast.",
+        "The Eiffel Tower is about 330 metres tall."
+      ]
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test("then: I receive 200", () => pm.response.to.have.status(200));
+      const body = pm.response.json();
+      pm.test("then: every candidate is scored", () => pm.expect(body.matches).to.have.lengthOf(2));
+      pm.test("then: the answering candidate is ranked first", () => {
+        pm.expect(body.matches[0].source_index).to.eql(1);
+      });

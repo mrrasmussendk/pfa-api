@@ -1,24 +1,19 @@
 # embeddings
 <!--heimdall:deps-->depends on: chunking + kernel<!--/heimdall:deps-->
 <!--heimdall:routes-->routes: POST /embeddings/query, POST /embeddings/passages, POST /embeddings/similarity<!--/heimdall:routes-->
+<!--heimdall:scenarios-->scenarios: `tests/e2e/embeddings.feature` — similarity-ranks-the-answer-first, no-candidates-is-rejected, question-becomes-a-query-vector, documents-become-passage-vectors-in-order<!--/heimdall:scenarios-->
+<!--heimdall:budget-->budget: ≈30% of 15,000 tokens used — `eitri check` has the exact count<!--/heimdall:budget-->
+
+Serves `intfloat/multilingual-e5-large`: text in, a unit-normalised 1024-dim vector out. It embeds; it does not answer.
 
 | ✅ Do | ❌ Don't |
 |---|---|
-| Dispatch chunking messages through its declared contract. | Import or read `features/chunking/internal/` for an embeddings task. |
-| Keep query/passage prefixes inside the engine and respect the token ceiling. | Make callers add model prefixes or rely on silent truncation. |
-| Use fake engines and tokenizers in ordinary tests. | Download or load the real model unless model tests are explicitly enabled. |
-| Keep liveness responsive and use readiness to report model loading. | Make `/health` depend on the model. |
-| Keep the feature HTTP-free; its routes live in `src/pfa/api/routes/embeddings.py`. | Import FastAPI, pydantic, the application or the API anywhere in this folder. |
+| Fit text to the model's window by dispatching `SplitText` / `CountTokens` from `pfa.features.chunking.contract`. | Import or read `features/chunking/internal/`, or rely on the model's silent truncation. |
+| Keep the `query: ` / `passage: ` prefixes inside the engine; callers pick a side by picking the query. | Make callers add model prefixes. |
+| Load the model lazily, outside the inference gate; let `EngineBusy` propagate to the route. | Load it at import or in `create_app()`, or turn `EngineBusy` into a domain result. |
+| Use the fake engine and tokenizer in ordinary tests. | Load the real model unless `PFA_RUN_MODEL_TESTS=1`. |
+| Report model loading through `ready()`. | Make `/health` depend on the model. |
 
-Serves `intfloat/multilingual-e5-large`: text in, unit-normalised 1024-dim vector out. The model **embeds**, it does not answer — a question becomes a query vector to rank passages against.
-
-- **CQRS.** The contract is three queries (`EmbedQuery`, `EmbedPassages`, `RankCandidates`) in `contract/queries.py`, their result types in `contract/results.py`, and `EngineBusy` in `contract/errors.py`. One handler per query in `internal/handlers.py`; `module.py` (feature root) registers them on the bus. The HTTP edge is `src/pfa/api/routes/embeddings.py`: it imports this contract, dispatches a query, never calls a handler. To add a use case: a query dataclass, a result type, a handler, one `bus.register` line, a route in that file.
-- **Chunking is another feature.** The model's window is 512 tokens and it truncates silently. `PFA_EMBED_MAX_TOKENS` (default 500) is the ceiling including the prefix; the handlers dispatch `SplitText` / `CountTokens` from `pfa.features.chunking.contract` on the bus (declared in `feature.json`) to fit text to that budget. Passages come back one result per chunk with `source_index` / `chunk_index` / `chunk_count`; a candidate's similarity score is its best chunk's; a long question is chunked and mean-pooled into one vector.
-- Working set: this folder + `src/pfa/features/chunking/contract/` + `src/pfa/kernel/`, plus `src/pfa/api/routes/embeddings.py` for an HTTP change. Never `src/pfa/features/chunking/internal/`. The model wrapper is `internal/e5_engine.py`; it loads lazily on the first request (2 GB, seconds), never at import or in `create_app()`.
-- e5 needs a prefix per side: `query: ` for questions, `passage: ` for documents. Only the engine knows the prefixes; callers choose the side by choosing the query.
-- Config: `PFA_EMBED_MODEL`, `PFA_EMBED_DEVICE` (`cuda` / `cpu`; default picks CUDA when available), `PFA_EMBED_MAX_TOKENS`, `PFA_EMBED_CONCURRENCY` (encodes at once, default 1), `PFA_EMBED_QUEUE_TIMEOUT` (seconds before `EngineBusy`). Weights: `python tools/download_model.py`.
-- **Concurrency.** Routes are sync `def` (threadpool); the engine serialises `encode` behind a `BoundedSemaphore` so a burst queues instead of running N inferences at once. `EngineBusy` (gate timeout) is infrastructure, not a domain outcome: it is declared in `contract/errors.py`, handlers let it propagate, and the route in `pfa/api` turns it into a `503` `model-busy` problem with `Retry-After`. The one-time load is a separate lock and happens *outside* the gate, so a cold start never holds the inference slot.
-- **Readiness.** `module.py` exposes `ready()` (loaded flag, loads nothing) and `warmup()` (load now); `pfa/application.py` fans them out and the API wires them into `GET /ready` and the `PFA_WARMUP` startup thread. Never make `/health` depend on the model.
-- Tests never load the model: `tests/api/test_embeddings.py` registers the real handlers of both features over a `FakeTokenizer` (whitespace words) and a `FakeEngine` (letter-bag vectors). The real-model tests run only with `PFA_RUN_MODEL_TESTS=1`.
-- ✅ Adding a route: follow [the route guide](../../../harness/guides/adding-a-route.md).
-- ⚠️ The marked dependency and route lines are generated by `heimdall map --root .`. ❌ Do not edit those lines by hand.
+- Working set: this folder, `src/pfa/features/chunking/contract/`, `src/pfa/kernel/`, and `src/pfa/api/routes/embeddings.py` for an HTTP change.
+- Contract: `EmbedQuery`, `EmbedPassages`, `RankCandidates` → their results; `EngineBusy` in `contract/errors.py`.
+- How it chunks, queues and warms up: [docs/architecture.md](../../../../docs/architecture.md) and [docs/service.md](../../../../docs/service.md).

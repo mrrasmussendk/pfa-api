@@ -124,7 +124,7 @@ def test_hook_write_judges_the_whole_file_and_counts_parameters(repo: TempRepo) 
 
 def test_hook_shape_skips_overrides_and_files_outside_the_repo(repo: TempRepo, tmp_path_factory: pytest.TempPathFactory) -> None:
     repo.write_sample_map()
-    path = "src/pfa/kernel/handler.py"
+    path = "src/pfa/api/handler.py"
     override = "class H(Base):\n    def redirect_request(self, req, fp, code, msg, headers, newurl):\n        return None\n"
     repo.write_file(path, override)
     assert repo.hook(TempRepo.ev("s1", "Write", path, content=override)) == (0, "")  # the base class chose that signature
@@ -141,8 +141,36 @@ def test_hook_shape_leaves_tests_other_languages_and_missing_files_alone(repo: T
     repo.write_sample_map()
     repo.write_file("tests/api/test_long.py", SHAPED_SOURCE)
     assert repo.hook(TempRepo.ev("s1", "Write", "tests/api/test_long.py", content=SHAPED_SOURCE)) == (0, "")
-    repo.write_file("src/pfa/kernel/notes.md", SHAPED_SOURCE)
-    assert repo.hook(TempRepo.ev("s1", "Write", "src/pfa/kernel/notes.md", content=SHAPED_SOURCE)) == (0, "")
-    assert repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/kernel/gone.py", new_string="x")) == (0, "")
-    repo.write_file("src/pfa/kernel/broken.py", "def (:\n")
-    assert repo.hook(TempRepo.ev("s1", "Write", "src/pfa/kernel/broken.py", content="def (:\n")) == (0, "")
+    repo.write_file("src/pfa/api/notes.md", SHAPED_SOURCE)
+    assert repo.hook(TempRepo.ev("s1", "Write", "src/pfa/api/notes.md", content=SHAPED_SOURCE)) == (0, "")
+    assert repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/api/gone.py", new_string="x")) == (0, "")
+    repo.write_file("src/pfa/api/broken.py", "def (:\n")
+    assert repo.hook(TempRepo.ev("s1", "Write", "src/pfa/api/broken.py", content="def (:\n")) == (0, "")
+
+
+def test_the_first_kernel_edit_of_a_session_says_what_the_kernel_costs(repo: TempRepo) -> None:
+    repo.write_sample_map()
+
+    code, stderr = repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/kernel/messaging.py"))
+
+    assert code == 2
+    assert "Heimdall: you are editing the kernel: all 2 features load its public surface" in stderr
+    assert "src/pfa/kernel/AGENTS.md" in stderr
+
+
+def test_later_kernel_edits_in_the_session_are_not_interrupted(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/kernel/messaging.py"))
+
+    code, stderr = repo.hook(TempRepo.ev("s1", "Write", "src/pfa/kernel/primitives.py"))
+
+    assert code == 0 and stderr == ""
+
+
+def test_a_kernel_edit_does_not_count_as_a_feature_for_the_cross_slice_warning(repo: TempRepo) -> None:
+    repo.write_sample_map()
+    repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/kernel/messaging.py"))
+
+    code, _ = repo.hook(TempRepo.ev("s1", "Edit", "src/pfa/features/kvad/internal/kvad_engine.py"))
+
+    assert code == 0

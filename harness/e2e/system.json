@@ -1,0 +1,8 @@
+{
+  "start": ["{python}", "-m", "pfa.api"],
+  "port_env": "PFA_PORT",
+  "env": {"PFA_WARMUP": "1"},
+  "ready": "/ready",
+  "ready_seconds": 300,
+  "tools": {"API": "postman"}
+}

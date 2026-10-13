@@ -77,7 +77,7 @@ def test_heimdall_map_regenerates_the_committed_agents_md(fixture_root: Path) ->
 def test_brokkr_canaries_all_bite() -> None:
     r = subprocess.run([sys.executable, str(TOOLS / "brokkr_canary.py")], capture_output=True, text=True, encoding="utf-8", cwd=str(REPO))
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "canary: 10 passed, 0 failed" in r.stdout
+    assert "canary: 11 passed, 0 failed" in r.stdout
 
 
 def test_module_entry_points_run_as_subprocesses(fixture_root: Path) -> None:

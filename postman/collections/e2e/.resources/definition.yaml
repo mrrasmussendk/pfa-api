@@ -1,0 +1,9 @@
+$kind: collection
+name: PFA e2e
+description: |-
+  The BDD scenarios in tests/e2e, one request each: `Scenario: <name>` in tests/e2e/<feature>.feature
+  is run by <feature>/<name>.request.yaml, whose afterResponse tests assert each `then` clause by name.
+  `heimdall e2e` starts the service and overrides base_url with --env-var.
+variables:
+  - key: base_url
+    value: 'http://127.0.0.1:8000'

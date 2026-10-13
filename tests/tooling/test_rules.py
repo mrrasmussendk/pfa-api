@@ -458,3 +458,40 @@ class TestLayout:
             "import importlib\nimportlib.import_module('y')\n", encoding="utf-8"
         )
         assert "EIT002" in [d.id for d in analyze(tmp_path, EitriConfig())]
+
+
+# ---------------------------------------------------------------- EIT007
+
+
+class TestEit007:
+    def test_two_features_that_depend_on_each_other_are_one_cycle(self, project: TempProject) -> None:
+        project.slice("rune", ["kvad"], **{"contract/__init__.py": ""})
+        project.slice("kvad", ["rune"], **{"contract/__init__.py": ""})
+
+        hits = [d for d in project.analyze() if d.id == "EIT007"]
+
+        assert len(hits) == 1 and "kvad → rune → kvad" in hits[0].message
+        assert hits[0].path is not None and hits[0].path.as_posix().endswith("kvad/feature.json")
+
+    def test_a_longer_cycle_names_every_feature_on_it(self, project: TempProject) -> None:
+        project.slice("a", ["b"])
+        project.slice("b", ["c"])
+        project.slice("c", ["a"])
+        project.slice("d", ["a"])
+
+        hits = [d.message for d in project.analyze() if d.id == "EIT007"]
+
+        assert len(hits) == 1 and "a → b → c → a" in hits[0]
+
+    def test_a_feature_that_depends_on_itself_is_a_cycle(self, project: TempProject) -> None:
+        project.slice("rune", ["rune"])
+
+        assert project.errors().count("EIT007") == 1
+
+    def test_a_diamond_is_not_a_cycle(self, project: TempProject) -> None:
+        project.slice("base")
+        project.slice("left", ["base"])
+        project.slice("right", ["base"])
+        project.slice("top", ["left", "right"])
+
+        assert "EIT007" not in project.ids()

@@ -11,6 +11,7 @@ import re
 import threading
 import time
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -158,10 +159,19 @@ class _Model:
         return np.ones((len(texts), 2), dtype="float32")
 
 
+class _StandInEngine(E5Engine):
+    """The real ``E5Engine`` over a stand-in model; its id is the one the fake chunking counts for."""
+
+    def __init__(self, hold: float, concurrency: int, timeout: float) -> None:
+        super().__init__(model_id="fake/e5", device="cpu", max_tokens=500, concurrency=concurrency, queue_timeout=timeout)
+        self.hold = hold
+
+    def build_model(self) -> Any:
+        return _Model(self.hold)
+
+
 def _engine(hold: float = 0.0, concurrency: int = 1, timeout: float = 5.0) -> E5Engine:
-    engine = E5Engine(model_id="fake", device="cpu", max_tokens=500, concurrency=concurrency, queue_timeout=timeout)
-    engine._model = _Model(hold)
-    return engine
+    return _StandInEngine(hold, concurrency, timeout)
 
 
 def test_the_inference_line_sizes_the_work_and_carries_the_requests_trace_id(words_app: FastAPI, stream: _Stream) -> None:

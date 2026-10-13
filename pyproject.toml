@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "PFA API — a FastAPI service built as vertical slices, with the architecture enforced by Eitri and watched by Heimdall."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
 authors = [{ name = "Marc Rasmussen" }]
 dependencies = [
     "fastapi>=0.110",
@@ -24,13 +23,19 @@ dependencies = [
 # Development only. The architecture tooling (Eitri / Heimdall / Brokkr) is a separate,
 # never-deployed package under tools/:  pip install -e . -e ./tools
 # httpx2 is what Starlette's TestClient now expects; plain httpx only raises a deprecation warning.
-dev = ["pytest>=8", "httpx2>=2.0", "ruff>=0.16", "mypy>=2.0"]
+# coverage measures which changed lines the tests run (tools/diff_coverage.py).
+dev = ["pytest>=8", "httpx2>=2.0", "ruff>=0.16", "mypy>=2.0", "coverage>=7.6"]
 
 [project.scripts]
 pfa-api = "pfa.api.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.coverage.run]
+# The application only; relative paths so tools/diff_coverage.py can match them to the diff.
+source = ["src"]
+relative_files = true
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "tools"]
@@ -81,7 +86,7 @@ ignore = [
 "tests/**" = ["T20", "PLW1510", "PLW0108"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["pfa", "eitri", "heimdall", "brokkr"]
+known-first-party = ["pfa", "eitri", "heimdall", "brokkr", "openapi_compat", "diff_coverage", "dependency_audit"]
 
 [tool.ruff.format]
 docstring-code-format = true

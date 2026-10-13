@@ -1,0 +1,29 @@
+$kind: http-request
+method: POST
+url: '{{base_url}}/chunking/split'
+order: 1000
+headers:
+  - key: Content-Type
+    value: application/json
+body:
+  type: json
+  content: |-
+    {
+      "text": "Vertical slices keep a feature in one folder. Its contract is the only door. Consumers dispatch messages on the bus and get a Result back.",
+      "budget": 12
+    }
+scripts:
+  - type: afterResponse
+    language: text/javascript
+    code: |-
+      pm.test("then: I receive 200", () => pm.response.to.have.status(200));
+      const body = pm.response.json();
+      pm.test("then: the text comes back as more than one chunk, in order", () => {
+        pm.expect(body.chunks.length).to.be.above(1);
+        pm.expect(body.chunks[0]).to.match(/^Vertical slices/);
+      });
+      pm.test("then: every chunk is counted at or below the 12-token budget", () => {
+        pm.expect(body.budget).to.eql(12);
+        pm.expect(body.token_counts).to.have.lengthOf(body.chunks.length);
+        body.token_counts.forEach((n) => pm.expect(n).to.be.at.most(12));
+      });

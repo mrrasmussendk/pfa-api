@@ -4,11 +4,13 @@ import io
 import json
 import textwrap
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from eitri import EitriConfig, analyze
 from heimdall.app import run as heimdall_run
+from heimdall.commands.e2e import Scenario
 
 # One sample of each shape the hook's sensor and the review's judge are asked about.
 LONG_FUNCTION = "def long_one():\n" + "\n".join(f"    x{i} = {i}" for i in range(44)) + "\n    return x0\n"  # 46 lines
@@ -128,3 +130,45 @@ class TempProject:
 @pytest.fixture
 def project(tmp_path: Path) -> TempProject:
     return TempProject(tmp_path)
+
+
+# ---------------------------------------------------------------- heimdall e2e
+
+E2E_THEN = ("I receive a response",)
+E2E_REQUEST = (
+    "$kind: http-request\nmethod: POST\nurl: '{{base_url}}/run'\nscripts:\n"
+    "  - type: afterResponse\n    code: pm.test('then: I receive a response', () => {});\n"
+)
+
+
+def e2e_scenario_text(name: str, *, tags: str = "", then: tuple[str, ...] = E2E_THEN) -> str:
+    """One scenario as Gherkin, with ``tags`` on its own line above it when given."""
+    clauses = "".join(f"    {'Then' if i == 0 else 'And'} {c}\n" for i, c in enumerate(then))
+    head = f"  {tags}\n" if tags else ""
+    return f"\n{head}  Scenario: {name}\n    Given I have a valid API key\n    When I send a request to POST /run\n{clauses}"
+
+
+def write_e2e_scenario(repo: TempRepo, sid: str, request: str | None = E2E_REQUEST, **text: Any) -> None:
+    """The scenario, added to its feature's file, and the Postman request that runs it unless ``request`` is None."""
+    feature, name = sid.split("/")
+    path = repo.root / f"tests/e2e/{feature}.feature"
+    head = path.read_text(encoding="utf-8") if path.exists() else f"@API\nFeature: {feature}\n"
+    repo.write_file(f"tests/e2e/{feature}.feature", head + e2e_scenario_text(name, **text))
+    if request is not None:
+        repo.write_file(f"postman/collections/e2e/{sid}.request.yaml", request)
+
+
+def write_e2e_project(repo: TempRepo, kvad_routes: tuple[str, ...] = ("POST /run",)) -> TempRepo:
+    """The sample map (kvad depends on rune, kvad serving ``kvad_routes``), an API-only project, one scenario per feature."""
+    repo.write_sample_map()
+    m = json.loads(repo.read_file(".heimdall/map.json"))
+    m["slices"]["kvad"]["routes"] = list(kvad_routes)
+    repo.write_file(".heimdall/map.json", json.dumps(m))
+    repo.write_file("harness/e2e/system.json", json.dumps({"tools": {"API": "postman"}}))
+    write_e2e_scenario(repo, "kvad/squares")
+    write_e2e_scenario(repo, "rune/carves")
+    return repo
+
+
+def e2e_scenario(sid: str, tools: tuple[str, ...] = ("postman",), lines: tuple[int, int] = (4, 7)) -> Scenario:
+    return Scenario(sid, sid.split("/")[0], "API", tools, ("g",), ("w",), ("t",), lines)

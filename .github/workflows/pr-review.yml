@@ -1,11 +1,12 @@
-# Jev reviews every pull request: typed judgments over the diff, policy in code, one sticky comment.
+# The PR pipeline: Jev checks every changed function for faults, Claude verifies what Jev flagged, one sticky comment.
 #
-# `heimdall review` turns the PR diff plus the slice map into bounded state, asks TypeSafe's Jev
-# a fixed set of yes/no, choice and score questions (correctness, single purpose and lean
-# signatures about the functions the AST found over the shape limits, tests, security, scope,
-# architecture fit), then sends each edited application file whole in a call of its own for its
-# clean code, so a shortfall names the file, and maps the probabilities to one outcome:
-#   approve / comment  -> check passes
+# `heimdall review --claude` finds the functions the PR touches and asks TypeSafe's Jev narrow fault checks about
+# each (does more than one thing, mishandles an edge input, swallows an error, is untested, passes unvalidated
+# input on; for a route, answers an error without Problem or leaks internals), which file is out of scope or
+# misplaced, and each edited application file's clean code, whole. Claude (Sonnet 5.5) then verifies every failing
+# or unsure check against the changed files, and a check blocks only when Claude confirms it with lines quoted
+# from the code. Eitri's wall violations block on their own.
+#   comment            -> check passes (no approval: a person merges)
 #   request_changes    -> check fails
 #   escalate           -> check passes with a warning; a human is asked for
 # Forks do not receive secrets: without TYPESAFE_API_KEY the review is skipped, not failed.
@@ -51,6 +52,10 @@ jobs:
         shell: bash
         env:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          # Claude (Sonnet 5.5) verifies Jev's failing and unsure checks, here only (--claude); without it they escalate.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Only for a key not scoped to a workspace: the workspace each request runs in (an ID, not a secret).
+          ANTHROPIC_WORKSPACE_ID: ${{ vars.ANTHROPIC_WORKSPACE_ID || secrets.ANTHROPIC_WORKSPACE_ID }}
           # PR text reaches the command through the environment, never through shell interpolation.
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -63,12 +68,13 @@ jobs:
             --json review/review.json \
             --markdown review/review.md \
             --session "pr-${{ github.event.pull_request.number }}" \
-            --allow-missing-key
+            --allow-missing-key \
+            --claude
           code=$?
           set -e
           echo "exit=${code}" >> "$GITHUB_OUTPUT"
           case "${code}" in
-            0) echo "::notice::Jev review: approve or comment" ;;
+            0) echo "::notice::Review: no check failed; a person decides the merge" ;;
             1) echo "::error::Jev review: request changes — see the PR comment" ;;
             2) echo "::warning::Jev review: escalate — a human reviewer is asked for" ;;
             *) echo "::error::Jev review could not run (exit ${code})" ;;

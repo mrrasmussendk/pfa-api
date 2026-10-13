@@ -1,126 +1,120 @@
-# PR review with Jev
+# PR review: fault checks per function, verified on the PR
 
 | ✅ Do | ❌ Don't |
 |---|---|
 | Describe the intended change in the PR title/body or `--task`. | Make the reviewer infer the task from the diff alone. |
-| Run deterministic checks and fix Eitri violations. | Treat a favorable model answer as permission to bypass a rule. |
-| Read the reported reasons and address `request_changes`. | Treat a skipped review as an approval. |
-| Ask for human review when the outcome is `escalate`. | Treat a probability as proof that the change is correct. |
+| Fix what a block names: it gives the function, the line and the fix. | Treat a favourable answer as permission to bypass a rule, or as approval to merge. |
+| Read the unsure checks listed under a comment. | Treat a skipped review as a pass. |
+| Ask for a human when the outcome is `escalate`. | Treat a probability as proof. |
 
-⚠️ **Check:** a missing API key, truncated diff, or uncertain answer changes what the review can establish. Inspect the report before relying on the result.
+A person always decides the merge. The review never says a change is safe; it looks for faults someone made and says where they are.
 
-Every pull request gets two kinds of check. `ci.yml` is the **gate**: Eitri's walls, Brokkr's canaries, the tests. Those are facts, and a fact failing fails the build. `pr-review.yml` is the **judgment**: TypeSafe AI's Jev model reads the diff and answers typed questions about correctness, single purpose, lean signatures, tests, security, scope and architecture fit; then it reads each edited application file **whole** and scores its clean code, so the verdict can name the file. Heimdall turns those answers into one outcome and a sticky PR comment.
+## Why it asks this way
 
-Jev does not write review comments. It answers questions whose answers are **typed**: yes/no with a probability (`noul`), one of a fixed set of options (`choice`), a position on a rubric (`score`). That is why it fits a pipeline: the model judges, the code decides, and the decision is reproducible from the probabilities.
+Jev (TypeSafe AI) answers **typed** questions with probabilities and never says where. Its own guidance is to ask "the most explicit, narrow, specific, atomic questions you can", one per candidate: a broad question hides several judgments behind one answer. The earlier review asked broad ones (`safe_to_merge`, `correctness` of the whole diff) and got blocks that named no place: the agent was told to "split each function" without being told which, three rounds of real fixes moved `p(safe)` by nothing, and every PR's `safe_to_merge` came back No. So the review now asks narrow fault checks **about each changed function**, built in code, and a failing answer names its function.
 
-## What runs
+## Two pipelines
 
-![PR review: inputs, judgment, policy and outputs](../../docs/diagrams/review-flow.svg)
-
-[Mermaid source](../../docs/diagrams/review-flow.mmd)
-
-| Outcome | Meaning | Check | PR |
-|---|---|---|---|
-| ✅ `approve` | safe, routine, clean, tested | passes | comment |
-| ⚠️ `comment` | mergeable, with notes (tests doubtful, a function doing two things, a wide signature) | passes | comment |
-| ❌ `request_changes` | security, correctness, wall violation, errors bypassing Problem Details, a named function the judge agrees does too much, a file whose clean code is below target, or not safe | **fails** | comment |
-| ⚠️ `escalate` | the model wants a human, or is on the fence | passes with a warning | comment + `needs-human-review` label |
-
-⚠️ **Skipped is not approved.** Forks do not receive secrets. Without `TYPESAFE_API_KEY` the review is skipped, the comment says so, and the check passes. The gate in `ci.yml` is unaffected.
-
-## What the judge is told
-
-`heimdall review` builds **bounded state**: the facts Heimdall can compute are stated as facts, so Jev spends its judgment on what only judgment can decide.
-
-- **`task`** — the PR title and body (or `--task` locally).
-- **`architecture`** — from `.heimdall/map.json`: the kernel, the app package, shared packages, every slice's declared dependencies and contract fan-in, and the walls in one sentence each (EIT001–EIT006, frozen contracts, handlers never raise).
-- **`facts`** — slices touched, whether the change is cross-slice, contracts touched with fan-in and frozen flag, whether a feature's route module (`pfa/api/routes/<feature>.py`) changed, which tests changed, whether docs changed, which files were truncated, Eitri's findings on the changed files (`wall_violations`), and the **function shape**: every changed function over the limits in `function_limits` (40 lines, 5 parameters), read from the AST, as `path:line name (lines, params)`. Tests are left out.
-- **`files`** — one entry per changed file: path, status, its **area** (`slice:<name>` — a slice's folder or its route module, `contract:<name>`, `kernel`, `app`, `shared:<pkg>`, `service`, `tests`, `tooling`, `ci`, `docs`), line counts and the hunks.
-
-That is the call about the change. **The craft pass** follows: every edited file of the application's Python (a slice, a contract, the kernel, the app or a shared package — not tests, not the tooling, not a deleted file) is read **whole** from the working tree and sent in a call of its own, with the `task`, the lines this change touched (`facts.changed_lines`) and the functions the AST found over the limits in that file, and answers only `clean_code` and `clean_code_limit`. A diff shows the judge the lines that moved; the file shows what they now sit in — the duplication two hunks apart, the branch the change left dead, the style the new code departs from. Two things follow: the verdict names the file the judge deems wrong, and the score rates the full picture rather than a slice of it. `facts.craft_files` in the diff's state lists the files judged whole, so the comment can say so.
-
-Caps, in tokens: Jev reads one request of 64k tokens, of which the state plus the longest question must fit 32k ([docs.typesafe.ai/models](https://docs.typesafe.ai/models)); input costs $0.042 per million tokens and output is free, so the window is the constraint, not the price. Heimdall measures the state with Brokkr, the ruler Eitri's budget uses (within about 10% of a real tokenizer, see `docs/calibration.md`), and spends 28 000 tokens on the files (`MAX_STATE_TOKENS`), at most 6 000 per file (`MAX_FILE_TOKENS`); the margin pays for the questions, the architecture and the estimator's error. The rest is summarised as "N more diff lines not shown", the file is listed under `files_truncated`, and the comment's size line says how many tokens were sent, how many the whole diff is, and that a cut diff's craft scores rate what the judge saw. A PR whose diff is over the window cannot be read whole at any budget: keep it smaller. A craft call carries one file and may spend the whole 28 000 (`MAX_CRAFT_FILE_TOKENS`); a bigger file is cut at a line boundary, listed under `facts.craft_truncated`, and the advice says the score rates what the judge saw. Lock files, minified assets, images and `.heimdall/` are never sent. Missing context produces confident wrong answers, so a truncated review is flagged in the comment.
-
-## The questions
-
-Fixed, typed, greppable, in `tools/heimdall/commands/review/questions.py`: `questions()` is asked once about the diff, grouped as gates, fit, craft, rubrics and labels; `file_questions()` is asked about each edited application file, whole.
-
-| id | type | judges |
+| | Agent pipeline | PR pipeline |
 |---|---|---|
-| `safe_to_merge` | noul | gate: mergeable as-is |
-| `needs_human_review` | noul | gate: wants a person |
-| `has_security_concern` | noul | gate: injection, leaks, trust boundaries |
-| `tests_cover_change` | noul | changed behaviour is demonstrated by changed tests (only if source changed) |
-| `stays_in_scope` | noul | every change serves the task |
-| `respects_slice_walls` | noul | imports and placement follow the architecture |
-| `errors_use_problem_details` | noul | changed routes raise `Problem`, nothing else (only if routes changed) |
-| `leaks_internals` | noul | stack traces, paths, secrets reaching clients |
-| `single_purpose` | noul | every changed function does one thing its name says; a function in `facts.function_shape` is a No unless it is one flat table or literal |
-| `lean_signatures` | noul | few, meaningful parameters: no behaviour flags, no values passed through, nothing that belongs together passed apart; `facts.function_shape` names the wide ones |
-| `correctness` | score 0–3 | likely broken → clearly correct |
-| `clean_code` | score 0–3 | **per file, whole:** hard to follow → exemplary: no duplication, no dead code, why-comments, one style throughout (the two above are asked separately, about the diff). **Target 2.7** for every edited application file |
-| `clean_code_limit` | choice | **per file, whole:** what keeps the file from exemplary: none / duplication / dead_code / comments / style / error_handling |
-| `blast_radius` | score 0–2 | contained → wide |
-| `docs_in_sync` | score 0–2 | docs stale → in sync |
-| `change_kind` | choice | feature / fix / refactor / tests / docs / tooling / mixed |
-| `biggest_risk` | choice | the one thing a reviewer should check |
+| Runs | locally and in the `Stop` hook: `heimdall review` | in CI on every PR: `heimdall review --claude` |
+| Jev | answers every check | answers every check |
+| A failing check | **blocks**, naming the function | goes to Claude; blocks only if Claude **confirms** it with lines quoted from the file |
+| An unsure check | a note | goes to Claude; blocks only if confirmed |
+| Claude | never called, key or not | Sonnet 5.5 verifies failing and unsure checks |
+
+| Outcome | Meaning | Check |
+|---|---|---|
+| 🛑 `request_changes` | an Eitri wall violation, a failing check (confirmed by Claude on the PR), or a file below the clean-code target | **fails** |
+| 🙋 `escalate` | nothing failed but the blast radius is wide, or Claude could not decide a failing check | passes with a warning and the `needs-human-review` label |
+| 💬 `comment` | no check failed; the unsure ones are listed | passes |
+
+There is no `approve`. ⚠️ **Skipped is not passed:** forks do not receive secrets; without `TYPESAFE_API_KEY` the review is skipped and says so.
+
+## What Jev is asked
+
+`tools/heimdall/commands/review/items.py` finds every function the diff touches, reads it whole from the working tree, and marks the ones in a feature's HTTP edge as routes; the application comes first, then the tooling, within `MAX_ITEM_TOKENS` (14 000; a function over 1 500 is cut). They go into the state as `functions.f1`, `functions.f2`, …, and `tools/heimdall/commands/review/questions.py` builds the checks. Every one is phrased so that **yes** (or a named file) is the fault.
+
+| Check | Asked about | The fault |
+|---|---|---|
+| `mixes_concerns` | each function | two things that would each stand as a function (style) |
+| `mode_parameter` | each function | a boolean or mode parameter that makes it do a different job (style) |
+| `mishandles_edge` | each function | an empty, None, zero or boundary input handled wrongly |
+| `swallows_error` | each function | an exception caught and carried on from |
+| `untested` | each function | changed with no test in the diff exercising it |
+| `unsafe_input` | each function | outside input into a shell, path, query or log unvalidated |
+| `error_not_problem` | each route | an error answered other than by raising `Problem` |
+| `leaks_internals` | each route | a stack trace, path, secret or raw exception text in a response |
+| `out_of_scope` | the change (choice of file) | a file that does not serve the task |
+| `misplaced` | the change (choice of file) | code placed where `architecture.rules` say it does not belong |
+| `docs_stale` | the change | behaviour changed with no documentation updated |
+| `clean_code`, `clean_code_limit` | each edited application file, whole, in its own call | below 2.7 on 0–3, and what limits it |
+
+Facts are not asked. Eitri's findings on the changed files (`facts.wall_violations`) block on their own. **Blast radius is computed** (`policy.blast_radius`): wide when the kernel changed or a frozen contract did; moderate for a contract, the application outside the features, a shared package or several features; contained otherwise.
 
 ## The policy
 
-Thresholds live in `T` in `tools/heimdall/commands/review/policy.py`, not in the model. In order:
+Each answer becomes a row: the probability of the fault, where (`path:line function`, a file, or the change), and a state. Thresholds live in `T` in `tools/heimdall/commands/review/policy.py`:
 
-0. **Facts first.** Eitri runs on the changed files before the judge is consulted; any error (`EIT001`–`EIT100`) lands in `facts.wall_violations` and is a `request_changes` on its own. The walls are decided by the import graph, never by a probability — a persuasive docstring cannot argue an import away.
-1. **Block** (`request_changes`): `has_security_concern ≥ 0.50`, `leaks_internals ≥ 0.5`, `safe_to_merge ≤ 0.35` when at least one doubt behind it has a code fix (tests, the error path, correctness, scope, placement), `respects_slice_walls ≤ 0.40`, `biggest_risk = architecture` with `p ≥ 0.80` (the judge's own top-risk label overrides a Yes on the walls — except on a wide refactor, see 2), `correctness ≤ 1.25`, routes changed and `errors_use_problem_details ≤ 0.4`, or **the AST and the judge agree**: `single_purpose ≤ 0.40` while `facts.function_shape` names a changed function over the line limit, or `lean_signatures ≤ 0.40` while it names one over the parameter limit. The advice names the function and the line. A line count never blocks on its own (a flat table may stay whole), and the judge's No without a named function is a note, not a block: there is nothing to point at. Finally, **per file judged whole**: any edited application file with `clean_code < 2.7` is a `request_changes` naming that file ("clean code 2.31/3 in src/pfa/api/routes/embeddings.py below the target 2.7"), lowest first. The tooling under `tools/` is never judged whole: it is judged on correctness and tests, not on prose. 2.7 is 90% of the rubric, the floor the author set and not to be lowered; it sits deliberately above "good enough" so the agent is sent back to polish rather than left a note; the advice says the whole file was rated, quotes the judge's most probable *actionable* `clean_code_limit` label with its fix ("its most probable limit: duplication (0.70): extract the logic written twice into one function") and the functions the AST found over the limits *in that file*, so it knows which file and where in it to start. `none` wins the choice easily under a short score (this PR: `none` at 0.40 beside a 2.08), and none is not a fix, so the policy takes the runner-up from the judge's own probabilities; only when it gave no actionable label at all is every fix listed.
-2. **Escalate**: `needs_human_review ≥ 0.60`, `safe_to_merge` within 0.15 of 0.5, `safe_to_merge ≤ 0.35` when nothing the judge doubts is a code change (a human wanted, a wide blast radius, the restructure itself), or `biggest_risk = architecture` on a `refactor` with expected `blast_radius ≥ 1.5` and no Eitri finding — the judge is pointing at the restructure itself, which no import fix can answer; a person reviews the layout.
-3. **Approve**: `safe_to_merge ≥ 0.75`, `needs_human_review ≤ 0.35`, `has_security_concern ≤ 0.20`, `single_purpose ≥ 0.50`, `lean_signatures ≥ 0.50`, and (no source change or `tests_cover_change ≥ 0.50`). Readability and clean code have no bar here: below target they already blocked.
-4. Otherwise **comment**.
+- **fault checks** fail at `p ≥ 0.60`, are unsure from `0.40`;
+- **style checks** (`mixes_concerns`, `mode_parameter`) fail at `p ≥ 0.90`, are unsure from `0.75` — see calibration below;
+- **which-file checks** fail when a file is named at `p ≥ 0.50`, unsure from `0.30`;
+- **clean code** below `2.7` blocks naming the file, with the judge's most probable *actionable* limit as the fix (`none` is not a fix; its runner-up is). 2.7 is the floor the author set and is not to be lowered;
+- **blast radius** wide escalates when nothing else blocks.
 
-The contract of the comment: **every `request_changes` names a code change that turns it green; a doubt no code change can answer never blocks — it requires a human.** Every reason the policy records carries advice that names its evidence and one next action: `not safe to merge` lists the answers that drive the doubt (a human wanted at 0.79, a wide blast radius, architecture named as the thing to check), never "see the other rows"; the architecture label says what Eitri already ruled out and what to look for instead; any other `biggest_risk` label (correctness, security, tests, readability, docs) is about the diff and always comes with its code path. The PR comment opens with those sentences under **What went wrong** (or **What the judge wants** on escalate), lists Eitri's findings with the file, the line and the `**Fix:**` line from the rule's page under `harness/rules/`, and only then shows the probability table.
+An unanswered check reads as a pass: a fault is what the judge found, never what it left out.
 
-A probability is a policy input, not proof. Before letting `approve` bypass human review, measure these thresholds against your own merge history: `heimdall review --json` on past PRs, compare outcomes to what reviewers actually did, and move the numbers. Missing answers fall back to neutral values, which lands on `escalate`, never on `approve`.
+## Claude verifies on the PR
 
-Two calibration points so far (2026-10-07), both the same `EIT001` import of another slice's `internal/`: written bluntly it scored `p(safe)=0.06`, `p(respects_slice_walls)=0.25`; dressed in a docstring selling it as a performance fast path it scored `p(safe)=0.30`, `p(respects_slice_walls)=0.62`, `clean_code` "Exemplary" — and still `biggest_risk = architecture` at `0.96`. The walls rule alone would have let the second one through. That is why Eitri's facts and the top-risk label now sit above it.
+In the PR pipeline every failing and unsure check is put to Claude (`claude.py`, `claude-sonnet-5-5`, `fallbacks: "default"`) with the task, the diff and the changed files whole, up to 120 000 tokens. Claude is asked to refute first and to confirm only with a place: the file, the function, and one to five lines quoted from the file. `verify.grounded` finds those lines in the file before it believes them.
 
-A fourth point (2026-10-08), this feature's own PR (#9, tooling only, no function over the limits): `readability` 2.07, `clean_code` 2.28, `lean_signatures` 0.47, outcome `comment` under the old 1.5 bars. The targets were then set to 2.7 for both on the author's call, 90% of the rubric and not to be lowered: a score in the low twos is "fine", and fine is not what the agent should stop at. Under the targets that PR is `request_changes` with the limit label as the fix; with the token budget and a deduplication pass it reached 2.16 / 2.52.
+| Claude rules | A failing check | An unsure check |
+|---|---|---|
+| confirmed, quote found in the file | blocks, naming `file:line function` and the fix | blocks |
+| refuted | dropped | dropped |
+| undecided, or a quote not in the file | escalates (`unverified: …`) | dropped |
+| not asked: no `ANTHROPIC_API_KEY`, or the call failed | escalates | dropped |
 
-A fifth point (2026-10-08), the first application change under the floor (the OpenAPI examples branch: route modules, `pfa/api/problems.py`, a test file): `clean_code` 2.75–2.84 passed; `readability` 2.40–2.47 on eight consecutive runs with `readability_limit` = `none` at 0.59–0.63 every time. Reviewed file by file, every file sat between 2.42 and 2.76 with `none` as its label; asked directly, the judge put "the subject cannot read like prose" at 0.64–0.78 and a local edit reaching the top level at 0.35–0.45. Six edits aimed at its runner-up labels (splitting, hoisting literals, removing an indirection, restructuring the tests) moved the score by less than 0.05. A score the judge cannot explain names nothing to fix, so **readability was removed from the verdict**: the two readability questions are no longer asked, and the craft floor is clean code alone. The `biggest_risk` label `readability` remains: it is the judge's one thing to check, and it carries a code path.
+⚠️ **Check:** a key not scoped to a workspace answers 400 "must include the anthropic-workspace-id header": use a workspace-scoped key, or set `ANTHROPIC_WORKSPACE_ID`.
 
-A seventh point, and a change of state (2026-10-09): the per-file probe above had shown that the whole-diff `clean_code_limit` label can be an averaging artifact that appears in no single file, and that a whole-diff score names no file to go to. So clean code is now judged **file by file, on the whole file**: the diff call no longer asks `clean_code`; each edited application file is sent whole in its own call (`tools/heimdall/commands/review/craft.py`), the verdict names the file, the comment carries a per-file table, and the agent is told which file the judge deems wrong rather than that "the changed code" is. The thresholds did not move. The cost is one call per edited application file on top of the diff call. First live run the same day, the OpenAPI branch's six HTTP-edge files judged whole: `routes/chunking.py` 2.37 (limit `none` 0.55, runner-up `comments` 0.32), `routes/embeddings.py` 2.60 (`duplication` 0.20), `app.py` 2.73, `routes/health.py` 2.76, `validation.py` 2.84, `problems.py` 2.85 — the same code had scored 2.75–2.84 as one diff. Two files now carry a reason with a path; the per-file scores spread by half a point where the whole-diff score showed one number.
+## The comment
 
-A third point (2026-10-08), a 101-file move of the whole package layout with no Eitri finding: `p(respects_slice_walls)=0.93`, `change_kind=refactor` at 1.00, `blast_radius` wide at 1.99, and still `biggest_risk = architecture` at `0.98`. Here the label means "review the restructure", not "find the import" — the first comment sent the author hunting for a cross-slice import that did not exist. That is why the label escalates instead of blocking on a wide refactor.
+It reads top-down (`tools/heimdall/commands/review/comment.py`): a headline that says how many things to fix ("1 to fix before merging", "nothing to fix", "a person should look"), one line of numbers, then each fix as a place, what is wrong there, and the fix. Probabilities stay out of the action. Everything else is folded: the checks Claude cleared with its reason, the unsure checks no one verified, clean code file by file, and what the judge was told. The terminal table the Stop hook hands the agent keeps every reason with its advice.
+
+## Size
+
+Jev reads one request of 64k tokens, the state and the questions in it ([docs.typesafe.ai/models](https://docs.typesafe.ai/models)); input costs $0.042 per million tokens, so the window is the constraint, not the price. The state is held to 28 000 tokens (`MAX_STATE_TOKENS`, measured with Brokkr): the facts, the functions, then the diff in priority order (source, tests, tooling, CI, docs), each file at most 6 000 tokens; a cut file is listed under `files_truncated`, one the budget no longer reaches under `files_not_shown`. Files `.gitattributes` marks `linguist-vendored` or `linguist-generated` are never sent. Checks that do not fit beside the state in one request (`MAX_REQUEST_TOKENS`, 56 000) go in batches with the same state; Jev answers each question in isolation, so a batch's answers mean what they would in one call. On this branch: about 650 checks on some 110 functions, in two requests, about two seconds.
+
+## Calibration so far
+
+The numbers in `T` are a starting point; the only proof is your own merges (`heimdall review --json` on past PRs, compared with what reviewers did).
+
+- **2026-10-07, the walls.** The same `EIT001` import scored `p(respects_slice_walls)=0.25` written bluntly and `0.62` dressed in a persuasive docstring. That is why Eitri's facts block on their own and Jev is never asked to re-derive them.
+- **2026-10-08, readability.** Eight runs withheld the top level for the subject, not the craft, naming no limit; six edits moved it by under 0.05. A score that names nothing to fix was dropped.
+- **2026-10-09, clean code per file.** The whole-diff score named no file and its limit label could be an average found in no file; judged per file whole, two route files fell below target and were named.
+- **2026-10-10, the broad questions.** `safe_to_merge` came back No on every PR and `single_purpose` of the whole diff named no function; both broad questions were replaced by the per-function checks above.
+- **2026-10-10, the first per-function run** (this branch, 110 functions): every fault check was quiet (no fail), while `mixes_concerns` failed 26 small helpers at 0.62–0.85, partly because the question named "computing and reporting" as two things. The wording was narrowed and the style checks now fail only at 0.90: the next run had no failure, four style checks unsure, and 31 `untested` unsure at 0.40–0.52 (Jev sees the tests in the diff, not the suite).
 
 ## Function shape: the same limits while you edit
 
-The judge is asked about function size, parameters and single purpose at the PR. The two of those an AST can state — length and parameter count — reach the agent earlier: the `function_shape` sensor in the Claude Code hook reads the edited file after every `Edit`, `Write` or `MultiEdit`, and when a function the edit touched is over 40 lines or 5 parameters (`FUNCTION_LINES`, `FUNCTION_PARAMETERS` in `tools/heimdall/shape.py`) it prints `Heimdall: the function you just edited is over the shape limit … path:line name (52 lines, 7 params)` and exits 2, which Claude Code shows the agent before its next action. Only the functions the edit touched are judged (the inserted text locates them; a `Write` is the whole file), tests are left out, and a file that is not Python or does not parse is left alone.
+The AST states two facts about a function: its length and its parameter count. The hook's `function_shape` sensor reads the edited file after every `Edit` or `Write`, and a function the edit touched over 40 lines or 5 parameters (`tools/heimdall/shape.py`) gets `Heimdall: the function you just edited is over the shape limit … path:line name (52 lines, 7 params)` and exit 2. The review lists the same functions under "over the limits" as a fact for the reader; it does not decide on them.
 
-✅ Split the function into functions whose names say what they do, or group the values that travel together into one object, before moving on. ❌ Do not raise the limits to make an edit pass: the review hands the judge the same list, and `single_purpose` / `lean_signatures` are asked about exactly those functions. ⚠️ A flat table or literal that a split would only scatter may stay whole — say so in the PR body; the judge is told to accept that, the hook cannot.
+✅ Split the function, or group the values that travel together, before moving on. ❌ Don't raise the limits to make an edit pass.
 
 ## Running it locally
 
 ```bash
 export TYPESAFE_API_KEY=…                      # from https://console.typesafe.ai/
-heimdall review                                 # working tree vs HEAD
-heimdall review --base origin/main --task "…"   # what the PR check will see
-heimdall review --diff change.diff --dry-run    # print every call ({"diff": …, "files": […]}), call nothing
-git diff main...HEAD | heimdall review --diff - --markdown review.md
+heimdall review                                 # working tree vs HEAD: the agent pipeline
+heimdall review --base origin/main --task "…"   # the committed branch, as the Stop hook runs it
+heimdall review --diff change.diff --dry-run    # print every call, call nothing
 ```
 
-Exit codes: `0` approve/comment · `1` request_changes · `2` escalate · `3` could not review (no diff, no key, API error). Each real review appends a `{"event": "review", "kind": "<outcome>", "slice": "...", "sensor": "jev"}` line to `.heimdall/telemetry.jsonl`, next to the read/edit lines the hook writes, so a session's judgments sit beside its behaviour.
-
-## Where it sits with the other tools
-
-- **The AST** decides facts about shape (length, parameters); Jev is told which functions are over the limits and asked what only judgment can answer: whether each does one thing and reads top-down. The hook tells the agent the same facts while the function is still open.
-- **The craft pass** judges each edited application file whole, so clean code is about the file the change leaves behind, and the verdict names it. The diff call judges the change; the craft calls judge the files.
-- **Eitri** decides facts about imports; Jev is never asked to re-derive them. Its findings on the changed files go into the state (`facts.wall_violations`) and into the comment, so Jev judges intent and placement, which an import graph cannot see, and the policy blocks on the import graph, which a docstring cannot talk around.
-- **Heimdall's hook** stays stdlib-only and local; it never calls the network on a tool call. The review is a separate command, run by CI or by you.
-- **Brokkr** proves the walls still bite. Nothing proves Jev's thresholds are right except your own calibration — treat the numbers in `T` the way `docs/calibration.md` treats the token estimator.
+Exit codes: `0` comment · `1` request_changes · `2` escalate · `3` could not review (no diff, no key, API error). Each review appends a `{"event": "review", "kind": "<outcome>", ...}` line to `.heimdall/telemetry.jsonl`.
 
 ## Checklist before opening a PR
 
-✅ **Verify each item.** These are review preparation steps, not evidence that checks have already passed.
-
-- [ ] The PR title/body describes the intended behavior and scope.
-- [ ] Lint, formatting, types, tests, and `eitri check --root .` pass, and no `Heimdall:` shape feedback was left unanswered.
-- [ ] The slice map is current after route, dependency, slice, or shared-package changes.
-- [ ] The review used the intended base and task; any truncation or skipped review is acknowledged.
-- [ ] `request_changes` findings are fixed and the review rerun; `escalate` is referred to a human.
+- [ ] The PR title/body describes the intended behaviour and scope.
+- [ ] Lint, formatting, types, tests and `eitri check --root .` pass, and no `Heimdall:` shape feedback was left unanswered.
+- [ ] The slice map is current after route, dependency, slice or shared-package changes.
+- [ ] Every block the agent pipeline named is fixed and the review rerun; `escalate` is referred to a human.
